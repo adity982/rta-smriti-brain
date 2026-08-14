@@ -16,7 +16,7 @@ Rta-Smriti gives each project a memory that stays on your machine.
 - Stores durable memories: decisions, constraints, procedures, facts, and hypotheses.
 - Ingests long threads or handoff notes so useful context survives compaction.
 - Builds a focused **context pack** for the next agent task.
-- Runs a local dashboard with project switching, graph search, memory ledger, freshness checks, and bootstrap flow.
+- Runs a local operator console with graph, canvas, typed bases, context-pack receipts, memory ledger, freshness checks, and bootstrap flow.
 - Exposes a dependency-light stdio MCP server for agent integrations.
 - Keeps data local by default: no API keys, no telemetry, no cloud database.
 
@@ -85,11 +85,14 @@ rta-brain.cmd dashboard --brain-dir "%USERPROFILE%\Documents\Rta-Smriti\brains"
 The dashboard runs on `127.0.0.1` and includes:
 
 - **Project switcher**: every local brain, readiness, file count, memory count
-- **Brain graph**: interactive nodes for repo evidence, memories, and generated context packs
+- **Brain graph**: switch between Global, Local, and Task scopes; tune depth, labels, connections, search, and node types
+- **Spatial canvas**: drag project evidence into a persistent local layout and export it as JSON
+- **Typed bases**: scan memories, sources, and launch checks as dense, filterable tables
 - **Search nodes**: filter graph nodes by file, symbol, memory, or artifact text
 - **Types**: show/hide file, memory, docs, config, test, data, and artifact nodes
-- **Task composer**: type a task and generate a context pack
+- **Context-Pack Studio**: type a task, generate a focused pack, and reopen local generation receipts
 - **Evidence inspector**: selected node, must-know memories, freshness, repo tree
+- **References and backlinks**: inspect why a node is connected and follow its visible relationships
 - **Memory ledger**: inspect stored memories and run reflection
 - **Launch readiness**: repo files and publish checks
 - **Bootstrap flow**: create a new project brain from the UI

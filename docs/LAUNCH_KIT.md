@@ -134,7 +134,7 @@ The product is alpha, open source, and built for developers who work across mult
 - Product Hunt gallery images
 - Short install GIF
 - Public issue templates
-- Release notes for `v0.2.0-alpha`
+- Release notes for `v0.3.0-alpha`
 
 ## Demo Script
 

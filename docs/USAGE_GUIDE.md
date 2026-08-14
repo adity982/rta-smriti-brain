@@ -99,7 +99,15 @@ Every brain found in your brain folder. Each card shows readiness, file count, m
 
 **Brain Graph**
 
-A visual map of the active project. The center is the active project brain. Around it are files, symbols, memories, docs, config, tests, data, and generated artifacts.
+A visual map of the active project. Switch between Global, Local, and Task scopes, then tune connection depth, labels, and edges.
+
+**Spatial Canvas**
+
+A draggable local board for arranging project evidence. Layouts persist in the browser and can be exported as JSON.
+
+**Bases**
+
+Filterable table views for memories, indexed sources, and launch-readiness checks.
 
 **Search Nodes**
 
@@ -109,13 +117,17 @@ Searches graph nodes so you can quickly find a file, memory, symbol, or generate
 
 Filters the graph by node type.
 
-**Task Composer**
+**Context-Pack Studio**
 
-The main daily workflow. Type the task, click `Generate Context Pack`, then copy the pack into the agent chat.
+The main daily workflow. Type the task, click `Generate Context Pack`, then copy the pack into the agent chat. Each generation creates a local receipt you can reopen later.
 
 **Evidence Inspector**
 
 Shows what is selected, must-know memories, freshness, repo tree hints, and publish readiness.
+
+**References**
+
+Shows visible connections and backlinks for the selected graph node.
 
 **Memory Ledger**
 
