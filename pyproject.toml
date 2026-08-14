@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rta-smriti-brain"
+version = "0.2.0"
+description = "Local-first project memory, repo graph, context-pack, and MCP brain for AI coding agents."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Sulabh Dubey" }
+]
+keywords = ["codex", "mcp", "agent-memory", "knowledge-graph", "sqlite", "local-first"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Software Development",
+  "Topic :: Text Processing :: Indexing"
+]
+dependencies = []
+
+[project.scripts]
+rta-brain = "rta_brain.cli:main"
+rta-brain-mcp = "rta_brain.mcp_server:main"
+
+[tool.setuptools]
+packages = ["rta_brain"]
+
+[tool.setuptools.package-data]
+rta_brain = ["static/*", "static/assets/*"]
