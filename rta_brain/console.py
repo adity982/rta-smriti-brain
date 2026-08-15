@@ -21,7 +21,7 @@ from .db import (
     stale_check, update_project_settings,
 )
 from .parsers import ParserRegistry
-from .project import bootstrap_project, mcp_config_payload, powershell_cli_command, projects_list, self_check
+from .project import bootstrap_project, mcp_config_payload, runtime_shell, shell_cli_command, projects_list, self_check
 
 
 @dataclass(frozen=True)
@@ -367,6 +367,13 @@ def read_file_preview(db_path: str | Path, project: str, relative_path: str) -> 
 
 
 def _trusted_git_candidates() -> list[Path]:
+    if os.name != "nt":
+        candidates = []
+        for value in ("/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git", "/opt/local/bin/git"):
+            candidate = Path(value)
+            if candidate.is_file():
+                candidates.append(candidate.resolve())
+        return candidates
     roots = [
         os.environ.get("ProgramFiles") or "C:/Program Files",
         os.environ.get("ProgramFiles(x86)") or "C:/Program Files (x86)",
@@ -463,7 +470,8 @@ def dashboard_snapshot(config: ConsoleConfig) -> dict:
         "brain_dir": str(config.brain_dir.expanduser().resolve()),
         "default_db": str(config.default_db) if config.default_db else None,
         "default_project": config.default_project,
-        "cli_command": powershell_cli_command(config.tool_root),
+        "shell": runtime_shell(),
+        "cli_command": shell_cli_command(config.tool_root),
         "projects": scan_brain_databases(config.brain_dir),
         "publish": publish_readiness(config.tool_root),
     }

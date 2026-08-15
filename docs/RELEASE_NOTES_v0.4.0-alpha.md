@@ -15,12 +15,12 @@ This alpha turns repository memory from a manual snapshot into an operator-contr
 
 ## Fixed On Main
 
-- Installed wheels now generate valid Python-module commands instead of pointing to repository-only `.cmd` files.
-- Generated PowerShell agent commands include the required invocation operator.
-- Dashboard-copied commands now use the exact source or installed-package launcher instead of assuming a global command.
-- Windows setup no longer assumes the wrapper directory is already on `PATH`.
+- Installed wheels now generate valid Python-module commands instead of pointing to repository-only source wrappers.
+- `install-local` emits native `.cmd` launchers on Windows and executable POSIX launchers on macOS and Linux.
+- Generated agent, MCP, dashboard, bootstrap, and context-pack commands use the active operating system's quoting and invocation rules.
+- Setup no longer assumes the wrapper directory is already on `PATH`.
 - Dashboard recovery guidance now explains the foreground process and one-session capability URL.
-- Windows CI now builds and smoke-tests an installed wheel through bootstrap, retrieval, wrappers, MCP config, dashboard assets, and API authorization.
+- Windows, Ubuntu, and macOS CI build and smoke-test an installed wheel through bootstrap, retrieval, wrappers, MCP config, dashboard assets, and API authorization.
 
 ## Defaults And Boundaries
 

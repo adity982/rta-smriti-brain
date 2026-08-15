@@ -1,9 +1,11 @@
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from rta_brain.project import agent_file_text, install_local, mcp_config_payload
 
@@ -44,7 +46,11 @@ class RtaBrainProjectUsabilityTests(unittest.TestCase):
             self.assertIn("Rta-Smriti Local Brain", (repo / "AGENTS.md").read_text(encoding="utf-8"))
             self.assertIn("agent_index_file", payload)
             self.assertIn("context-pack", payload["next_commands"]["context_pack"])
-            self.assertTrue(payload["next_commands"]["context_pack"].startswith("& '"))
+            self.assertEqual(payload["shell"], "powershell" if os.name == "nt" else "posix")
+            if os.name == "nt":
+                self.assertTrue(payload["next_commands"]["context_pack"].startswith("& '"))
+            else:
+                self.assertFalse(payload["next_commands"]["context_pack"].startswith("& "))
 
             self_check = run_cli("--db", payload["db_path"], "--json", "self-check", "--project", "demo")
             self.assertEqual(self_check.returncode, 0, self_check.stderr)
@@ -130,8 +136,9 @@ class RtaBrainProjectUsabilityTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
             self.assertEqual(payload["status"], "ok")
-            wrapper = target / "rta-brain.cmd"
-            mcp_wrapper = target / "rta-brain-mcp.cmd"
+            suffix = ".cmd" if os.name == "nt" else ""
+            wrapper = target / f"rta-brain{suffix}"
+            mcp_wrapper = target / f"rta-brain-mcp{suffix}"
             self.assertTrue(wrapper.exists())
             self.assertTrue(mcp_wrapper.exists())
 
@@ -152,9 +159,10 @@ class RtaBrainProjectUsabilityTests(unittest.TestCase):
             db = root / "brains" / "demo.sqlite"
 
             agent_text = agent_file_text(installed_package_root, db, "demo")
-            self.assertIn("-m rta_brain.cli", agent_text)
-            self.assertIn("-m rta_brain.mcp_server", agent_text)
+            self.assertIn("rta_brain.cli", agent_text)
+            self.assertIn("rta_brain.mcp_server", agent_text)
             self.assertNotIn("site-packages\\rta-brain.cmd", agent_text)
+            self.assertNotIn("site-packages/rta-brain", agent_text)
 
             mcp = mcp_config_payload(str(db), "demo", "rta-smriti", installed_package_root)
             server = mcp["config"]["mcpServers"]["rta-smriti"]
@@ -163,11 +171,33 @@ class RtaBrainProjectUsabilityTests(unittest.TestCase):
 
             target = root / "bin"
             install_local(target, installed_package_root)
-            cli_wrapper = (target / "rta-brain.cmd").read_text(encoding="utf-8")
-            mcp_wrapper = (target / "rta-brain-mcp.cmd").read_text(encoding="utf-8")
-            self.assertIn("-m rta_brain.cli", cli_wrapper)
-            self.assertIn("-m rta_brain.mcp_server", mcp_wrapper)
+            suffix = ".cmd" if os.name == "nt" else ""
+            cli_wrapper = (target / f"rta-brain{suffix}").read_text(encoding="utf-8")
+            mcp_wrapper = (target / f"rta-brain-mcp{suffix}").read_text(encoding="utf-8")
+            self.assertIn("rta_brain.cli", cli_wrapper)
+            self.assertIn("rta_brain.mcp_server", mcp_wrapper)
             self.assertNotIn("site-packages\\rta-brain.py", cli_wrapper)
+
+    def test_install_local_emits_posix_shell_wrappers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "bin"
+            installed_package_root = root / "site-packages"
+            installed_package_root.mkdir()
+
+            with patch("rta_brain.project.os.name", "posix"):
+                payload = install_local(target, installed_package_root)
+                agent_text = agent_file_text(installed_package_root, root / "brain.sqlite", "demo")
+
+            self.assertEqual(payload["shell"], "posix")
+            self.assertEqual(Path(payload["wrappers"][0]).name, "rta-brain")
+            self.assertEqual(Path(payload["wrappers"][1]).name, "rta-brain-mcp")
+            wrapper = (target / "rta-brain").read_text(encoding="utf-8")
+            self.assertTrue(wrapper.startswith("#!/bin/sh\n"))
+            self.assertIn("-m rta_brain.cli", wrapper)
+            self.assertNotIn(".cmd", payload["shell_command"])
+            self.assertIn("```bash", agent_text)
+            self.assertNotIn("```powershell", agent_text)
 
 
 if __name__ == "__main__":

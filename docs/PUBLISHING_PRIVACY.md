@@ -74,6 +74,12 @@ Documentation should use:
 $env:USERPROFILE\Documents\Rta-Smriti\brains
 ```
 
+On macOS or Linux, the recommended location is:
+
+```bash
+$HOME/.local/share/rta-smriti/brains
+```
+
 Avoid publishing machine-specific examples such as:
 
 ```powershell

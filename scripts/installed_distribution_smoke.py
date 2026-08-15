@@ -76,16 +76,22 @@ def main() -> int:
             raise AssertionError("bootstrap did not create an indexed project brain")
 
         agent_text = Path(bootstrap["agent_file"]).read_text(encoding="utf-8")
-        if "-m rta_brain.cli" not in agent_text or "-m rta_brain.mcp_server" not in agent_text:
+        if "rta_brain.cli" not in agent_text or "rta_brain.mcp_server" not in agent_text:
             raise AssertionError("installed agent bridge does not use packaged module entrypoints")
 
-        shell = shutil.which("pwsh") or shutil.which("powershell")
+        shell_kind = bootstrap["shell"]
+        if shell_kind == "powershell":
+            shell = shutil.which("pwsh") or shutil.which("powershell")
+            shell_args = ["-NoProfile", "-NonInteractive", "-Command"]
+        else:
+            shell = shutil.which("sh") or "/bin/sh"
+            shell_args = ["-c"]
         if not shell:
-            raise FileNotFoundError("PowerShell is required for the Windows installed-command smoke test")
+            raise FileNotFoundError(f"required {shell_kind} command shell was not found")
         bridge_command = bootstrap["next_commands"]["context_pack"].replace("<task>", "installed bridge smoke")
-        bridge_pack = run([shell, "-NoProfile", "-NonInteractive", "-Command", bridge_command], project).stdout
+        bridge_pack = run([shell, *shell_args, bridge_command], project).stdout
         if "# Rta-Smriti Context Pack" not in bridge_pack:
-            raise AssertionError("generated installed-package PowerShell command did not execute")
+            raise AssertionError("generated installed-package shell command did not execute")
 
         health = json.loads(
             run(
@@ -144,8 +150,10 @@ def main() -> int:
             dashboard_health = request_json(base_url + "/api/health", token)
             if dashboard_health["status"] != "ok" or len(dashboard_health["projects"]) != 1:
                 raise AssertionError(f"installed dashboard health failed: {dashboard_health}")
-            if "-m rta_brain.cli" not in dashboard_health["cli_command"]:
+            if "rta_brain.cli" not in dashboard_health["cli_command"]:
                 raise AssertionError("installed dashboard did not expose a working CLI command bridge")
+            if dashboard_health["shell"] != shell_kind:
+                raise AssertionError("installed dashboard reported the wrong command shell")
             try:
                 request_json(base_url + "/api/health")
             except urllib.error.HTTPError as exc:

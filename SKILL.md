@@ -29,7 +29,11 @@ Add that target folder to PATH if needed.
 
 ## Bootstrap A Project
 
-Create one brain per project:
+Create one brain per project. Use the exact `rta-brain` wrapper path returned by
+`install-local`; Windows wrappers end in `.cmd`, while macOS and Linux wrappers
+have no suffix. The examples below assume the wrapper directory is on `PATH`.
+
+Windows PowerShell:
 
 ```powershell
 rta-brain.cmd bootstrap-project <repo-path> --project <project-name> --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains" --write-agents --json
@@ -41,12 +45,23 @@ Then verify readiness:
 rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\<project-name>.sqlite" self-check --project <project-name> --json
 ```
 
+macOS or Linux:
+
+```bash
+rta-brain bootstrap-project <repo-path> --project <project-name> --brain-dir "$HOME/.local/share/rta-smriti/brains" --write-agents --json
+rta-brain --db "$HOME/.local/share/rta-smriti/brains/<project-name>.sqlite" self-check --project <project-name> --json
+```
+
 ## MCP Server
 
-If the host supports MCP, configure the stdio server:
+If the host supports MCP, generate a native configuration from the CLI:
 
 ```powershell
-rta-brain-mcp.cmd --db <brain.sqlite> --project <project-name>
+rta-brain.cmd --db <brain.sqlite> --json mcp-config --project <project-name> --name rta-smriti
+```
+
+```bash
+rta-brain --db <brain.sqlite> --json mcp-config --project <project-name> --name rta-smriti
 ```
 
 Available MCP tools:

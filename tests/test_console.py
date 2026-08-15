@@ -20,8 +20,9 @@ class RtaBrainConsoleTests(unittest.TestCase):
     def test_dashboard_snapshot_exposes_an_executable_cli_command(self):
         with tempfile.TemporaryDirectory() as tmp:
             snapshot = dashboard_snapshot(ConsoleConfig(tool_root=ROOT, brain_dir=Path(tmp)))
-            self.assertTrue(snapshot["cli_command"].startswith("& '"))
-            self.assertIn("rta-brain.cmd", snapshot["cli_command"])
+            self.assertEqual(snapshot["shell"], "powershell" if os.name == "nt" else "posix")
+            self.assertIn("rta-brain.py", snapshot["cli_command"])
+            self.assertTrue(snapshot["cli_command"].startswith("& '") if os.name == "nt" else not snapshot["cli_command"].startswith("& "))
 
     def test_git_candidates_never_fall_back_to_the_working_directory(self):
         with tempfile.TemporaryDirectory() as tmp:

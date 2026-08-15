@@ -100,6 +100,24 @@ function displayPath(value) {
     .replace(/^[/\\]{2}[^/\\]+[/\\][^/\\]+/, "<network-share>");
 }
 
+function shellQuote(value, shellKind) {
+  const text = String(value ?? "");
+  if (shellKind === "powershell") return `'${text.replaceAll("'", "''")}'`;
+  return `'${text.replaceAll("'", `'"'"'`)}'`;
+}
+
+function shellPathArg(value, shellKind) {
+  const text = String(value || "");
+  if (shellKind === "powershell") {
+    const portable = text.replace(/^[A-Za-z]:[\\/]Users[\\/][^\\/]+/i, "$env:USERPROFILE");
+    if (portable.startsWith("$env:USERPROFILE")) return `"${portable.replaceAll('"', '`"')}"`;
+    return shellQuote(portable, shellKind);
+  }
+  const portable = text.replace(/^\/(?:Users|home)\/[^/]+/i, "$HOME");
+  if (portable.startsWith("$HOME")) return `"${portable.replaceAll('"', '\\"')}"`;
+  return shellQuote(portable, shellKind);
+}
+
 function readApiToken() {
   try {
     const fragment = new URLSearchParams(window.location.hash.slice(1));
@@ -672,18 +690,15 @@ function App() {
     setNavContext(context);
   }
 
-  const psQuote = (value) => `'${String(value).replaceAll("'", "''")}'`;
-  const psPathArg = (value) => {
-    const portable = String(value || "").replace(/^[A-Za-z]:[\\/]Users[\\/][^\\/]+/i, "$env:USERPROFILE");
-    if (portable.startsWith("$env:USERPROFILE")) return `"${portable.replaceAll('"', '`"')}"`;
-    return psQuote(portable);
-  };
+  const shellKind = health?.shell || "powershell";
   const commandDbPath = presentationMode
-    ? `$env:USERPROFILE\\Documents\\Rta-Smriti\\brains\\${selectedProject?.project || "project"}.sqlite`
+    ? shellKind === "powershell"
+      ? `$env:USERPROFILE\\Documents\\Rta-Smriti\\brains\\${selectedProject?.project || "project"}.sqlite`
+      : `$HOME/.local/share/rta-smriti/brains/${selectedProject?.project || "project"}.sqlite`
     : selectedProject?.db_path;
   const cliCommand = health?.cli_command || "rta-brain";
   const command = selectedProject
-    ? `${cliCommand} --db ${psPathArg(commandDbPath)} context-pack ${psQuote(task || "<task>")} --project ${psQuote(selectedProject.project)}`
+    ? `${cliCommand} --db ${shellPathArg(commandDbPath, shellKind)} context-pack ${shellQuote(task || "<task>", shellKind)} --project ${shellQuote(selectedProject.project, shellKind)}`
     : "Select a project";
 
   return (
@@ -939,7 +954,7 @@ function App() {
           {activeDrawer === "memory" && <MemoryLedger memories={memories} onReflect={reflect} />}
           {activeDrawer === "receipts" && <ReceiptsPanel receipts={receipts} onCopy={copyText} onClear={() => setReceipts([])} />}
           {activeDrawer === "publish" && <PublishPanel publish={publish} />}
-          {activeDrawer === "bootstrap" && <BootstrapPanel onDone={loadHealth} />}
+          {activeDrawer === "bootstrap" && <BootstrapPanel onDone={loadHealth} shellKind={shellKind} />}
         </aside>
       </div>
 
@@ -955,7 +970,16 @@ function App() {
         </span>
       </footer>
 
-      {commandOpen && <CommandPalette command={command} cliCommand={cliCommand} onClose={() => setCommandOpen(false)} onCopy={copyText} />}
+      {commandOpen && (
+        <CommandPalette
+          command={command}
+          cliCommand={cliCommand}
+          shellKind={shellKind}
+          brainDir={health?.brain_dir}
+          onClose={() => setCommandOpen(false)}
+          onCopy={copyText}
+        />
+      )}
     </div>
   );
 }
@@ -1764,7 +1788,7 @@ function PublishPanel({ publish }) {
   );
 }
 
-function BootstrapPanel({ onDone }) {
+function BootstrapPanel({ onDone, shellKind }) {
   const [path, setPath] = useState("");
   const [project, setProject] = useState("");
   const [output, setOutput] = useState("");
@@ -1797,7 +1821,11 @@ function BootstrapPanel({ onDone }) {
       <h2>Bootstrap Brain</h2>
         <label>
           <span>Project Folder</span>
-          <input value={path} onChange={(event) => setPath(event.target.value)} placeholder="C:\\path\\to\\my-project" />
+          <input
+            value={path}
+            onChange={(event) => setPath(event.target.value)}
+            placeholder={shellKind === "powershell" ? "C:\\path\\to\\my-project" : "/path/to/my-project"}
+          />
         </label>
       <label>
         <span>Project Name</span>
@@ -1815,12 +1843,15 @@ function BootstrapPanel({ onDone }) {
   );
 }
 
-function CommandPalette({ command, cliCommand, onClose, onCopy }) {
+function CommandPalette({ command, cliCommand, shellKind, brainDir, onClose, onCopy }) {
   const paletteRef = useRef(null);
   useEffect(() => {
     paletteRef.current?.querySelector("button")?.focus();
   }, []);
-  const defaultBrainDir = command.includes("--db ") ? ".\\.rta-smriti" : '"$env:USERPROFILE\\Documents\\Rta-Smriti\\brains"';
+  const defaultBrainDir = shellPathArg(
+    brainDir || (shellKind === "powershell" ? "$env:USERPROFILE\\Documents\\Rta-Smriti\\brains" : "$HOME/.local/share/rta-smriti/brains"),
+    shellKind,
+  );
   const commands = [
     ["Copy context-pack command", command],
     ["Open dashboard", `${cliCommand} dashboard --brain-dir ${defaultBrainDir}`],

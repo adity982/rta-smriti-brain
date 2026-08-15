@@ -4,7 +4,7 @@
 
 **A local project brain for AI coding agents.**
 
-[Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second product demo](launch-assets/product-hunt/rta-smriti-launch-demo.mp4) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
+[Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second product demo](launch-assets/product-hunt/rta-smriti-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
 
 Rta-Smriti Brain turns a project repository, long agent threads, durable decisions, and evidence into a small local memory graph that Codex, Claude Code, Cursor, or any MCP-capable agent can reuse before doing work.
 
@@ -56,9 +56,12 @@ Rta-Smriti uses a Vedic-inspired evidence model to classify context:
 
 This keeps a test result, a human instruction, an assumption, and a brainstorm from collapsing into the same kind of "memory."
 
-## Install On Windows
+## Install
 
-Requirements: Windows 10/11, Git, and Python 3.11 or newer.
+Requirements: Python 3.11 or newer and Git. Rta-Smriti supports Windows,
+macOS, and Linux. Node.js is only needed to modify the dashboard source.
+
+### Windows (PowerShell)
 
 ```powershell
 git clone https://github.com/sulabhdubey/rta-smriti-brain.git
@@ -76,6 +79,25 @@ Keep `$RtaBrain` in the current PowerShell session and use `& $RtaBrain` in
 the commands below. This works immediately without changing `PATH`. The install
 command also prints the exact wrapper path and an optional `PATH` note.
 
+### macOS Or Linux (Bash/Zsh)
+
+```bash
+git clone https://github.com/sulabhdubey/rta-smriti-brain.git
+cd rta-smriti-brain
+python3 --version
+python3 ./rta-brain.py --json doctor
+
+RTA_BIN="$HOME/.local/bin"
+python3 ./rta-brain.py --json install-local --target "$RTA_BIN"
+RtaBrain="$RTA_BIN/rta-brain"
+"$RtaBrain" --json doctor
+```
+
+Keep `RtaBrain` in the current shell and use `"$RtaBrain"` in Bash or Zsh.
+The generated POSIX launchers are executable and do not require the repository
+to remain your working directory. See the [installation guide](docs/INSTALLATION.md)
+for PATH setup, troubleshooting, and uninstall instructions.
+
 ## Quick Start
 
 Create one central brain directory, then bootstrap a project:
@@ -86,12 +108,22 @@ $BrainDir = "$env:USERPROFILE\Documents\Rta-Smriti\brains"
 & $RtaBrain --db "$BrainDir\my-project.sqlite" context-pack "the task I want the agent to do" --project my-project
 ```
 
+```bash
+BrainDir="$HOME/.local/share/rta-smriti/brains"
+"$RtaBrain" --json bootstrap-project /path/to/my-project --project my-project --brain-dir "$BrainDir" --write-agents
+"$RtaBrain" --db "$BrainDir/my-project.sqlite" context-pack "the task I want the agent to do" --project my-project
+```
+
 ## Dashboard
 
 Run the local operator console:
 
 ```powershell
 & $RtaBrain dashboard --brain-dir $BrainDir
+```
+
+```bash
+"$RtaBrain" dashboard --brain-dir "$BrainDir"
 ```
 
 Keep this terminal open while using the dashboard. Open the complete URL printed
@@ -136,6 +168,8 @@ For a new project:
 & $RtaBrain --json bootstrap-project C:\path\to\project --project project-name --brain-dir $BrainDir --write-agents
 ```
 
+On macOS or Linux, use the equivalent Bash form from **Quick Start** above.
+
 Before asking an agent to work:
 
 ```powershell
@@ -148,6 +182,10 @@ For MCP hosts:
 
 ```powershell
 & $RtaBrain --db "$BrainDir\project-name.sqlite" --json mcp-config --project project-name --name rta-smriti-project
+```
+
+```bash
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" --json mcp-config --project project-name --name rta-smriti-project
 ```
 
 ## CLI Commands
@@ -168,7 +206,7 @@ mcp-config        Generate an MCP host config snippet
 bootstrap-project Create a brain, index a repo, and optionally write agent instructions
 self-check        Verify that a project brain is ready
 projects-list     List projects registered in a brain database
-install-local     Install Windows command wrappers
+install-local     Install native Windows or POSIX command wrappers
 doctor            Verify local brain health
 dashboard         Run the local operator console
 publish-readiness Check whether the package is ready to publish
@@ -176,11 +214,9 @@ publish-readiness Check whether the package is ready to publish
 
 ## MCP Server
 
-Rta-Smriti ships a stdio MCP server:
-
-```powershell
-.\rta-brain-mcp.cmd --db .\.rta-smriti\brain.sqlite --project demo
-```
+Rta-Smriti ships a stdio MCP server. Run `mcp-config` as shown above to generate
+the correct absolute `command` and `args` for the current operating system and
+Python environment; do not hand-edit a Windows path into a macOS or Linux host.
 
 Tools exposed:
 
@@ -205,23 +241,9 @@ Tools exposed:
 - **Multi-project operation**: switch between separate local brains without mixing one client, product, or codebase into another.
 - **Research and product work**: keep source-backed findings, hypotheses, and decisions distinguishable through pramana labels.
 
-Example MCP host configuration:
-
-```json
-{
-  "mcpServers": {
-    "rta-smriti": {
-      "command": "C:\\path\\to\\rta-smriti-brain\\rta-brain-mcp.cmd",
-      "args": [
-        "--db",
-        "C:\\path\\to\\brains\\project-name.sqlite",
-        "--project",
-        "project-name"
-      ]
-    }
-  }
-}
-```
+The generated MCP configuration uses the active Python interpreter plus the
+installed `rta_brain.mcp_server` module, so paths with spaces and clean wheel
+installs are handled without relying on a global command.
 
 ## Privacy And Security
 
@@ -243,6 +265,7 @@ Alpha, local-first, working developer tool.
 
 Verified:
 
+- Windows, macOS, and Linux verification in GitHub Actions
 - Python CLI
 - SQLite schema and FTS search
 - repo ingestion
@@ -303,6 +326,7 @@ Routine context packs use the latest completed index snapshot so even very large
 ```powershell
 npm install
 npm run build
+python scripts/build_installed_smoke.py
 python -m unittest discover -s tests -v
 python -m compileall -q rta_brain tests
 pip install -e . --dry-run --no-deps

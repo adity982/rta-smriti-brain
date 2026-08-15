@@ -17,9 +17,11 @@ That brain remembers:
 
 When you start a new Codex, Claude Code, Cursor, or other agent chat, ask Rta-Smriti for a context pack and paste it into the chat before the task.
 
-## Install The Windows Launcher
+## Install The Local Launcher
 
-From a cloned Rta-Smriti repository, run:
+From a cloned Rta-Smriti repository, run the command for your operating system.
+
+Windows PowerShell:
 
 ```powershell
 $RtaBin = "$env:LOCALAPPDATA\Rta-Smriti\bin"
@@ -33,12 +35,29 @@ not assume the wrapper directory is already on `PATH`. Set `$RtaBrain` again
 after opening a new PowerShell session, or add the printed install directory to
 your user `PATH` and restart the terminal.
 
+macOS or Linux:
+
+```bash
+RTA_BIN="$HOME/.local/bin"
+python3 ./rta-brain.py --json install-local --target "$RTA_BIN"
+RtaBrain="$RTA_BIN/rta-brain"
+"$RtaBrain" --json doctor
+```
+
+Use `"$RtaBrain"` for the Bash/Zsh examples. See the complete
+[installation guide](INSTALLATION.md) for prerequisites, PATH setup,
+troubleshooting, and uninstall instructions.
+
 ## Recommended Folder Layout
 
 Use one central folder for all project brains:
 
 ```powershell
 $env:USERPROFILE\Documents\Rta-Smriti\brains
+```
+
+```bash
+$HOME/.local/share/rta-smriti/brains
 ```
 
 Each project brain becomes one SQLite file:
@@ -60,6 +79,11 @@ Run once per project:
 & $RtaBrain --json bootstrap-project C:\path\to\project --project project-name --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains" --write-agents
 ```
 
+```bash
+BrainDir="$HOME/.local/share/rta-smriti/brains"
+"$RtaBrain" --json bootstrap-project /path/to/project --project project-name --brain-dir "$BrainDir" --write-agents
+```
+
 This creates:
 
 - a SQLite brain database
@@ -73,6 +97,10 @@ This creates:
 & $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json self-check --project project-name --check-files
 ```
 
+```bash
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" --json self-check --project project-name --check-files
+```
+
 Look for:
 
 - `ready: true`
@@ -84,6 +112,10 @@ Look for:
 
 ```powershell
 & $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" context-pack "describe the task here" --project project-name
+```
+
+```bash
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" context-pack "describe the task here" --project project-name
 ```
 
 Paste the output into the agent chat, then ask the agent to do the task.
@@ -103,6 +135,10 @@ Run:
 
 ```powershell
 & $RtaBrain dashboard --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains"
+```
+
+```bash
+"$RtaBrain" dashboard --brain-dir "$BrainDir"
 ```
 
 Open the URL printed in the terminal.

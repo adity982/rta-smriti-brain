@@ -130,7 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     projects = sub.add_parser("projects-list", help="List projects registered in a brain database")
     add_common_options(projects)
 
-    install = sub.add_parser("install-local", help="Install Windows command wrappers into a target folder")
+    install = sub.add_parser("install-local", help="Install local command wrappers into a target folder")
     add_common_options(install)
     install.add_argument("--target", default=str(Path.home() / ".local" / "bin"))
 
