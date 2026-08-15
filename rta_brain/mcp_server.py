@@ -66,6 +66,7 @@ TOOLS = [
         {
             "path": {"type": "string", "description": "Local repository or folder path."},
             "project": {"type": "string", "description": "Project memory bank name."},
+            "force": {"type": "boolean", "default": False, "description": "Hash every file even when the stat manifest is unchanged."},
         },
         ["path"],
     ),
@@ -90,7 +91,7 @@ TOOLS = [
     tool_schema(
         "brain_stale_check",
         "Report indexed files that are fresh, changed, or missing.",
-        {"project": {"type": "string", "description": "Project memory bank name."}},
+        {"project": {"type": "string", "description": "Project memory bank name."}, "deep": {"type": "boolean", "default": False, "description": "Hash file contents instead of using the fast stat manifest."}},
     ),
     tool_schema(
         "brain_reflect",
@@ -103,6 +104,8 @@ TOOLS = [
         {},
     ),
 ]
+
+MAX_MCP_FRAME_BYTES = 1_048_576
 
 
 def text_result(text: str, structured: Any | None = None) -> dict[str, Any]:
@@ -143,7 +146,7 @@ class RtaBrainMcpServer:
             )
             return text_result(json_text(payload), payload)
         if name == "brain_ingest_repo":
-            payload = ingest_repo(conn, Path(str(args["path"])), project=project)
+            payload = ingest_repo(conn, Path(str(args["path"])), project=project, force=bool(args.get("force", False)))
             return text_result(json_text(payload), payload)
         if name == "brain_ingest_thread":
             payload = ingest_thread(conn, Path(str(args["path"])), project=project, title=args.get("title"))
@@ -152,7 +155,7 @@ class RtaBrainMcpServer:
             payload = graph(conn, project=project, limit=int(args.get("limit", 100)))
             return text_result(json_text(payload), payload)
         if name == "brain_stale_check":
-            payload = stale_check(conn, project=project)
+            payload = stale_check(conn, project=project, deep=bool(args.get("deep", False)))
             return text_result(json_text(payload), payload)
         if name == "brain_reflect":
             payload = reflect(conn, project=project)
@@ -163,8 +166,12 @@ class RtaBrainMcpServer:
         raise KeyError(f"unknown tool: {name}")
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any] | None:
+        if not isinstance(request, dict):
+            return self.error(None, -32600, "invalid request: JSON-RPC frame must be an object")
         method = request.get("method")
         request_id = request.get("id")
+        if request.get("jsonrpc") != "2.0" or not isinstance(method, str):
+            return self.error(request_id, -32600, "invalid request: jsonrpc must be '2.0' and method must be a string")
         if method and method.startswith("notifications/"):
             return None
         try:
@@ -183,10 +190,15 @@ class RtaBrainMcpServer:
                 return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": TOOLS}}
             if method == "tools/call":
                 params = request.get("params") or {}
+                if not isinstance(params, dict):
+                    raise ValueError("tools/call params must be an object")
                 name = params.get("name")
                 if not name:
                     raise ValueError("tools/call requires params.name")
-                result = self.call_tool(str(name), params.get("arguments") or {})
+                arguments = params.get("arguments") or {}
+                if not isinstance(arguments, dict):
+                    raise ValueError("tools/call arguments must be an object")
+                result = self.call_tool(str(name), arguments)
                 return {"jsonrpc": "2.0", "id": request_id, "result": result}
             if method == "ping":
                 return {"jsonrpc": "2.0", "id": request_id, "result": {}}
@@ -206,7 +218,17 @@ class RtaBrainMcpServer:
 
 def serve_stdio(db_path: Path, default_project: str) -> int:
     server = RtaBrainMcpServer(db_path=db_path, default_project=default_project)
-    for line in sys.stdin:
+    stream = sys.stdin.buffer
+    while True:
+        line = stream.readline(MAX_MCP_FRAME_BYTES + 1)
+        if not line:
+            break
+        if len(line) > MAX_MCP_FRAME_BYTES:
+            while line and not line.endswith(b"\n"):
+                line = stream.readline(MAX_MCP_FRAME_BYTES + 1)
+            response = RtaBrainMcpServer.error(None, -32600, f"request frame exceeds {MAX_MCP_FRAME_BYTES} bytes")
+            print(json.dumps(response, separators=(",", ":")), flush=True)
+            continue
         if not line.strip():
             continue
         try:

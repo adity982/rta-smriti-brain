@@ -22,7 +22,7 @@ When you start a new Codex, Claude Code, Cursor, or other agent chat, ask Rta-Sm
 Use one central folder for all project brains:
 
 ```powershell
-%USERPROFILE%\Documents\Rta-Smriti\brains
+$env:USERPROFILE\Documents\Rta-Smriti\brains
 ```
 
 Each project brain becomes one SQLite file:
@@ -41,7 +41,7 @@ Do not commit this folder to GitHub.
 Run once per project:
 
 ```powershell
-rta-brain.cmd --json bootstrap-project C:\path\to\project --project project-name --brain-dir "%USERPROFILE%\Documents\Rta-Smriti\brains" --write-agents
+rta-brain.cmd --json bootstrap-project C:\path\to\project --project project-name --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains" --write-agents
 ```
 
 This creates:
@@ -54,7 +54,7 @@ This creates:
 ## Check A Project Brain
 
 ```powershell
-rta-brain.cmd --db "%USERPROFILE%\Documents\Rta-Smriti\brains\project-name.sqlite" --json self-check --project project-name --check-files
+rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json self-check --project project-name --check-files
 ```
 
 Look for:
@@ -67,7 +67,7 @@ Look for:
 ## Generate Context Before A Task
 
 ```powershell
-rta-brain.cmd --db "%USERPROFILE%\Documents\Rta-Smriti\brains\project-name.sqlite" context-pack "describe the task here" --project project-name
+rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" context-pack "describe the task here" --project project-name
 ```
 
 Paste the output into the agent chat, then ask the agent to do the task.
@@ -86,28 +86,42 @@ continue the release hardening work from the previous thread
 Run:
 
 ```powershell
-rta-brain.cmd dashboard --brain-dir "%USERPROFILE%\Documents\Rta-Smriti\brains"
+rta-brain.cmd dashboard --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains"
 ```
 
 Open the URL printed in the terminal.
+
+### The Daily Five-Step Loop
+
+1. Open **Projects** and select the project you are working on.
+2. Orient yourself in **Graph**, then inspect exact source in **Files** or structured facts in **Bases**.
+3. In **Context-Pack Studio**, describe one concrete task. Use `Add to Task` in a file preview when a path matters.
+4. Choose the target agent. `Universal / Any Agent` is the safest default; named and custom agents add a clear handoff label to the pack and receipt.
+5. Generate the pack, copy it, and place it at the start of the agent chat. MCP-capable hosts can call the brain tools directly instead.
+
+Graph is the map, Files is the source reader, Canvas is the working board, Bases is the structured database, and the Context-Pack Studio is the handoff point.
 
 ### What The Dashboard Shows
 
 **Projects**
 
-Every brain found in your brain folder. Each card shows readiness, file count, memory count, and the project path.
+Every brain found in your brain folder. The switcher shows readiness, file count, memory count, and the project path without mixing data between projects.
+
+**Files**
+
+The actual indexed project tree. Open folders, search by relative path, preview indexed source, copy a safe relative path, or add that file to the current task. Absolute local paths are not shown in previews.
 
 **Brain Graph**
 
-A visual map of the active project. Switch between Global, Local, and Task scopes, then tune connection depth, labels, and edges.
+A semantic map of the active project. The center is the project brain; stable hubs group Files, Symbols, Imports, Memories, and Evidence. Hover or focus a compact leaf to read it, click a hub to collapse or expand it, and use pan, zoom, reset, or the minimap to navigate. Brighter links are repository evidence; faint dashed links only explain the visual grouping. Switch between Global, Local, and Task scopes to change the working set.
 
-**Spatial Canvas**
+**Canvas**
 
-A draggable local board for arranging project evidence. Layouts persist in the browser and can be exported as JSON.
+A draggable working board for arranging the current evidence set. Double-click a card to inspect it, reset the layout when needed, and export the arrangement as JSON.
 
-**Bases**
+**Bases, Symbols, Imports, And Memories**
 
-Filterable table views for memories, indexed sources, and launch-readiness checks.
+Filterable table views for facts that are easier to scan as rows than as a graph. The dedicated left-navigation items open the relevant base directly.
 
 **Search Nodes**
 
@@ -119,11 +133,11 @@ Filters the graph by node type.
 
 **Context-Pack Studio**
 
-The main daily workflow. Type the task, click `Generate Context Pack`, then copy the pack into the agent chat. Each generation creates a local receipt you can reopen later.
+The main daily workflow. Choose `Universal / Any Agent`, Codex, Claude Code, Cursor, GitHub Copilot, Gemini CLI, Windsurf, Cline, Aider, OpenCode, Continue, or enter a custom agent name. Type the task, click `Generate Context Pack`, then copy the pack into the agent chat. Each generation creates privacy-safe receipt metadata; the full pack stays available only in the current browser session.
 
 **Evidence Inspector**
 
-Shows what is selected, must-know memories, freshness, repo tree hints, and publish readiness.
+Open the detail-panel button in the graph toolbar to see what is selected, must-know memories, measured freshness counts, repo tree hints, and publish readiness. A `Blocked` freshness count means an eligible source could not be safely inspected, such as an oversized or symlinked source. Use the refresh action to incrementally update the selected repo index.
 
 **References**
 
@@ -145,10 +159,47 @@ Creates a new project brain from the UI.
 
 Copies common commands so you do not have to remember syntax.
 
+## Real-World Use Cases
+
+**Continue after context compaction**
+
+Ingest a long thread or handoff, then generate a focused pack for the next chat. The next agent receives decisions and evidence without receiving the entire transcript.
+
+**Switch agents without starting over**
+
+Generate one universal pack or label it for Codex, Claude Code, Cursor, Copilot, Gemini CLI, or another agent. The brain stays agent-neutral; the target is handoff metadata, not a lock-in.
+
+**Understand an unfamiliar repository**
+
+Use Graph to see structure, Files to inspect source, Symbols and Imports to scan implementation boundaries, and Bases to compare structured records.
+
+**Debug a specific problem**
+
+Name the failure in the objective, add the relevant files, and generate a narrow pack containing matching code evidence plus prior constraints and fixes.
+
+**Prepare a release or security review**
+
+Run live or deep freshness checks, inspect evidence and launch readiness, and hand the resulting context to the reviewing agent.
+
+**Operate several products privately**
+
+Keep one SQLite brain per project. The dashboard switches between them while all repo content, memories, canvas layouts, and receipts remain local.
+
+## Cross-Project Acceptance Check
+
+You do not need to run a test before normal daily use. Before publishing the tool or after changing its indexing code, validate at least one tiny, one medium, and one large repository:
+
+```powershell
+rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json self-check --project project-name --check-files
+rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" context-pack "explain the architecture and safest next step" --project project-name
+```
+
+Confirm that the project is ready, Files opens, a preview can be added to the task, the selected target agent appears on the receipt, and the generated pack contains only that project's evidence.
+
 ## Add A Memory Manually
 
 ```powershell
-rta-brain.cmd --db "%USERPROFILE%\Documents\Rta-Smriti\brains\project-name.sqlite" remember "Payments must fail closed when verification is missing." --project project-name --type constraint --pramana sabda --priority 9
+rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" remember "Payments must fail closed when verification is missing." --project project-name --type constraint --pramana sabda --priority 9
 ```
 
 Use memory types like:
@@ -171,7 +222,7 @@ Use pramana labels:
 ## Ingest A Long Thread Or Handoff
 
 ```powershell
-rta-brain.cmd --db "%USERPROFILE%\Documents\Rta-Smriti\brains\project-name.sqlite" --json ingest-thread C:\path\to\handoff.md --project project-name --title "release handoff"
+rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json ingest-thread C:\path\to\handoff.md --project project-name --title "release handoff"
 ```
 
 Use this after a long agent session so the next chat can recover the useful decisions and evidence.
@@ -181,14 +232,16 @@ Use this after a long agent session so the next chat can recover the useful deci
 After significant code changes:
 
 ```powershell
-rta-brain.cmd --db "%USERPROFILE%\Documents\Rta-Smriti\brains\project-name.sqlite" --json ingest-repo C:\path\to\project --project project-name
+rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json ingest-repo C:\path\to\project --project project-name
 ```
 
 Then:
 
 ```powershell
-rta-brain.cmd --db "%USERPROFILE%\Documents\Rta-Smriti\brains\project-name.sqlite" --json stale-check --project project-name
+rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json stale-check --project project-name
 ```
+
+Use `--deep` to hash every indexed file before release or security-critical work.
 
 ## What Not To Publish
 

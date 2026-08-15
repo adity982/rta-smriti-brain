@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If Rta-Smriti Brain supports your work, cite this software."
+title: "Rta-Smriti Brain"
+type: software
+authors:
+  - family-names: Dubey
+    given-names: Sulabh
+version: 0.3.0-alpha
+license: MIT
+abstract: "Local-first project memory, repository graph, context packs, and MCP tools for AI coding agents."
+repository-code: "https://github.com/sulabhdubey/rta-smriti-brain"
+url: "https://sulabhdubey.github.io/rta-smriti-brain/"

@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose a focused improvement to the local brain or operator workflow.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Operator problem
+      description: What work is difficult today?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+    validations:
+      required: true
+  - type: dropdown
+    id: boundary
+    attributes:
+      label: Local-first impact
+      options: [Stays fully local, Optional integration, Unsure]
+    validations:
+      required: true

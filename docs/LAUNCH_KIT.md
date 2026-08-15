@@ -1,158 +1,139 @@
 # Rta-Smriti Brain Launch Kit
 
-## Product Name
+This is the source of truth for the GitHub and Product Hunt launch. Replace only the bracketed public URLs after the repository and Product Hunt page exist.
 
-Rta-Smriti Brain
+## Positioning
 
-## Tagline
+**Product:** Rta-Smriti Brain
 
+**Tagline (53 characters):**
+
+```text
 Stop re-explaining your project to every new AI chat.
+```
 
-## One-Liner
+**One-liner:**
 
+```text
 Local project memory and context packs for AI coding agents.
+```
 
-## Short Description
+**Simple explanation:**
 
-Rta-Smriti Brain gives every software project a private local memory graph. It indexes your repo, remembers durable decisions, ingests long agent threads, and generates focused context packs that Codex, Claude Code, Cursor, or any MCP-capable agent can reuse before doing work.
-
-## Simple Explanation
-
-AI coding agents are powerful, but every new chat starts with amnesia. You explain the same architecture, decisions, bugs, and release rules again and again.
-
-Rta-Smriti Brain fixes that by giving each project a local brain. It stores what matters, keeps it searchable, shows it as a graph, and produces a short context pack for the next agent task.
-
-Your project context stays on your machine.
-
-## Maker Comment
-
-I built Rta-Smriti Brain because long AI coding sessions kept losing the most important thing: project memory.
-
-The tool is local-first. It uses SQLite, a small CLI, a stdio MCP server, and a React operator console. You can bootstrap a project, index its repo, store decisions, ingest long thread handoffs, and generate a context pack before the next agent chat.
-
-The unique part is the evidence model. Rta-Smriti uses `pratyaksha`, `sabda`, `anumana`, `smriti`, and `kalpana` labels so directly observed facts, trusted instructions, inferences, memories, and hypotheses do not all get treated as the same kind of context.
-
-This is an alpha developer tool, but it is already useful if you work across multiple projects and hate re-explaining the same context to every new AI session.
-
-## Moats
-
-### 1. Local-First Trust
-
-No hosted database. No account system. No telemetry. Project memory is stored in local SQLite files.
-
-### 2. Repo + Memory + Thread Fusion
-
-Most tools focus on one layer: notes, repo search, or chat memory. Rta-Smriti combines repo evidence, durable decisions, long-thread handoffs, and task focused context packs.
-
-### 3. Evidence-Aware Memory
-
-The pramana model labels the kind of evidence behind a memory. A test result, a human instruction, an inference, and a brainstorm are not treated as equal.
-
-### 4. Agent-Ready Output
-
-The context pack is not a notebook page. It is shaped for the next coding-agent turn: concise, relevant, copyable, and warning-aware.
-
-### 5. Visual Operator Console
-
-The dashboard is not a landing page. It is a real local operator console with project switching, graph search, memory ledger, context-pack studio, bootstrap flow, and publish readiness.
-
-### 6. MCP-Compatible Path
-
-The stdio MCP server makes the same memory usable by compatible agent hosts.
-
-## Feature List
-
-- Local SQLite memory store
-- Repository ingestion
-- Symbol and import indexing
-- Long-thread and handoff ingestion
-- Durable memory ledger
-- Pramana evidence labels
-- Context-pack generation
-- Stale-file checks
-- Reflection for duplicates and simple contradictions
-- Stdio MCP server
-- React dashboard/operator console
-- Project switcher
-- Interactive graph canvas
-- Node search and type filters
-- Bootstrap flow
-- GitHub publish readiness checker
-
-## Comparison Positioning
-
-| Category | Typical behavior | Rta-Smriti difference |
-| --- | --- | --- |
-| Plain second brain | Stores notes | Stores repo evidence, decisions, handoffs, and graph context |
-| Code indexer | Searches files | Adds durable memory and task packs |
-| Vector memory | Recalls similar text | Adds evidence labels, freshness, and deterministic local checks |
-| Agent chat memory | Lives inside one tool | Works as a local project layer outside the chat |
-| MCP memory server | Exposes tools | Also includes CLI, dashboard, bootstrap flow, and publish checks |
+AI coding agents are powerful, but every new chat starts with amnesia. Rta-Smriti gives each software project a private local brain. It indexes the repository, remembers durable decisions, preserves long-session handoffs, and prepares a focused context pack for the next task. The memory stays on your machine.
 
 ## Product Hunt Fields
 
-Name:
+**Name**
 
 ```text
 Rta-Smriti Brain
 ```
 
-Tagline:
+**Tagline**
 
 ```text
-Local project memory and context packs for AI coding agents.
+Stop re-explaining your project to every new AI chat.
 ```
 
-Description:
+**Description (under 500 characters)**
 
 ```text
-Give each software project a private local brain. Rta-Smriti indexes your repo, remembers decisions, ingests long agent threads, and generates focused context packs for Codex, Claude Code, Cursor, and MCP-capable agents.
+Give every software project a private local brain. Rta-Smriti indexes repository structure, remembers durable decisions, preserves long agent-session handoffs, and generates focused context packs for Codex, Claude Code, Cursor, and other agents. SQLite, CLI, MCP, and the visual operator console all run locally with no account, telemetry, or cloud database.
 ```
 
-Topics:
+**Topics**
 
 ```text
 Developer Tools, Artificial Intelligence, Open Source, Productivity, GitHub
 ```
 
-First comment:
+**Links**
 
 ```text
-AI coding agents are getting stronger, but most project memory still disappears when a chat gets long or a new session starts.
-
-Rta-Smriti Brain is a local-first project memory layer. It stores repo evidence, durable decisions, long-thread handoffs, and task focused context packs in SQLite. The dashboard lets you switch projects, inspect a graph, search nodes, reflect memories, and bootstrap new project brains.
-
-The product is alpha, open source, and built for developers who work across multiple AI-assisted projects.
+Website: https://sulabhdubey.github.io/rta-smriti-brain/
+GitHub: https://github.com/sulabhdubey/rta-smriti-brain
+Video: [PUBLIC-YOUTUBE-URL]
 ```
 
-## Launch Assets Needed
-
-- GitHub repository with clean README
-- MIT license
-- Demo screenshot using only sample project data
-- 60-90 second demo video
-- Product Hunt gallery images
-- Short install GIF
-- Public issue templates
-- Release notes for `v0.3.0-alpha`
-
-## Demo Script
-
-1. Bootstrap a demo project brain.
-2. Open the dashboard.
-3. Switch between demo projects.
-4. Search the graph for a file or memory.
-5. Generate a context pack for a task.
-6. Copy the pack into an AI agent chat.
-7. Show that the memory never left the local machine.
-
-## Launch-Day Message
+## Maker Comment
 
 ```text
-I launched Rta-Smriti Brain today.
+AI coding agents are getting stronger, but the project memory around them still disappears when a chat gets long, a session ends, or you switch tools.
 
-It is a local project memory layer for AI coding agents. It gives each repo a private brain, indexes code and long threads, remembers durable decisions, and generates focused context packs so every new agent chat starts with the right context.
+I built Rta-Smriti Brain to move that memory out of the chat and into the project. It combines repository structure, durable decisions, long-session handoffs, and task-specific context packs in a local SQLite brain. The operator console lets you inspect the graph, browse indexed files, review memories, check freshness, and prepare context for any agent.
 
-GitHub: <repo-url>
-Product Hunt: <product-hunt-url>
+The unusual part is the Pramana evidence model. An observed test result, a trusted human instruction, an inference, a prior memory, and a hypothesis remain different kinds of knowledge instead of becoming one undifferentiated memory blob.
+
+This is an alpha developer release. It is open source, local-first, and already tested across six project brains, including a 26,482-file repository. I would especially value feedback on onboarding, retrieval quality, and integrations with your preferred coding agent.
 ```
+
+## What Makes It Different
+
+1. **Project memory, not chat memory:** the brain belongs to the repository and survives agents and sessions.
+2. **Repo + decisions + handoffs:** structural code evidence and human knowledge live in one inspectable layer.
+3. **Evidence-aware recall:** Pramana labels distinguish observation, trusted instruction, inference, memory, and hypothesis.
+4. **Task-shaped output:** context packs compile bounded information for one objective instead of dumping the entire brain.
+5. **Agent-neutral:** use copy/paste, CLI, project instructions, skills, or stdio MCP.
+6. **Local-first trust:** SQLite storage, loopback-only console, no account, no telemetry, no hosted database.
+7. **Inspectable operation:** graph, files, Canvas, typed Bases, memory ledger, freshness, receipts, and publish checks are visible to the operator.
+
+## Gallery Order
+
+1. `launch-assets/product-hunt/gallery-01-project-memory.png`
+2. `launch-assets/product-hunt/gallery-02-any-agent.png`
+3. `launch-assets/product-hunt/gallery-03-evidence.png`
+4. `launch-assets/product-hunt/gallery-04-focused-pack.png`
+5. YouTube video generated from `launch-video/`
+
+Use `launch-assets/product-hunt/thumbnail-240.png` as the thumbnail.
+
+## Launch Posts
+
+**LinkedIn / X**
+
+```text
+I built Rta-Smriti Brain because every new AI coding chat kept forgetting the project.
+
+It gives each repository a private local brain: repo structure, durable decisions, long-session handoffs, evidence labels, and focused context packs for any coding agent.
+
+Open source. SQLite. CLI + MCP + visual operator console. No account or telemetry.
+
+https://github.com/sulabhdubey/rta-smriti-brain
+[PRODUCT-HUNT-URL]
+```
+
+**Show HN**
+
+```text
+Show HN: Rta-Smriti Brain - local project memory for AI coding agents
+
+I built an open-source local memory layer that indexes repository structure, durable decisions, and long agent-session handoffs into SQLite, then generates bounded context packs for a concrete task. It includes a CLI, stdio MCP server, and an inspectable React operator console. The evidence model keeps observed facts, trusted instructions, inferences, memories, and hypotheses distinct. I would value feedback on retrieval quality and agent integrations.
+```
+
+## Launch-Day Sequence
+
+1. Create the public GitHub repository and set the social preview to `launch-assets/social/github-social-preview.png`.
+2. Confirm the default branch, description, topics, Pages workflow, Discussions, and vulnerability reporting.
+3. Create release `v0.3.0-alpha` using `docs/RELEASE_NOTES_v0.3.0-alpha.md`.
+4. Upload the MP4 to YouTube as an unlisted or public full URL and add captions if narration is later added.
+5. Schedule Product Hunt for 12:01 a.m. Pacific and upload the thumbnail plus four gallery images.
+6. Add the maker comment immediately after launch.
+7. Publish the GitHub, Product Hunt, LinkedIn/X, and Show HN posts.
+8. Reply to feedback with concrete answers; do not ask for upvotes or use voting groups.
+
+## Human Review Gate
+
+- [ ] Product name and tagline approved
+- [ ] Public GitHub owner/repository URL inserted
+- [ ] YouTube URL inserted
+- [ ] Product Hunt maker profile and launch date selected
+- [ ] Screenshots and video visually approved
+- [ ] Final commit and release tag approved
+- [ ] No real local project names, paths, databases, context packs, or secrets in tracked files
+
+## Official References
+
+- Product Hunt launch preparation: https://www.producthunt.com/launch/preparing-for-launch
+- Product Hunt launch-day guidance: https://www.producthunt.com/launch/launch-day
+- GitHub social preview guidance: https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview

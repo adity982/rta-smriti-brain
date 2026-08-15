@@ -47,7 +47,7 @@ Record only useful durable knowledge:
 Re-index after meaningful code or doc changes:
 
 ```powershell
-<path-to-rta-smriti>\rta-brain.cmd ingest-repo <repo-path> --project <project-name> --db <project-brain.sqlite>
+<path-to-rta-smriti>\rta-brain.cmd --db <project-brain.sqlite> ingest-repo <repo-path> --project <project-name>
 ```
 
 Ingest important handoffs or long-session summaries:

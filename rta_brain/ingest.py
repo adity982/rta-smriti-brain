@@ -1,4 +1,5 @@
 import hashlib
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,6 +67,11 @@ TEXT_SUFFIXES = {
     ".sh",
 }
 
+MAX_REPO_FILES = 50_000
+MAX_FILE_BYTES = 512_000
+MAX_REPO_TOTAL_BYTES = 2_000_000_000
+MAX_REPO_TRAVERSED_ENTRIES = 250_000
+
 SYMBOL_PATTERNS = [
     re.compile(r"^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE),
     re.compile(r"^\s*def\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE),
@@ -103,17 +109,68 @@ def is_text_file(path: Path) -> bool:
     return path.suffix.lower() in TEXT_SUFFIXES
 
 
-def walk_repo(root: Path):
+def walk_repo(root: Path, rejected: list[dict[str, str]] | None = None):
     root = root.resolve()
-    for path in root.rglob("*"):
-        parts = path.relative_to(root).parts
-        if any(part in IGNORED_DIRS or part.lower().startswith(IGNORED_PREFIXES) for part in parts):
-            continue
-        if path.is_file() and is_text_file(path):
-            yield path
+
+    def reject(path: Path, reason: str) -> None:
+        if rejected is not None:
+            rejected.append({"path": str(path.absolute()), "reason": reason})
+
+    yielded = 0
+    total_bytes = 0
+    traversed = 0
+    for current, directories, filenames in os.walk(root, topdown=True, followlinks=False):
+        current_path = Path(current)
+        traversed += len(directories) + len(filenames)
+        if traversed > MAX_REPO_TRAVERSED_ENTRIES:
+            raise ValueError(f"repository exceeds the {MAX_REPO_TRAVERSED_ENTRIES:,} entry traversal limit")
+        kept_directories = []
+        for name in directories:
+            path = current_path / name
+            if name in IGNORED_DIRS or name.lower().startswith(IGNORED_PREFIXES):
+                continue
+            if path.is_symlink():
+                reject(path, "symlink-directory")
+                continue
+            kept_directories.append(name)
+        directories[:] = kept_directories
+        for name in filenames:
+            path = current_path / name
+            if name.lower().startswith(IGNORED_PREFIXES) or not is_text_file(path):
+                continue
+            if path.is_symlink():
+                reject(path, "symlink-file")
+                continue
+            try:
+                resolved = path.resolve(strict=True)
+                resolved.relative_to(root)
+            except (OSError, ValueError):
+                reject(path, "unresolvable-or-outside-root")
+                continue
+            try:
+                stat = resolved.stat()
+            except OSError:
+                reject(path, "unreadable-metadata")
+                continue
+            if not resolved.is_file():
+                reject(path, "not-a-regular-file")
+                continue
+            if stat.st_nlink > 1:
+                reject(path, "hard-link-file")
+                continue
+            if stat.st_size > MAX_FILE_BYTES:
+                reject(path, f"oversized:{stat.st_size}")
+                continue
+            yielded += 1
+            if yielded > MAX_REPO_FILES:
+                raise ValueError(f"repository exceeds the {MAX_REPO_FILES:,} file ingestion limit")
+            total_bytes += stat.st_size
+            if total_bytes > MAX_REPO_TOTAL_BYTES:
+                raise ValueError(f"repository exceeds the {MAX_REPO_TOTAL_BYTES:,} byte ingestion limit")
+            yield resolved
 
 
-def read_text(path: Path, max_bytes: int = 512_000) -> str | None:
+def read_text(path: Path, max_bytes: int = MAX_FILE_BYTES) -> str | None:
     if path.stat().st_size > max_bytes:
         return None
     try:
@@ -143,12 +200,8 @@ def extract_imports(text: str) -> list[str]:
 
 def extract_terms(text: str) -> list[str]:
     candidates = re.findall(r"\b[A-Z][A-Za-z0-9_]{2,}\b|`([^`]{2,80})`", text)
-    flattened = []
-    for item in candidates:
-        if isinstance(item, tuple):
-            flattened.extend(part for part in item if part)
-        else:
-            flattened.append(item)
+    uppercase = re.findall(r"\b[A-Z][A-Za-z0-9_]{2,}\b", text)
+    flattened = [item for item in candidates if item] + uppercase
     words = re.findall(r"\b[A-Za-z][A-Za-z0-9_-]{3,}\b", text)
     important = [word for word in words if word.lower() in {"attestation", "release", "memory", "graph", "codex", "context", "agent"}]
     return sorted(set(flattened + important), key=str.lower)[:24]

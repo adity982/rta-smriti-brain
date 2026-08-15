@@ -28,30 +28,33 @@ Rta-Smriti Brain is designed to index private repositories and private agent thr
 
 ## Pre-Publish Scan
 
-Run:
+Run the bundled scan over every tracked or unignored public candidate. Add each private client, project, employer, or unreleased product name as a deny term:
 
 ```powershell
-$patterns = @(
-  'local Windows user paths',
-  'private sync-folder names',
-  'SQLite brain files',
-  'common API-key prefixes',
-  'password, token, and secret assignments'
-) -join '|'
+python scripts/privacy_scan.py
+python scripts/privacy_scan.py --deny-term '<replace-with-private-name>'
+```
 
-Get-ChildItem -Force -Recurse |
-  Where-Object { $_.FullName -notmatch '\\node_modules\\' } |
-  Select-String -Pattern $patterns -CaseSensitive:$false
+The bundled check covers credential signatures, Windows/POSIX/UNC user paths, forbidden release files, static bundles, and media bytes up to 25 MB. It never prints a matched secret value.
+
+Also run a maintained secret scanner over Git history and the current release candidates. Install Gitleaks from its official release, then run:
+
+```powershell
+gitleaks git --redact --no-banner --verbose .
+gitleaks dir --redact --no-banner launch-assets
+gitleaks dir --redact --no-banner launch-site/public
+git diff --check
 ```
 
 Expected result:
 
 - no real local paths
 - no private project names
-- no credentials
+- no credentials or Gitleaks findings
 - no private SQLite brain files
+- no unreviewed image/video metadata or embedded text
 
-Some safe false positives may appear in docs where the text explicitly warns about secrets.
+The scans must pass before release. A documented detector pattern may be a reviewed false positive; a real project name, path, credential, database, or context pack is always a blocker. Record allowlists narrowly and review them in the pull request.
 
 ## Demo Data Rule
 
@@ -68,7 +71,7 @@ Do not use personal, client, employer, unreleased, or private product data in pu
 Documentation should use:
 
 ```powershell
-%USERPROFILE%\Documents\Rta-Smriti\brains
+$env:USERPROFILE\Documents\Rta-Smriti\brains
 ```
 
 Avoid publishing machine-specific examples such as:
@@ -83,10 +86,11 @@ Before every public release:
 
 ```powershell
 npm run build
+python scripts/privacy_scan.py
 python -m unittest discover -s tests -v
 python -m compileall -q rta_brain tests
 pip install -e . --dry-run --no-deps
 python rta-brain.py publish-readiness --json
 ```
 
-Then run the privacy scan above.
+Then run Gitleaks and inspect the final Product Hunt gallery, social preview, poster, and representative video frames before publishing.

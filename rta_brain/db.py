@@ -4,10 +4,20 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .ingest import build_file_record, chunk_text, extract_terms, sha256_text, walk_repo
+from .ingest import build_file_record, chunk_text, extract_terms, read_text, sha256_text, walk_repo
 
 
 VALID_PRAMANA = {"pratyaksha", "sabda", "anumana", "smriti", "kalpana"}
+MAX_THREAD_BYTES = 10 * 1024 * 1024
+MAX_THREAD_PROMOTIONS = 100
+MAX_SEARCH_LIMIT = 50
+MAX_GRAPH_LIMIT = 500
+QUERY_STOP_WORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "in", "is", "it",
+    "of", "on", "or", "that", "the", "this", "to", "what", "when", "where", "which", "with",
+    "code", "explain", "file", "files", "focused", "next", "prepare",
+    "safest", "step", "task",
+}
 
 
 def now_iso() -> str:
@@ -109,6 +119,13 @@ def init_schema(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS repo_manifests (
+            project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+            digest TEXT NOT NULL,
+            file_count INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
             memory_id UNINDEXED,
             project_id UNINDEXED,
@@ -124,6 +141,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
             path UNINDEXED,
             text
         );
+
+        CREATE INDEX IF NOT EXISTS idx_edges_from_entity ON edges(from_entity_id);
+        CREATE INDEX IF NOT EXISTS idx_edges_to_entity ON edges(to_entity_id);
+        CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
+        CREATE INDEX IF NOT EXISTS idx_edges_project ON edges(project_id);
+        CREATE INDEX IF NOT EXISTS idx_edges_project_source_id ON edges(project_id, source_id, id);
+        CREATE INDEX IF NOT EXISTS idx_edges_project_memory_id ON edges(project_id, memory_id, id);
+        CREATE INDEX IF NOT EXISTS idx_sources_project_kind_title ON sources(project_id, kind, title);
         """
     )
     conn.commit()
@@ -134,7 +159,7 @@ def ensure_project(conn: sqlite3.Connection, name: str, root_path: str | None = 
     row = conn.execute("SELECT id FROM projects WHERE name = ?", (name,)).fetchone()
     if row:
         if root_path:
-            conn.execute("UPDATE projects SET root_path = COALESCE(root_path, ?) WHERE id = ?", (root_path, row["id"]))
+            conn.execute("UPDATE projects SET root_path = ? WHERE id = ?", (root_path, row["id"]))
             conn.commit()
         return int(row["id"])
     cur = conn.execute(
@@ -201,8 +226,15 @@ def remember(
     metadata: dict | None = None,
 ) -> dict:
     init_schema(conn)
+    text = str(text).strip()
+    if not text:
+        raise ValueError("memory text must not be empty")
+    if len(text) > 20_000:
+        raise ValueError("memory text exceeds the 20,000 character limit")
     if pramana not in VALID_PRAMANA:
         raise ValueError(f"invalid pramana '{pramana}', expected one of {sorted(VALID_PRAMANA)}")
+    confidence = max(0.0, min(1.0, float(confidence)))
+    priority = max(1, min(10, int(priority)))
     project_id = ensure_project(conn, project)
     timestamp = now_iso()
     cur = conn.execute(
@@ -258,6 +290,8 @@ def _collect_json_strings(value) -> list[str]:
 
 
 def _read_thread_text(path: Path) -> str:
+    if path.stat().st_size > MAX_THREAD_BYTES:
+        raise ValueError(f"thread exceeds the {MAX_THREAD_BYTES // (1024 * 1024)} MB ingestion limit")
     if path.suffix.lower() == ".jsonl":
         parts = []
         for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -273,14 +307,14 @@ def _read_thread_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
-def _candidate_memory_type(text: str) -> tuple[str, str] | None:
+def _candidate_memory_type(text: str) -> str | None:
     lowered = text.lower()
     if "verification evidence" in lowered or "pytest passed" in lowered or "test passed" in lowered:
-        return ("evidence", "pratyaksha")
+        return "evidence"
     if lowered.startswith("decision:") or "we decided" in lowered:
-        return ("decision", "sabda")
+        return "decision"
     if " must " in f" {lowered} " or " should " in f" {lowered} ":
-        return ("constraint", "sabda")
+        return "constraint"
     return None
 
 
@@ -314,6 +348,17 @@ def ingest_thread(conn: sqlite3.Connection, path: Path, project: str = "default"
             (int(cur.lastrowid), source_id, project_id, source_title, chunk),
         )
     promoted = 0
+    prior_ids = []
+    for row in conn.execute("SELECT id, metadata_json FROM memories WHERE project_id = ? AND status IN ('active', 'pinned')", (project_id,)):
+        try:
+            metadata = json.loads(row["metadata_json"] or "{}")
+        except json.JSONDecodeError:
+            continue
+        if metadata.get("source") == "ingest-thread" and metadata.get("source_path") == str(path):
+            prior_ids.append(int(row["id"]))
+    for memory_id in prior_ids:
+        conn.execute("DELETE FROM memory_fts WHERE memory_id = ?", (memory_id,))
+        conn.execute("UPDATE memories SET status = 'superseded', updated_at = ? WHERE id = ?", (now_iso(), memory_id))
     for paragraph in re.split(r"\n\s*\n|(?<=\.)\s+", text):
         candidate = paragraph.strip()
         if len(candidate) < 24:
@@ -321,18 +366,20 @@ def ingest_thread(conn: sqlite3.Connection, path: Path, project: str = "default"
         classification = _candidate_memory_type(candidate)
         if not classification:
             continue
-        memory_type, pramana = classification
+        memory_type = classification
         remember(
             conn,
             candidate[:1000],
             project=project,
             memory_type=memory_type,
-            pramana=pramana,
-            confidence=0.82,
-            priority=7 if memory_type != "evidence" else 6,
-            metadata={"source": "ingest-thread", "source_path": str(path), "source_title": source_title},
+            pramana="smriti",
+            confidence=0.55,
+            priority=4,
+            metadata={"source": "ingest-thread", "source_path": str(path), "source_title": source_title, "verified": False},
         )
         promoted += 1
+        if promoted >= MAX_THREAD_PROMOTIONS:
+            break
     conn.commit()
     return {
         "status": "ok",
@@ -369,20 +416,81 @@ def upsert_source(conn: sqlite3.Connection, project_id: int, kind: str, path: st
     return int(cur.lastrowid)
 
 
-def ingest_repo(conn: sqlite3.Connection, root: Path, project: str = "default") -> dict:
+def _repo_stat_manifest(root: Path) -> tuple[str, list[tuple[Path, object]], list[dict[str, str]]]:
+    rejected: list[dict[str, str]] = []
+    path_stats = [(path, path.stat()) for path in walk_repo(root, rejected=rejected)]
+    manifest_lines = [
+        f"{path.relative_to(root).as_posix()}\0{stat.st_size}\0{stat.st_mtime_ns}"
+        for path, stat in path_stats
+    ]
+    manifest_lines.extend(f"!{item['path']}\0{item['reason']}" for item in rejected)
+    return sha256_text("\n".join(manifest_lines)), path_stats, rejected
+
+
+def ingest_repo(conn: sqlite3.Connection, root: Path, project: str = "default", force: bool = False) -> dict:
     init_schema(conn)
     root = root.resolve()
     if not root.exists() or not root.is_dir():
         raise ValueError(f"repo path does not exist or is not a directory: {root}")
     project_id = ensure_project(conn, project, str(root))
+    manifest_digest, path_stats, rejected = _repo_stat_manifest(root)
+    prior_manifest = conn.execute("SELECT digest, file_count FROM repo_manifests WHERE project_id = ?", (project_id,)).fetchone()
+    if not force and prior_manifest and prior_manifest["digest"] == manifest_digest and int(prior_manifest["file_count"]) == len(path_stats):
+        return {
+            "status": "ok", "project": project, "root": str(root), "indexed_files": len(path_stats),
+            "updated_files": 0, "unchanged_files": len(path_stats), "removed_files": 0,
+            "skipped_files": len(rejected), "symbols": 0, "edges": 0, "chunks": 0, "manifest_unchanged": True,
+        }
+    existing = {str(row["path"]): dict(row) for row in conn.execute(
+        "SELECT id, path, title, hash, metadata_json, updated_at FROM sources WHERE project_id = ? AND kind = 'file'",
+        (project_id,),
+    )}
+    seen_paths = set()
     indexed_files = 0
+    updated_files = 0
+    unchanged_files = 0
+    removed_files = 0
+    skipped_files = len(rejected)
     symbols = 0
     edges = 0
     chunks = 0
-    for path in walk_repo(root):
+    for path, stat in path_stats:
+        path_key = str(path)
+        seen_paths.add(path_key)
+        row = existing.get(path_key)
+        prior_metadata = {}
+        if row:
+            try:
+                prior_metadata = json.loads(row["metadata_json"] or "{}")
+            except json.JSONDecodeError:
+                prior_metadata = {}
+            if prior_metadata.get("mtime_ns") == stat.st_mtime_ns and prior_metadata.get("size") == stat.st_size:
+                indexed_files += 1
+                unchanged_files += 1
+                continue
+            if "mtime_ns" not in prior_metadata:
+                try:
+                    indexed_at = datetime.fromisoformat(row["updated_at"]).timestamp()
+                except (TypeError, ValueError):
+                    indexed_at = 0
+                if stat.st_mtime <= indexed_at:
+                    indexed_files += 1
+                    unchanged_files += 1
+                    continue
+            text = read_text(path)
+            if text is not None and sha256_text(text) == row["hash"]:
+                if "mtime_ns" in prior_metadata:
+                    metadata = {**prior_metadata, "mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
+                    conn.execute("UPDATE sources SET metadata_json = ?, updated_at = ? WHERE id = ?", (json.dumps(metadata), now_iso(), int(row["id"])))
+                indexed_files += 1
+                unchanged_files += 1
+                continue
         record = build_file_record(root, path)
         if record is None:
+            skipped_files += 1
             continue
+        if row:
+            conn.execute("DELETE FROM edges WHERE project_id = ? AND source_id = ?", (project_id, int(row["id"])))
         source_id = upsert_source(
             conn,
             project_id,
@@ -390,7 +498,7 @@ def ingest_repo(conn: sqlite3.Connection, root: Path, project: str = "default") 
             str(record.path),
             record.relative_path,
             record.sha256,
-            {"relative_path": record.relative_path},
+            {"relative_path": record.relative_path, "mtime_ns": stat.st_mtime_ns, "size": stat.st_size},
         )
         file_entity = ensure_entity(conn, project_id, "file", record.relative_path)
         for ordinal, chunk in enumerate(record.chunks):
@@ -414,70 +522,140 @@ def ingest_repo(conn: sqlite3.Connection, root: Path, project: str = "default") 
             if add_edge(conn, project_id, file_entity, "imports", import_entity, source_id=source_id):
                 edges += 1
         indexed_files += 1
+        updated_files += 1
+    for path_key, row in existing.items():
+        if path_key in seen_paths:
+            continue
+        source_id = int(row["id"])
+        conn.execute("DELETE FROM chunk_fts WHERE source_id = ?", (source_id,))
+        conn.execute("DELETE FROM edges WHERE project_id = ? AND source_id = ?", (project_id, source_id))
+        conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+        removed_files += 1
+    if updated_files or removed_files:
+        conn.execute(
+            "DELETE FROM entities WHERE project_id = ? AND type IN ('file', 'symbol', 'import') "
+            "AND NOT EXISTS (SELECT 1 FROM edges WHERE from_entity_id = entities.id OR to_entity_id = entities.id)",
+            (project_id,),
+        )
+    conn.execute("DELETE FROM entities WHERE project_id = ? AND canonical_key = ''", (project_id,))
+    conn.execute(
+        "INSERT INTO repo_manifests(project_id, digest, file_count, updated_at) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(project_id) DO UPDATE SET digest = excluded.digest, file_count = excluded.file_count, updated_at = excluded.updated_at",
+        (project_id, manifest_digest, len(path_stats), now_iso()),
+    )
     conn.commit()
-    return {"status": "ok", "project": project, "root": str(root), "indexed_files": indexed_files, "symbols": symbols, "edges": edges, "chunks": chunks}
+    return {
+        "status": "ok", "project": project, "root": str(root), "indexed_files": indexed_files,
+        "updated_files": updated_files, "unchanged_files": unchanged_files, "removed_files": removed_files,
+        "skipped_files": skipped_files, "symbols": symbols, "edges": edges, "chunks": chunks, "manifest_unchanged": False,
+    }
 
 
 def query_to_fts(query: str) -> str:
     tokens = re.findall(r"[A-Za-z0-9_]+", query)
     if not tokens:
         return '""'
-    return " OR ".join(tokens[:12])
+    meaningful = []
+    seen = set()
+    for token in tokens:
+        lowered = token.lower()
+        if lowered in QUERY_STOP_WORDS or lowered in seen:
+            continue
+        seen.add(lowered)
+        meaningful.append(token)
+    selected = meaningful or tokens[:4]
+    return " OR ".join(selected[:8])
 
 
 def search(conn: sqlite3.Connection, query: str, project: str | None = None, limit: int = 8) -> dict:
     init_schema(conn)
-    project_filter = ""
-    params: list = [query_to_fts(query)]
+    query = str(query)[:10_000]
+    limit = max(1, min(MAX_SEARCH_LIMIT, int(limit)))
+    fts_query = query_to_fts(query)
+    project_id = None
     if project:
         row = conn.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()
         if not row:
             return {"status": "ok", "query": query, "memories": [], "chunks": []}
-        project_filter = " AND m.project_id = ?"
-        params.append(int(row["id"]))
-    params.append(limit)
-    memories = [
-        dict(row)
-        for row in conn.execute(
-            f"""
-            SELECT m.id, p.name AS project, m.type, m.pramana, m.text, m.confidence, m.priority, m.status,
-                   bm25(memory_fts) AS rank
-            FROM memory_fts
-            JOIN memories m ON m.id = memory_fts.memory_id
-            JOIN projects p ON p.id = m.project_id
-            WHERE memory_fts MATCH ? {project_filter}
-              AND m.status IN ('active', 'pinned')
-            ORDER BY rank ASC, m.priority DESC
-            LIMIT ?
-            """,
-            params,
-        )
-    ]
-    chunk_params: list = [query_to_fts(query)]
-    chunk_filter = ""
-    if project:
-        chunk_filter = " AND cft.project_id = ?"
-        chunk_params.append(params[1])
-    chunk_params.append(limit)
-    chunks = [
-        dict(row)
-        for row in conn.execute(
-            f"""
-            SELECT c.id, p.name AS project, cft.path, substr(c.text, 1, 500) AS text,
-                   s.hash AS source_hash, bm25(chunk_fts) AS rank
-            FROM chunk_fts cft
-            JOIN chunks c ON c.id = cft.chunk_id
-            JOIN sources s ON s.id = c.source_id
-            JOIN projects p ON p.id = cft.project_id
-            WHERE chunk_fts MATCH ? {chunk_filter}
-            ORDER BY rank ASC
-            LIMIT ?
-            """,
-            chunk_params,
-        )
-    ]
+        project_id = int(row["id"])
+    project_count = int(conn.execute("SELECT COUNT(*) AS count FROM projects").fetchone()["count"])
+    candidate_limit = limit if project_count <= 1 else min(5000, max(512, limit * 64))
+
+    memory_candidates = conn.execute(
+        """
+        SELECT memory_id, project_id, bm25(memory_fts) AS rank
+        FROM memory_fts
+        WHERE memory_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+        """,
+        (fts_query, max(64, candidate_limit)),
+    ).fetchall()
+    selected_memories = [
+        row for row in memory_candidates
+        if project_id is None or int(row["project_id"]) == project_id
+    ][:limit]
+    memories = []
+    if selected_memories:
+        memory_ids = [int(row["memory_id"]) for row in selected_memories]
+        placeholders = ",".join("?" for _ in memory_ids)
+        rows_by_id = {
+            int(row["id"]): dict(row)
+            for row in conn.execute(
+                f"""
+                SELECT m.id, p.name AS project, m.type, m.pramana, m.text, m.confidence,
+                       m.priority, m.status, m.metadata_json
+                FROM memories m
+                JOIN projects p ON p.id = m.project_id
+                WHERE m.id IN ({placeholders}) AND m.status IN ('active', 'pinned')
+                """,
+                memory_ids,
+            )
+        }
+        for candidate in selected_memories:
+            item = rows_by_id.get(int(candidate["memory_id"]))
+            if item:
+                item["rank"] = candidate["rank"]
+                memories.append(item)
+
+    chunk_candidates = conn.execute(
+        """
+        SELECT chunk_id, project_id, path, bm25(chunk_fts) AS rank
+        FROM chunk_fts
+        WHERE chunk_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+        """,
+        (fts_query, candidate_limit),
+    ).fetchall()
+    selected_chunks = [
+        row for row in chunk_candidates
+        if project_id is None or int(row["project_id"]) == project_id
+    ][:limit]
+    chunks = []
+    if selected_chunks:
+        chunk_ids = [int(row["chunk_id"]) for row in selected_chunks]
+        placeholders = ",".join("?" for _ in chunk_ids)
+        rows_by_id = {
+            int(row["id"]): dict(row)
+            for row in conn.execute(
+                f"""
+                SELECT c.id, p.name AS project, substr(c.text, 1, 500) AS text, s.hash AS source_hash
+                FROM chunks c
+                JOIN sources s ON s.id = c.source_id
+                JOIN projects p ON p.id = s.project_id
+                WHERE c.id IN ({placeholders})
+                """,
+                chunk_ids,
+            )
+        }
+        for candidate in selected_chunks:
+            item = rows_by_id.get(int(candidate["chunk_id"]))
+            if item:
+                item["path"] = candidate["path"]
+                item["rank"] = candidate["rank"]
+                chunks.append(item)
     selected = {"memories": [item["id"] for item in memories], "chunks": [item["id"] for item in chunks]}
-    project_id = params[1] if project and len(params) > 2 else None
     conn.execute(
         "INSERT INTO recall_logs(project_id, query, selected_json, created_at) VALUES (?, ?, ?, ?)",
         (project_id, query, json.dumps(selected), now_iso()),
@@ -560,47 +738,211 @@ def reflect(conn: sqlite3.Connection, project: str = "default") -> dict:
 
 
 def graph(conn: sqlite3.Connection, project: str = "default", limit: int = 100) -> dict:
-    init_schema(conn)
-    project_id = ensure_project(conn, project)
-    nodes = [dict(row) for row in conn.execute("SELECT id, type, name, canonical_key FROM entities WHERE project_id = ? ORDER BY type, name LIMIT ?", (project_id, limit))]
-    edges = [
-        dict(row)
+    limit = max(1, min(MAX_GRAPH_LIMIT, int(limit)))
+    schema_ready = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'projects'"
+    ).fetchone()
+    if not schema_ready:
+        return {"status": "ok", "project": project, "nodes": [], "edges": [], "counts": {"nodes": 0, "edges": 0}}
+    project_row = conn.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()
+    if not project_row:
+        return {"status": "ok", "project": project, "nodes": [], "edges": [], "counts": {"nodes": 0, "edges": 0}}
+    project_id = int(project_row["id"])
+    source_budget = max(1, (limit + 2) // 3)
+    source_ids = [
+        int(row["source_id"])
         for row in conn.execute(
             """
-            SELECT e.id, f.name AS from_name, e.relation, t.name AS to_name, e.confidence
-            FROM edges e
-            JOIN entities f ON f.id = e.from_entity_id
-            JOIN entities t ON t.id = e.to_entity_id
-            WHERE e.project_id = ?
-            ORDER BY e.id
+            SELECT source_id
+            FROM edges
+            WHERE project_id = ? AND source_id IS NOT NULL
+            GROUP BY source_id
+            ORDER BY source_id
             LIMIT ?
             """,
-            (project_id, limit),
+            (project_id, source_budget),
         )
     ]
+    edges = []
+    edge_sql = """
+        SELECT e.id, e.from_entity_id AS from_id, f.name AS from_name, e.relation,
+               e.to_entity_id AS to_id, t.name AS to_name, e.confidence
+        FROM edges e
+        JOIN entities f ON f.id = e.from_entity_id
+        JOIN entities t ON t.id = e.to_entity_id
+        WHERE e.project_id = ? AND e.source_id = ?
+        ORDER BY e.id
+        LIMIT 3
+    """
+    for source_id in source_ids:
+        edges.extend(dict(row) for row in conn.execute(edge_sql, (project_id, source_id)))
+        if len(edges) >= limit:
+            break
+    if len(edges) < limit:
+        edges.extend(
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT e.id, e.from_entity_id AS from_id, f.name AS from_name, e.relation,
+                       e.to_entity_id AS to_id, t.name AS to_name, e.confidence
+                FROM edges e
+                JOIN entities f ON f.id = e.from_entity_id
+                JOIN entities t ON t.id = e.to_entity_id
+                WHERE e.project_id = ? AND e.source_id IS NULL
+                ORDER BY e.memory_id, e.id
+                LIMIT ?
+                """,
+                (project_id, limit - len(edges)),
+            )
+        )
+    edges = edges[:limit]
+    entity_ids = sorted({int(edge[key]) for edge in edges for key in ("from_id", "to_id")})
+    nodes = []
+    if entity_ids:
+        placeholders = ",".join("?" for _ in entity_ids)
+        nodes = [dict(row) for row in conn.execute(
+            f"SELECT id, type, name, canonical_key FROM entities WHERE project_id = ? AND id IN ({placeholders}) ORDER BY type, name",
+            (project_id, *entity_ids),
+        )]
+    if len(nodes) < limit:
+        excluded = {int(node["id"]) for node in nodes}
+        extras = conn.execute("SELECT id, type, name, canonical_key FROM entities WHERE project_id = ? ORDER BY type, name LIMIT ?", (project_id, limit)).fetchall()
+        nodes.extend(dict(row) for row in extras if int(row["id"]) not in excluded and len(nodes) < limit)
     return {"status": "ok", "project": project, "nodes": nodes, "edges": edges, "counts": {"nodes": len(nodes), "edges": len(edges)}}
 
 
-def stale_check(conn: sqlite3.Connection, project: str = "default") -> dict:
+def indexed_freshness(conn: sqlite3.Connection, project: str = "default") -> dict:
+    """Return the freshness guaranteed by the latest completed repo ingestion.
+
+    This deliberately avoids touching the live filesystem. Explicit stale-check
+    commands remain the source of truth when current working-tree freshness matters.
+    """
+    init_schema(conn)
+    project_row = conn.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()
+    if not project_row:
+        return {
+            "status": "ok", "project": project, "mode": "index-snapshot", "state": "unknown",
+            "fresh": 0, "changed": 0, "missing": 0, "added": 0, "details": [], "checked_at": None,
+        }
+    project_id = int(project_row["id"])
+    source_count = int(conn.execute(
+        "SELECT COUNT(*) AS count FROM sources WHERE project_id = ? AND kind = 'file'",
+        (project_id,),
+    ).fetchone()["count"])
+    manifest = conn.execute(
+        "SELECT file_count, updated_at FROM repo_manifests WHERE project_id = ?",
+        (project_id,),
+    ).fetchone()
+    if not manifest:
+        return {
+            "status": "ok", "project": project, "mode": "index-snapshot", "state": "unknown",
+            "fresh": source_count, "changed": 0, "missing": 0, "added": 0, "details": [], "checked_at": None,
+        }
+    expected_count = int(manifest["file_count"])
+    mismatch = expected_count != source_count
+    return {
+        "status": "ok",
+        "project": project,
+        "mode": "index-snapshot",
+        "state": "stale" if mismatch else ("fresh" if source_count else "unknown"),
+        "fresh": min(source_count, expected_count),
+        "changed": 0,
+        "missing": max(0, expected_count - source_count),
+        "added": max(0, source_count - expected_count),
+        "details": [],
+        "checked_at": manifest["updated_at"],
+    }
+
+
+def stale_check(conn: sqlite3.Connection, project: str = "default", deep: bool = False) -> dict:
     init_schema(conn)
     row = conn.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()
     if not row:
-        return {"status": "ok", "project": project, "fresh": 0, "changed": 0, "missing": 0, "details": []}
+        return {"status": "ok", "project": project, "mode": "sha256" if deep else "stat-manifest", "state": "unknown", "fresh": 0, "changed": 0, "missing": 0, "added": 0, "details": []}
     details = []
-    counts = {"fresh": 0, "changed": 0, "missing": 0}
-    for source in conn.execute("SELECT id, path, title, hash FROM sources WHERE project_id = ? AND kind = 'file'", (int(row["id"]),)):
+    counts = {"fresh": 0, "changed": 0, "missing": 0, "added": 0, "uninspectable": 0}
+    indexed_titles = set()
+    project_row = conn.execute("SELECT root_path FROM projects WHERE id = ?", (int(row["id"]),)).fetchone()
+    root_path = Path(project_row["root_path"]).resolve() if project_row and project_row["root_path"] else None
+    current_by_path = {}
+    rejected: list[dict[str, str]] = []
+    manifest_digest = None
+    if root_path and root_path.exists():
+        manifest_digest, path_stats, rejected = _repo_stat_manifest(root_path)
+        current_by_path = {str(path): stat for path, stat in path_stats}
+        if not deep:
+            manifest = conn.execute("SELECT digest, file_count FROM repo_manifests WHERE project_id = ?", (int(row["id"]),)).fetchone()
+            if manifest and manifest["digest"] == manifest_digest and int(manifest["file_count"]) == len(path_stats):
+                rejected_details = []
+                for item in rejected:
+                    path = Path(item["path"])
+                    try:
+                        title = path.relative_to(root_path).as_posix()
+                    except ValueError:
+                        title = path.name
+                    rejected_details.append({
+                        "source_id": None,
+                        "path": item["path"],
+                        "title": title,
+                        "status": "uninspectable",
+                        "reason": item["reason"],
+                    })
+                return {
+                    "status": "ok", "project": project, "mode": "stat-manifest",
+                    "state": "stale" if rejected else "fresh",
+                    "fresh": len(path_stats), "changed": 0, "missing": 0, "added": 0,
+                    "uninspectable": len(rejected), "details": rejected_details,
+                }
+    for source in conn.execute("SELECT id, path, title, hash, metadata_json, updated_at FROM sources WHERE project_id = ? AND kind = 'file'", (int(row["id"]),)):
         path = Path(source["path"])
-        if not path.exists():
+        indexed_titles.add(str(source["title"]).replace("\\", "/"))
+        stat = current_by_path.get(str(path))
+        if stat is None:
             status = "missing"
-        else:
+        elif deep:
             try:
                 current_hash = sha256_text(path.read_text(encoding="utf-8", errors="ignore"))
             except OSError:
                 current_hash = ""
             status = "fresh" if current_hash == source["hash"] else "changed"
+        else:
+            try:
+                metadata = json.loads(source["metadata_json"] or "{}")
+            except json.JSONDecodeError:
+                metadata = {}
+            if metadata.get("mtime_ns") == stat.st_mtime_ns and metadata.get("size") == stat.st_size:
+                status = "fresh"
+            else:
+                try:
+                    indexed_at = datetime.fromisoformat(source["updated_at"]).timestamp()
+                except (TypeError, ValueError):
+                    indexed_at = 0
+                status = "fresh" if stat.st_mtime <= indexed_at else "changed"
         counts[status] += 1
         details.append({"source_id": source["id"], "path": source["path"], "title": source["title"], "status": status})
-    return {"status": "ok", "project": project, **counts, "details": details}
+    if root_path and root_path.exists():
+        current_titles = {path.relative_to(root_path).as_posix() for path in map(Path, current_by_path)}
+        for title in sorted(current_titles - indexed_titles):
+            counts["added"] += 1
+            details.append({"source_id": None, "path": str(root_path / title), "title": title, "status": "added"})
+        for item in rejected:
+            path = Path(item["path"])
+            try:
+                title = path.relative_to(root_path).as_posix()
+            except ValueError:
+                title = path.name
+            counts["uninspectable"] += 1
+            details.append({
+                "source_id": None,
+                "path": item["path"],
+                "title": title,
+                "status": "uninspectable",
+                "reason": item["reason"],
+            })
+    total = counts["fresh"] + counts["changed"] + counts["missing"]
+    anomalies = counts["changed"] + counts["missing"] + counts["added"] + counts["uninspectable"]
+    state = "stale" if anomalies else ("unknown" if total == 0 else "fresh")
+    return {"status": "ok", "project": project, "mode": "sha256" if deep else "stat-manifest", "state": state, **counts, "details": details}
 
 
 def doctor(conn: sqlite3.Connection) -> dict:

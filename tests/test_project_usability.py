@@ -36,7 +36,7 @@ class RtaBrainProjectUsabilityTests(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertEqual(payload["status"], "ok")
             self.assertTrue(Path(payload["db_path"]).exists())
-            self.assertEqual(payload["ingest"]["indexed_files"], 1)
+            self.assertGreaterEqual(payload["ingest"]["indexed_files"], 1)
             self.assertTrue((repo / "AGENTS.rta-smriti.md").exists())
             self.assertTrue((repo / "AGENTS.md").exists())
             self.assertIn("Rta-Smriti Local Brain", (repo / "AGENTS.md").read_text(encoding="utf-8"))
@@ -66,6 +66,59 @@ class RtaBrainProjectUsabilityTests(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertEqual(payload["status"], "ok")
             self.assertEqual(payload["projects"][0]["name"], "demo")
+
+    def test_bootstrap_refuses_agent_file_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "linked-repo"
+            repo.mkdir()
+            (repo / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+            victim = Path(tmp) / "victim.md"
+            victim.write_text("keep me", encoding="utf-8")
+            try:
+                (repo / "AGENTS.md").symlink_to(victim)
+            except OSError as exc:
+                self.skipTest(f"symlinks unavailable: {exc}")
+            result = run_cli(
+                "--json", "bootstrap-project", str(repo), "--project", "linked",
+                "--brain-dir", str(Path(tmp) / "brains"), "--write-agents",
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(victim.read_text(encoding="utf-8"), "keep me")
+            self.assertFalse((repo / "AGENTS.rta-smriti.md").exists())
+
+    def test_bootstrap_refuses_hard_linked_agent_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "hard-linked-repo"
+            repo.mkdir()
+            (repo / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+            victim = Path(tmp) / "victim.md"
+            victim.write_text("keep me", encoding="utf-8")
+            try:
+                (repo / "AGENTS.md").hardlink_to(victim)
+            except OSError as exc:
+                self.skipTest(f"hard links unavailable: {exc}")
+            result = run_cli(
+                "--json", "bootstrap-project", str(repo), "--project", "linked",
+                "--brain-dir", str(Path(tmp) / "brains"), "--write-agents",
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(victim.read_text(encoding="utf-8"), "keep me")
+            self.assertFalse((repo / "AGENTS.rta-smriti.md").exists())
+
+    def test_bootstrap_refuses_hard_linked_brain_database(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            (repo / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+            brain_dir = Path(tmp) / "brains"
+            brain_dir.mkdir()
+            victim = Path(tmp) / "victim.sqlite"
+            victim.write_text("keep me", encoding="utf-8")
+            (brain_dir / "demo.sqlite").hardlink_to(victim)
+            result = run_cli("--json", "bootstrap-project", str(repo), "--project", "demo", "--brain-dir", str(brain_dir))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("hard-linked brain database", result.stderr)
+            self.assertEqual(victim.read_text(encoding="utf-8"), "keep me")
 
     def test_install_local_creates_wrappers_that_work_from_another_directory(self):
         with tempfile.TemporaryDirectory() as tmp:

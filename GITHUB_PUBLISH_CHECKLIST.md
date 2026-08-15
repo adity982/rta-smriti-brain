@@ -14,10 +14,14 @@ Run from the repository root:
 ```powershell
 npm install
 npm run build
+python scripts/privacy_scan.py
 python -m unittest discover -s tests -v
 python -m compileall -q rta_brain tests
 pip install -e . --dry-run --no-deps
 python rta-brain.py publish-readiness --json
+gitleaks git --redact --no-banner --verbose .
+gitleaks dir --redact --no-banner launch-assets
+gitleaks dir --redact --no-banner launch-site/public
 ```
 
 Smoke-test a temporary local brain:

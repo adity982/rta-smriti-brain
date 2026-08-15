@@ -111,6 +111,37 @@ class RtaBrainMcpTests(unittest.TestCase):
             self.assertEqual(payload["error"]["code"], -32601)
             self.assertIn("unknown tool", payload["error"]["message"])
 
+    def test_non_object_json_returns_error_without_stopping_server(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "brain.sqlite"
+            result = run_mcp([[], {"jsonrpc": "2.0", "id": 2, "method": "ping"}], db)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payloads = responses(result.stdout)
+            self.assertEqual(payloads[0]["error"]["code"], -32600)
+            self.assertEqual(payloads[1]["id"], 2)
+
+    def test_oversized_frame_is_rejected_and_next_frame_is_processed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "brain.sqlite"
+            oversized = {"jsonrpc": "2.0", "id": 1, "method": "ping", "padding": "x" * 1_100_000}
+            result = run_mcp([oversized, {"jsonrpc": "2.0", "id": 2, "method": "ping"}], db)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payloads = responses(result.stdout)
+            self.assertEqual(payloads[0]["error"]["code"], -32600)
+            self.assertIn("frame exceeds", payloads[0]["error"]["message"])
+            self.assertEqual(payloads[1]["id"], 2)
+
+    def test_multibyte_frame_limit_is_enforced_in_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "brain.sqlite"
+            oversized = {"jsonrpc": "2.0", "id": 1, "method": "ping", "padding": "\u0915" * 400_000}
+            result = run_mcp([oversized, {"jsonrpc": "2.0", "id": 2, "method": "ping"}], db)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payloads = responses(result.stdout)
+            self.assertEqual(payloads[0]["error"]["code"], -32600)
+            self.assertIn("bytes", payloads[0]["error"]["message"])
+            self.assertEqual(payloads[1]["id"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,6 +27,12 @@ classifiers = [
 ]
 dependencies = []
 
+[project.urls]
+Homepage = "https://sulabhdubey.github.io/rta-smriti-brain/"
+Repository = "https://github.com/sulabhdubey/rta-smriti-brain"
+Issues = "https://github.com/sulabhdubey/rta-smriti-brain/issues"
+Documentation = "https://github.com/sulabhdubey/rta-smriti-brain/blob/main/docs/USAGE_GUIDE.md"
+
 [project.scripts]
 rta-brain = "rta_brain.cli:main"
 rta-brain-mcp = "rta_brain.mcp_server:main"

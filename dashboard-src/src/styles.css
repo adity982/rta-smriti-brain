@@ -26,9 +26,7 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background:
-    radial-gradient(circle at 48% 28%, rgba(20, 184, 166, 0.14), transparent 32%),
-    linear-gradient(180deg, #071019 0%, #0a111b 100%);
+  background: #071019;
 }
 
 button,
@@ -51,7 +49,7 @@ button {
 
 .topbar {
   display: grid;
-  grid-template-columns: 265px 1fr auto;
+  grid-template-columns: 232px 1fr auto;
   align-items: center;
   gap: 18px;
   padding: 0 20px;
@@ -166,8 +164,16 @@ button {
 
 .layout {
   display: grid;
-  grid-template-columns: 280px minmax(520px, 1fr) 350px;
+  grid-template-columns: 248px minmax(520px, 1fr) 350px;
   min-height: 0;
+}
+
+.layout.inspectorClosed {
+  grid-template-columns: 248px minmax(520px, 1fr);
+}
+
+.inspector.hidden {
+  display: none;
 }
 
 .projectRail,
@@ -179,13 +185,17 @@ button {
 }
 
 .projectRail {
-  display: grid;
-  grid-template-rows: 54px minmax(0, 1fr) 56px 42px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.22) transparent;
 }
 
 .railHeader {
   justify-content: space-between;
-  padding: 0 16px;
+  min-height: 45px;
+  padding: 0 14px;
   color: #d7e5f0;
   font-size: 13px;
   font-weight: 850;
@@ -201,65 +211,192 @@ button {
   cursor: pointer;
 }
 
-.projectList {
-  display: grid;
-  align-content: start;
-  gap: 10px;
-  overflow: auto;
-  padding: 0 10px 12px;
+.projectSwitcher {
+  padding: 5px 8px 11px;
+  border-bottom: 1px solid var(--line);
 }
 
-.projectCard {
-  position: relative;
+.projectSwitcher .railHeader {
+  padding: 0 6px;
+}
+
+.activeProjectButton {
   display: grid;
-  grid-template-columns: 42px 1fr auto;
-  gap: 11px;
+  grid-template-columns: 34px minmax(0, 1fr) 8px 16px;
+  align-items: center;
+  gap: 8px;
   width: 100%;
-  min-height: 114px;
-  padding: 12px;
+  min-height: 58px;
+  padding: 8px 9px;
   text-align: left;
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: 8px;
+  background: rgba(56, 189, 248, 0.055);
   cursor: pointer;
-  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+  transition: border-color 150ms ease, background 150ms ease;
 }
 
-.projectCard:hover,
-.projectCard.active {
-  border-color: rgba(45, 212, 191, 0.72);
-  background: rgba(20, 184, 166, 0.13);
-  transform: translateY(-1px);
+.activeProjectButton:hover,
+.activeProjectButton.open {
+  border-color: rgba(56, 189, 248, 0.42);
+  background: rgba(56, 189, 248, 0.1);
 }
 
-.projectIcon {
+.activeProjectIcon {
   display: grid;
   place-items: center;
-  width: 42px;
-  height: 42px;
-  border-radius: 10px;
-  color: #5eead4;
-  background: rgba(20, 184, 166, 0.12);
+  width: 34px;
+  height: 34px;
+  color: #7dd3fc;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: 7px;
+  background: rgba(56, 189, 248, 0.09);
 }
 
-.projectInfo {
+.activeProjectCopy {
   min-width: 0;
 }
 
-.projectInfo strong {
+.activeProjectCopy small,
+.activeProjectCopy strong {
   display: block;
-  font-size: 15px;
-  margin-bottom: 5px;
-}
-
-.projectInfo span {
-  display: block;
-  max-width: 155px;
-  color: #9fb0c3;
-  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.activeProjectCopy small {
+  margin-bottom: 3px;
+  color: #71869c;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.activeProjectCopy strong {
+  color: #e6f2ff;
+  font-size: 13px;
+}
+
+.projectStateDot,
+.compactProject i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.projectStateDot.ok,
+.compactProject i.ok {
+  background: #34d399;
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.5);
+}
+
+.projectStateDot.warn,
+.compactProject i.warn {
+  background: #fbbf24;
+}
+
+.projectChevron {
+  color: #6f8499;
+  transition: transform 150ms ease;
+}
+
+.activeProjectButton.open .projectChevron {
+  transform: rotate(90deg);
+}
+
+.compactProjectList {
+  display: grid;
+  gap: 4px;
+  max-height: 264px;
+  margin-top: 7px;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(2, 8, 15, 0.6);
+  animation: projectListIn 130ms ease-out;
+}
+
+.compactProject,
+.addProjectButton {
+  display: grid;
+  grid-template-columns: 19px minmax(0, 1fr) 8px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 46px;
+  padding: 6px 8px;
+  color: #9fb2c7;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.compactProject:hover,
+.compactProject.active {
+  color: #eef8ff;
+  border-color: rgba(56, 189, 248, 0.2);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.compactProject > span {
+  min-width: 0;
+}
+
+.compactProject strong,
+.compactProject small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compactProject strong {
+  font-size: 12px;
+}
+
+.compactProject small {
+  margin-top: 2px;
+  color: #71869c;
+  font-size: 9px;
+}
+
+.addProjectButton {
+  grid-template-columns: 19px 1fr;
+  min-height: 36px;
+  color: #7dd3fc;
+  border-top-color: var(--line);
+  border-radius: 0;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.railEmpty {
+  margin: 8px 0;
+  padding: 18px 12px;
+  color: var(--muted);
+  text-align: center;
+  border: 1px dashed var(--line);
+  border-radius: 7px;
+  background: transparent;
+}
+
+.railEmpty.actionable {
+  cursor: pointer;
+}
+
+.railEmpty.actionable:hover,
+.railEmpty.actionable:focus-visible {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.62;
 }
 
 .readyBadge {
@@ -306,22 +443,82 @@ button {
   font-size: 11px;
 }
 
-.wideGhost {
-  margin: 8px 16px;
-  padding: 0 13px;
-  justify-content: space-between;
+.sideNavigation {
+  flex: 1 0 auto;
+  padding: 10px 8px 14px;
+}
+
+.navGroup {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 13px;
+}
+
+.navGroupLabel {
+  padding: 7px 9px 5px;
+  color: #667b91;
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.navGroup button {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 9px;
+  color: #8fa2b7;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
   cursor: pointer;
+  transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+
+.navGroup button:hover {
+  color: #d9e8f7;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.navGroup button.active {
+  color: #7dd3fc;
+  border-color: rgba(56, 189, 248, 0.16);
+  background: rgba(56, 189, 248, 0.09);
+  box-shadow: inset 2px 0 #38bdf8;
+}
+
+.navGroup button em {
+  min-width: 26px;
+  padding: 2px 5px;
+  color: #8ea3b8;
+  font-size: 9px;
+  font-style: normal;
+  text-align: center;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.025);
 }
 
 .railFooter {
+  flex: 0 0 42px;
   justify-content: space-around;
   border-top: 1px solid var(--line);
+  background: rgba(5, 11, 18, 0.72);
 }
 
 .railFooter span {
   gap: 6px;
   color: var(--muted);
   font-size: 12px;
+}
+
+@keyframes projectListIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .brainStage {
@@ -512,9 +709,16 @@ button {
   position: relative;
   min-height: 0;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 52% 42%, rgba(20, 184, 166, 0.11), transparent 32%),
-    #0a111b;
+  background: #0a111b;
+}
+
+.graphCanvas.panning,
+.graphCanvas.panning .gridRect {
+  cursor: grabbing;
+}
+
+.gridRect {
+  cursor: grab;
 }
 
 .graphSvg {
@@ -540,9 +744,15 @@ button {
   pointer-events: none;
 }
 
+.graphEdge {
+  opacity: 0.12;
+  transition: opacity 180ms ease;
+}
+
 .graphEdge line {
-  stroke: rgba(125, 211, 252, 0.38);
-  stroke-width: 1.3;
+  stroke: rgba(125, 211, 252, 0.42);
+  stroke-width: 0.9;
+  stroke-dasharray: 2 6;
 }
 
 .graphEdge text {
@@ -556,7 +766,138 @@ button {
 .graphEdge.active line {
   stroke: #5eead4;
   stroke-width: 2;
+  stroke-dasharray: none;
   filter: drop-shadow(0 0 8px rgba(94, 234, 212, 0.7));
+}
+
+.graphEdge.active {
+  opacity: 1;
+}
+
+.structureEdge line {
+  stroke: rgba(148, 163, 184, 0.24);
+  stroke-width: 1;
+  transition: stroke 180ms ease, opacity 180ms ease;
+}
+
+.structureEdge.leaf line {
+  opacity: 0.48;
+}
+
+.relayNode,
+.semanticWebEdge circle {
+  fill: #0b1521;
+  stroke: rgba(191, 219, 254, 0.68);
+  stroke-width: 1.2;
+}
+
+.semanticWebEdge line {
+  stroke: rgba(125, 211, 252, 0.15);
+  stroke-width: 0.85;
+}
+
+.semanticWebEdge circle {
+  opacity: 0.74;
+}
+
+.structureEdge.active line {
+  stroke: rgba(94, 234, 212, 0.46);
+}
+
+.structureEdge.collapsed {
+  opacity: 0.36;
+}
+
+.projectCore,
+.semanticHub {
+  outline: none;
+}
+
+.projectOrbit {
+  fill: none;
+  stroke: rgba(94, 234, 212, 0.21);
+  stroke-width: 1;
+}
+
+.projectOrbit.outer {
+  stroke: rgba(56, 189, 248, 0.1);
+  stroke-dasharray: 2 7;
+}
+
+.coreAura {
+  fill: rgba(94, 234, 212, 0.08);
+  stroke: rgba(94, 234, 212, 0.18);
+  animation: pulse 3.8s ease-in-out infinite;
+}
+
+.coreBody {
+  fill: #101c29;
+  stroke: rgba(94, 234, 212, 0.62);
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 16px rgba(45, 212, 191, 0.18));
+}
+
+.projectCoreIcon,
+.hubIcon {
+  display: grid;
+  place-items: center;
+  color: #72f3df;
+}
+
+.coreLabel,
+.hubLabel {
+  fill: #edf8ff;
+  font-weight: 850;
+  text-anchor: middle;
+}
+
+.coreLabel {
+  font-size: 12px;
+}
+
+.coreMeta,
+.hubCount {
+  fill: #7f96aa;
+  font-size: 9px;
+  text-anchor: middle;
+}
+
+.semanticHub {
+  cursor: pointer;
+}
+
+.hubAura {
+  opacity: 0.08;
+  transition: opacity 180ms ease;
+}
+
+.hubBody {
+  fill: #0f1a27;
+  stroke-width: 1.4;
+  transition: stroke-width 180ms ease, filter 180ms ease;
+}
+
+.semanticHub:hover .hubAura,
+.semanticHub:focus .hubAura {
+  opacity: 0.18;
+}
+
+.semanticHub:hover .hubBody,
+.semanticHub:focus .hubBody {
+  stroke-width: 2.2;
+  filter: drop-shadow(0 0 11px rgba(94, 234, 212, 0.4));
+}
+
+.semanticHub.collapsed .hubBody {
+  stroke-dasharray: 3 3;
+}
+
+.semanticHub.collapsed .hubCount {
+  fill: #fbbf24;
+}
+
+.hubLabel {
+  font-size: 11px;
 }
 
 .graphNode {
@@ -565,19 +906,46 @@ button {
 }
 
 .nodeAura {
-  opacity: 0.08;
-  animation: pulse 3.4s ease-in-out infinite;
+  opacity: 0.1;
 }
 
-.graphNode rect {
+.nodeCore {
   fill: rgba(15, 23, 42, 0.82);
   stroke-width: 1.2;
 }
 
-.graphNode.active rect,
-.graphNode:focus rect {
+.graphNode.active .nodeCore,
+.graphNode:focus .nodeCore,
+.graphNode:hover .nodeCore {
   stroke-width: 2.4;
   filter: drop-shadow(0 0 14px rgba(34, 211, 238, 0.75));
+}
+
+.graphNode {
+  animation: nodeIn 260ms ease-out both;
+}
+
+.graphNode.related .nodeCore {
+  stroke-width: 2;
+  filter: drop-shadow(0 0 9px rgba(94, 234, 212, 0.38));
+}
+
+.graphNodeIcon {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+}
+
+.nodeTooltip {
+  pointer-events: none;
+  filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.38));
+}
+
+.nodeTooltip rect {
+  fill: #111c2a;
+  stroke: rgba(148, 163, 184, 0.38);
+  stroke-width: 1;
 }
 
 .nodeLabel {
@@ -654,6 +1022,62 @@ button {
   border-radius: 999px;
 }
 
+.legend .structureLegend {
+  height: 2px;
+  width: 14px;
+  border-radius: 0;
+  background: repeating-linear-gradient(90deg, #64748b 0 3px, transparent 3px 6px);
+}
+
+.legend .evidenceLegend {
+  height: 2px;
+  width: 14px;
+  border-radius: 0;
+  background: #38bdf8;
+}
+
+.graphMinimap {
+  position: absolute;
+  right: 18px;
+  bottom: 58px;
+  width: 148px;
+  height: 92px;
+  padding: 5px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 8px;
+  background: rgba(3, 8, 16, 0.82);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24);
+  pointer-events: none;
+}
+
+.graphMinimap svg {
+  width: 100%;
+  height: 100%;
+}
+
+.graphMinimap line {
+  stroke: rgba(148, 163, 184, 0.28);
+  stroke-width: 2;
+}
+
+.graphMinimap .miniCore {
+  fill: #5eead4;
+}
+
+.graphMinimap .miniHub {
+  fill: #38bdf8;
+}
+
+.graphMinimap .miniNode {
+  fill: #94a3b8;
+}
+
+.graphMinimap .miniViewport {
+  fill: rgba(56, 189, 248, 0.05);
+  stroke: #38bdf8;
+  stroke-width: 5;
+}
+
 .emptyGraph {
   position: absolute;
   inset: 0;
@@ -721,6 +1145,7 @@ label span {
 
 input,
 select,
+textarea,
 code {
   min-height: 32px;
   width: 100%;
@@ -743,7 +1168,8 @@ code {
 }
 
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: var(--line-strong);
   box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.12);
 }
@@ -762,7 +1188,8 @@ select:focus {
   width: 116px;
   height: 116px;
   border-radius: 999px;
-  background: conic-gradient(#2dd4bf 0 76%, rgba(148, 163, 184, 0.16) 76% 100%);
+  background: rgba(20, 184, 166, 0.08);
+  border: 2px solid rgba(94, 234, 212, 0.58);
   color: #071019;
   position: relative;
 }
@@ -899,6 +1326,19 @@ select:focus {
   color: #5eead4;
   font-size: 12px;
   font-style: normal;
+}
+
+.freshnessAction {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  color: #5eead4;
+  font-size: 11px;
+  border: 1px solid rgba(94, 234, 212, 0.24);
+  border-radius: 6px;
+  background: rgba(20, 184, 166, 0.08);
+  cursor: pointer;
 }
 
 .memoryList,
@@ -1146,6 +1586,7 @@ select:focus {
   border-color: rgba(94, 234, 212, 0.38);
 }
 
+.fileExplorer,
 .canvasBoard,
 .basesView {
   grid-row: 3;
@@ -1153,6 +1594,355 @@ select:focus {
   min-height: 0;
   overflow: hidden;
   background: #09111b;
+}
+
+.fileExplorer {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.fileExplorerToolbar {
+  display: grid;
+  grid-template-columns: auto minmax(220px, 420px) 36px;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(7, 14, 24, 0.92);
+}
+
+.fileExplorerTitle,
+.fileSearch,
+.fileBreadcrumbs,
+.filePreviewHeader > div,
+.filePreviewMeta {
+  display: flex;
+  align-items: center;
+}
+
+.fileExplorerTitle {
+  gap: 8px;
+  min-width: 0;
+}
+
+.fileExplorerTitle strong {
+  font-size: 13px;
+}
+
+.fileExplorerTitle > span {
+  color: #7f94aa;
+  font-size: 11px;
+}
+
+.fileExplorerTitle em {
+  padding: 3px 6px;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 800;
+  text-transform: uppercase;
+  border: 1px solid;
+  border-radius: 5px;
+}
+
+.fileExplorerTitle em.fresh {
+  color: #86efac;
+  border-color: rgba(34, 197, 94, 0.28);
+  background: rgba(34, 197, 94, 0.07);
+}
+
+.fileExplorerTitle em.attention {
+  color: #fde68a;
+  border-color: rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.07);
+}
+
+.fileSearch {
+  justify-self: end;
+  width: 100%;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(2, 8, 15, 0.6);
+}
+
+.fileSearch:focus-within {
+  border-color: rgba(56, 189, 248, 0.38);
+}
+
+.fileSearch input {
+  flex: 1;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+}
+
+.fileSearch button {
+  min-height: 25px;
+  padding: 0 6px;
+  color: #8fb4cf;
+  border: 0;
+  background: transparent;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.fileToolbarButton {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  cursor: pointer;
+}
+
+.fileExplorerBody {
+  display: grid;
+  grid-template-columns: minmax(250px, 32%) minmax(0, 1fr);
+  min-height: 0;
+}
+
+.fileTreePane,
+.filePreviewPane {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.fileTreePane {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  background: rgba(5, 12, 20, 0.52);
+}
+
+.fileBreadcrumbs {
+  flex: 0 0 38px;
+  gap: 3px;
+  padding: 0 9px;
+  overflow-x: auto;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  scrollbar-width: thin;
+}
+
+.fileBreadcrumbs button {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 27px;
+  padding: 0 5px;
+  color: #9ab0c5;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.fileBreadcrumbs button:hover {
+  color: #e4f2ff;
+  background: rgba(56, 189, 248, 0.07);
+}
+
+.fileBreadcrumbs > span {
+  color: #7dd3fc;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.fileTreeList {
+  flex: 1;
+  overflow: auto;
+  padding: 5px 6px 10px;
+}
+
+.fileTreeRow {
+  display: grid;
+  grid-template-columns: 21px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 40px;
+  padding: 5px 7px;
+  color: #9db0c3;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.fileTreeRow:hover,
+.fileTreeRow.active {
+  color: #e9f5ff;
+  border-color: rgba(56, 189, 248, 0.16);
+  background: rgba(56, 189, 248, 0.075);
+}
+
+.fileTreeRow.parent {
+  flex: 0 0 38px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  border-radius: 0;
+}
+
+.fileTreeRow > span {
+  min-width: 0;
+}
+
+.fileTreeRow strong,
+.fileTreeRow small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileTreeRow strong {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.fileTreeRow small {
+  margin-top: 2px;
+  color: #687f95;
+  font-size: 9px;
+}
+
+.fileTreeState,
+.filePreviewEmpty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 9px;
+  min-height: 150px;
+  color: #71879d;
+  text-align: center;
+  font-size: 11px;
+}
+
+.fileTreeNotice {
+  padding: 7px 10px;
+  color: #fbbf24;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+}
+
+.filePreviewPane {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  background: #08111b;
+}
+
+.filePreviewEmpty {
+  grid-row: 1 / -1;
+  min-height: 100%;
+}
+
+.filePreviewEmpty strong {
+  color: #b8cadb;
+}
+
+.filePreviewHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 54px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.filePreviewHeader > div {
+  gap: 8px;
+  min-width: 0;
+}
+
+.filePreviewHeader span {
+  min-width: 0;
+}
+
+.filePreviewHeader strong,
+.filePreviewHeader small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filePreviewHeader strong {
+  font-size: 12px;
+}
+
+.filePreviewHeader small {
+  margin-top: 2px;
+  color: #73889d;
+  font-size: 9px;
+}
+
+.filePreviewHeader button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 31px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.filePreviewMeta {
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  color: #73889d;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  font-size: 9px;
+}
+
+.filePreviewMeta span + span::before {
+  content: "/";
+  margin-right: 8px;
+  color: #3f5368;
+}
+
+.filePreviewCode {
+  min-height: 0;
+  margin: 0;
+  padding: 14px 16px 24px;
+  overflow: auto;
+  color: #c9d8e7;
+  background: #060d15;
+  font: 11px/1.58 "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.filePreviewError {
+  margin: 12px;
+  padding: 10px;
+  color: #fecdd3;
+  border: 1px solid rgba(251, 113, 133, 0.26);
+  border-radius: 7px;
+  background: rgba(251, 113, 133, 0.07);
+  font-size: 11px;
+}
+
+.spin {
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .canvasBoard {
@@ -1176,7 +1966,8 @@ select:focus {
 }
 
 .canvasHeader span,
-.canvasHeader button {
+.canvasHeader button,
+.canvasActions {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -1444,6 +2235,30 @@ select:focus {
   cursor: pointer;
 }
 
+.receiptPrivate {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.checkLabel {
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+}
+
+.checkLabel input {
+  width: 16px;
+  min-height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--teal);
+}
+
+.checkLabel span {
+  line-height: 1.45;
+}
+
 @keyframes pulse {
   0%,
   100% {
@@ -1451,6 +2266,15 @@ select:focus {
   }
   50% {
     opacity: 0.22;
+  }
+}
+
+@keyframes nodeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }
 
@@ -1479,6 +2303,10 @@ select:focus {
     grid-template-columns: 250px minmax(420px, 1fr);
   }
 
+  .layout.inspectorClosed {
+    grid-template-columns: 250px minmax(420px, 1fr);
+  }
+
   .inspector {
     display: block;
     grid-column: 1 / -1;
@@ -1503,6 +2331,7 @@ select:focus {
 
   .topbar,
   .layout,
+  .layout.inspectorClosed,
   .composerGrid,
   .packPreview {
     grid-template-columns: 1fr;
@@ -1514,7 +2343,30 @@ select:focus {
   }
 
   .projectRail {
-    max-height: 320px;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .sideNavigation {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .navGroup {
+    margin: 0;
+  }
+
+  .navGroup button {
+    grid-template-columns: 19px minmax(0, 1fr);
+  }
+
+  .navGroup button em {
+    display: none;
+  }
+
+  .railFooter {
+    min-height: 42px;
   }
 
   .brainStage {
@@ -1541,7 +2393,8 @@ select:focus {
   }
 
   .graphSettings,
-  .basesToolbar {
+  .basesToolbar,
+  .filePreviewHeader {
     align-items: stretch;
     flex-direction: column;
   }
@@ -1552,6 +2405,29 @@ select:focus {
 
   .basesToolbar .nodeSearch {
     width: 100%;
+  }
+
+  .fileExplorerToolbar {
+    grid-template-columns: minmax(0, 1fr) 36px;
+  }
+
+  .fileSearch {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .fileExplorerBody {
+    grid-template-columns: 1fr;
+    grid-template-rows: 260px 360px;
+  }
+
+  .fileTreePane {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .filePreviewHeader > div:last-child {
+    justify-content: flex-start;
   }
 
   .canvasCard {
@@ -1569,6 +2445,10 @@ select:focus {
     min-height: 440px;
   }
 
+  .graphMinimap {
+    display: none;
+  }
+
   label {
     grid-template-columns: 1fr;
   }
@@ -1584,5 +2464,102 @@ select:focus {
 
   .inspector {
     max-height: none;
+  }
+}
+
+@media (max-width: 560px) {
+  html,
+  body,
+  #root,
+  .app {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .topbar,
+  .layout,
+  .projectRail,
+  .brainStage,
+  .stageToolbar {
+    width: 100%;
+    min-width: 0;
+    max-width: 100vw;
+  }
+
+  .topStatus,
+  .statusBar span:nth-child(2) {
+    display: none;
+  }
+
+  .sideNavigation {
+    display: flex;
+    gap: 4px;
+    padding: 7px 8px 9px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .sideNavigation::-webkit-scrollbar,
+  .stageToolbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .navGroup {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 4px;
+  }
+
+  .navGroupLabel {
+    display: none;
+  }
+
+  .navGroup button {
+    grid-template-columns: 17px auto;
+    width: auto;
+    min-height: 34px;
+    padding: 0 9px;
+    white-space: nowrap;
+  }
+
+  .railFooter {
+    display: none;
+  }
+
+  .stageToolbar {
+    flex-wrap: nowrap;
+    gap: 5px;
+    padding: 7px 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .stageToolbar .viewSwitch {
+    display: none;
+  }
+
+  .viewSwitch,
+  .modeGroup,
+  .stageToolbar .toolButton {
+    flex: 0 0 auto;
+  }
+
+  .stageToolbar .toolText {
+    display: none;
+  }
+
+  .stageToolbar .toolButton {
+    width: 36px;
+    padding: 0;
+  }
+
+  .graphCanvas {
+    overflow: hidden;
+  }
+
+  .graphSvg {
+    width: 100%;
+    max-width: 100%;
+    min-height: 420px;
   }
 }

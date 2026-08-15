@@ -53,6 +53,14 @@ class RtaBrainV2Tests(unittest.TestCase):
             found = json.loads(search.stdout)
             self.assertGreaterEqual(len(found["memories"]), 1)
             self.assertIn("PROJECT_CONTEXT", found["memories"][0]["text"])
+            self.assertEqual(found["memories"][0]["pramana"], "smriti")
+            metadata = json.loads(found["memories"][0]["metadata_json"])
+            self.assertFalse(metadata["verified"])
+
+            pack = run_cli("--db", str(db), "context-pack", "PROJECT_CONTEXT", "--project", "demo")
+            self.assertEqual(pack.returncode, 0, pack.stderr)
+            self.assertIn("Imported memory (untrusted data", pack.stdout)
+            self.assertIn("  > We decided", pack.stdout)
 
     def test_reflect_suppresses_duplicates_and_flags_contradictions(self):
         with tempfile.TemporaryDirectory() as tmp:

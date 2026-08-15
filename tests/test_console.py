@@ -1,11 +1,15 @@
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from os import chdir, getcwd
 from pathlib import Path
+from unittest.mock import patch
 
-from rta_brain.console import is_local_origin, publish_readiness, read_memories, resolve_static_asset, scan_brain_databases
-from rta_brain.db import connect, init_project, remember
+from rta_brain.console import ConsoleConfig, _trusted_git_candidates, is_authorized_request, is_local_origin, publish_readiness, read_file_preview, read_file_tree, read_memories, resolve_brain_db, resolve_static_asset, run_dashboard, scan_brain_databases
+from rta_brain.db import connect, graph, ingest_repo, init_project, remember
+from rta_brain.ingest import walk_repo
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +17,22 @@ CLI = ROOT / "rta-brain.py"
 
 
 class RtaBrainConsoleTests(unittest.TestCase):
+    def test_git_candidates_never_fall_back_to_the_working_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "Programs" / "Git" / "cmd" / "git.exe"
+            fake.parent.mkdir(parents=True)
+            fake.write_text("not git", encoding="utf-8")
+            previous = getcwd()
+            try:
+                chdir(tmp)
+                with patch.dict(
+                    "os.environ",
+                    {"ProgramFiles": str(Path(tmp) / "missing-pf"), "ProgramFiles(x86)": str(Path(tmp) / "missing-x86"), "LOCALAPPDATA": ""},
+                    clear=False,
+                ):
+                    self.assertNotIn(fake.resolve(), _trusted_git_candidates())
+            finally:
+                chdir(previous)
     def test_scan_brain_databases_reports_ready_projects(self):
         with tempfile.TemporaryDirectory() as tmp:
             brain_dir = Path(tmp) / "brains"
@@ -47,11 +67,45 @@ class RtaBrainConsoleTests(unittest.TestCase):
             self.assertEqual(len(payload["memories"]), 1)
             self.assertIn("language.mjs", payload["memories"][0]["text"])
 
+    def test_file_tree_and_preview_are_relative_bounded_and_project_scoped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            (root / "src").mkdir(parents=True)
+            (root / "docs").mkdir()
+            (root / "src" / "main.py").write_text("def main():\n    return 'ready'\n", encoding="utf-8")
+            (root / "src" / "utils.py").write_text("VALUE = 42\n", encoding="utf-8")
+            (root / "docs" / "guide.md").write_text("# Guide\n\nLocal only.\n", encoding="utf-8")
+            db = Path(tmp) / "brain.sqlite"
+            conn = connect(db)
+            try:
+                ingest_repo(conn, root, project="demo")
+            finally:
+                conn.close()
+
+            tree = read_file_tree(db, "demo")
+            self.assertEqual([entry["name"] for entry in tree["entries"]], ["docs", "src"])
+            self.assertTrue(all(":" not in entry["relative_path"] for entry in tree["entries"]))
+
+            src = read_file_tree(db, "demo", prefix="src")
+            self.assertEqual({entry["name"] for entry in src["entries"]}, {"main.py", "utils.py"})
+
+            matches = read_file_tree(db, "demo", query="guide")
+            self.assertEqual(matches["entries"][0]["relative_path"], "docs/guide.md")
+
+            preview = read_file_preview(db, "demo", "src/main.py")
+            self.assertIn("return 'ready'", preview["file"]["content"])
+            self.assertNotIn(str(root), str(preview))
+            with self.assertRaises(ValueError):
+                read_file_tree(db, "demo", prefix="../outside")
+
     def test_publish_readiness_and_dashboard_help(self):
         readiness = publish_readiness(ROOT)
         names = {item["name"]: item["ok"] for item in readiness["checks"]}
         self.assertIn("README.md", names)
         self.assertIn("LICENSE", names)
+        self.assertIn("package-lock.json", names)
+        self.assertIn(".github/workflows/ci.yml", names)
+        self.assertIn("clean working tree", names)
         self.assertIn("python -m unittest discover -s tests -v", readiness["commands"])
 
         result = subprocess.run(
@@ -101,9 +155,73 @@ class RtaBrainConsoleTests(unittest.TestCase):
                 self.headers = Headers(values)
 
         self.assertTrue(is_local_origin(Handler({})))
-        self.assertTrue(is_local_origin(Handler({"Origin": "http://127.0.0.1:8765"})))
-        self.assertTrue(is_local_origin(Handler({"Origin": "http://localhost:8765"})))
+        self.assertTrue(is_local_origin(Handler({"Host": "127.0.0.1:8765", "Origin": "http://127.0.0.1:8765"})))
+        self.assertTrue(is_local_origin(Handler({"Host": "localhost:8765", "Origin": "http://localhost:8765"})))
+        self.assertFalse(is_local_origin(Handler({"Host": "127.0.0.1:8765", "Origin": "http://127.0.0.1:3000"})))
         self.assertFalse(is_local_origin(Handler({"Origin": "https://example.com"})))
+
+    def test_api_capability_is_required_and_compared_exactly(self):
+        class Headers:
+            def __init__(self, values):
+                self.values = values
+
+            def get(self, key):
+                return self.values.get(key)
+
+        class Handler:
+            def __init__(self, values):
+                self.headers = Headers(values)
+
+        config = ConsoleConfig(tool_root=ROOT, brain_dir=ROOT, capability_token="correct-token")
+        self.assertFalse(is_authorized_request(Handler({}), config))
+        self.assertFalse(is_authorized_request(Handler({"X-Rta-Smriti-Token": "wrong-token"}), config))
+        self.assertTrue(is_authorized_request(Handler({"X-Rta-Smriti-Token": "correct-token"}), config))
+
+    def test_console_confines_databases_and_host_to_loopback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            brain_dir = root / "brains"
+            brain_dir.mkdir()
+            inside = brain_dir / "inside.sqlite"
+            inside.touch()
+            outside = root / "outside.sqlite"
+            outside.touch()
+            config = ConsoleConfig(tool_root=ROOT, brain_dir=brain_dir)
+            self.assertEqual(resolve_brain_db(config, inside), inside.resolve())
+            with self.assertRaises(ValueError):
+                resolve_brain_db(config, outside)
+            linked = brain_dir / "linked.sqlite"
+            os.link(outside, linked)
+            with self.assertRaisesRegex(ValueError, "hard-linked"):
+                resolve_brain_db(config, linked)
+            with self.assertRaises(ValueError):
+                run_dashboard(ROOT, brain_dir, host="0.0.0.0", open_browser=False)
+
+    def test_repo_ingestion_rejects_hard_linked_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            outside = Path(tmp) / "outside.py"
+            outside.write_text("SECRET_OUTSIDE = True\n", encoding="utf-8")
+            linked = root / "linked.py"
+            os.link(outside, linked)
+            rejected = []
+            self.assertEqual(list(walk_repo(root, rejected=rejected)), [])
+            self.assertEqual(rejected[0]["reason"], "hard-link-file")
+
+    def test_graph_lookup_does_not_create_unknown_projects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = connect(Path(tmp) / "brain.sqlite")
+            try:
+                init_project(conn, "existing", str(Path(tmp)))
+                changes_before = conn.total_changes
+                payload = graph(conn, project="missing")
+                self.assertEqual(payload["nodes"], [])
+                self.assertEqual(conn.total_changes, changes_before)
+                count = conn.execute("SELECT COUNT(*) AS count FROM projects").fetchone()["count"]
+                self.assertEqual(count, 1)
+            finally:
+                conn.close()
 
 
 if __name__ == "__main__":

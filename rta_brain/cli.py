@@ -56,6 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(ingest)
     ingest.add_argument("path")
     ingest.add_argument("--project", default="default")
+    ingest.add_argument("--force", action="store_true", help="Hash every indexed file even when the repository manifest is unchanged")
 
     thread = sub.add_parser("ingest-thread", help="Index a long thread, transcript, JSONL session, or handoff file")
     add_common_options(thread)
@@ -83,6 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     stale = sub.add_parser("stale-check", help="Check whether indexed files changed")
     add_common_options(stale)
     stale.add_argument("--project", default="default")
+    stale.add_argument("--deep", action="store_true", help="Hash file contents instead of using the fast stat manifest")
 
     reflect_cmd = sub.add_parser("reflect", help="Consolidate duplicate memories and flag contradictions")
     add_common_options(reflect_cmd)
@@ -122,7 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard.add_argument("--brain-dir", default=str(Path.home() / "Documents" / "Codex" / "brains"))
     dashboard.add_argument("--db", default=None, help="Default brain DB for the opened console")
     dashboard.add_argument("--project", default=None, help="Default project for the opened console")
-    dashboard.add_argument("--host", default="127.0.0.1")
+    dashboard.add_argument("--host", choices=("127.0.0.1", "localhost"), default="127.0.0.1", help="Loopback host only")
     dashboard.add_argument("--port", type=int, default=8765)
     dashboard.add_argument("--no-open", action="store_true", help="Do not open the browser automatically")
     return parser
@@ -165,7 +167,7 @@ def main(argv=None) -> int:
                     priority=args.priority,
                 )
             elif args.command == "ingest-repo":
-                payload = ingest_repo(conn, Path(args.path), project=args.project)
+                payload = ingest_repo(conn, Path(args.path), project=args.project, force=args.force)
             elif args.command == "ingest-thread":
                 payload = ingest_thread(conn, Path(args.path), project=args.project, title=args.title)
             elif args.command == "search":
@@ -175,7 +177,7 @@ def main(argv=None) -> int:
             elif args.command == "context-pack":
                 payload = build_context_pack(conn, args.task, project=args.project, limit=args.limit)
             elif args.command == "stale-check":
-                payload = stale_check(conn, project=args.project)
+                payload = stale_check(conn, project=args.project, deep=args.deep)
             elif args.command == "reflect":
                 payload = reflect(conn, project=args.project)
             elif args.command == "mcp-config":

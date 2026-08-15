@@ -22,7 +22,7 @@ If `rta-brain.cmd` is not on PATH, run it by absolute path from the Rta-Smriti d
 To make wrappers available from any project:
 
 ```powershell
-rta-brain.cmd install-local --target "%USERPROFILE%\.local\bin" --json
+rta-brain.cmd install-local --target "$env:USERPROFILE\.local\bin" --json
 ```
 
 Add that target folder to PATH if needed.
@@ -32,13 +32,13 @@ Add that target folder to PATH if needed.
 Create one brain per project:
 
 ```powershell
-rta-brain.cmd bootstrap-project <repo-path> --project <project-name> --brain-dir "%USERPROFILE%\Documents\Rta-Smriti\brains" --write-agents --json
+rta-brain.cmd bootstrap-project <repo-path> --project <project-name> --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains" --write-agents --json
 ```
 
 Then verify readiness:
 
 ```powershell
-rta-brain.cmd --db "%USERPROFILE%\Documents\Rta-Smriti\brains\<project-name>.sqlite" self-check --project <project-name> --json
+rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\<project-name>.sqlite" self-check --project <project-name> --json
 ```
 
 ## MCP Server

@@ -20,3 +20,8 @@ node_modules/
 dashboard-src/dist/
 *.egg-info/
 .pytest_cache/
+.playwright-cli/
+.firecrawl/
+output/
+launch-dist/
+launch-video/out/

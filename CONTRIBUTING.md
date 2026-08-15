@@ -16,6 +16,14 @@ Compile check:
 python -m compileall -q rta_brain tests
 ```
 
+Build the packaged console and launch site:
+
+```powershell
+npm ci
+npm run build
+npm run build:launch
+```
+
 ## Design Rules
 
 - Prefer deterministic retrieval and explicit provenance over opaque automation.
@@ -31,4 +39,7 @@ python -m compileall -q rta_brain tests
 - Compile check passes.
 - README examples match the current CLI.
 - `SECURITY.md` is current.
-- License has been chosen before public publishing.
+- MIT license, release notes, and changelog are current.
+- Public screenshots use only the synthetic Atlas demo.
+- No SQLite brains, context packs, private paths, thread exports, credentials, or real project data are tracked.
+- `python rta-brain.py publish-readiness --json` passes.
