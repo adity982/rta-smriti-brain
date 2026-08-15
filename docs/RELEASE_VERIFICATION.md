@@ -47,7 +47,7 @@ update. The same workflow runs on Windows, Ubuntu, and macOS in
 
 | Gate | Result |
 | --- | --- |
-| Python regression suite | 53 passed, 1 skipped |
+| Python regression suite | 52 passed, 1 privilege-gated skip (53 total) |
 | Python bytecode compilation | Passed |
 | Operator console production build | Passed |
 | Launch-site production build | Passed |
