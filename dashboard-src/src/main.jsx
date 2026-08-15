@@ -410,6 +410,7 @@ function App() {
   const [receipts, setReceipts] = useState([]);
   const [checkpoint, setCheckpoint] = useState(null);
   const [isSavingCheckpoint, setIsSavingCheckpoint] = useState(false);
+  const [referenceHistory, setReferenceHistory] = useState([]);
 
   const selectedParams = useMemo(() => {
     if (!selectedProject) return null;
@@ -471,6 +472,7 @@ function App() {
     setParserCapabilities(settingsPayload.parser_capabilities || {});
     setCheckpoint(checkpointPayload.checkpoint || null);
     setSelectedNode(null);
+    setReferenceHistory([]);
   }
 
   async function loadFiles(prefix = "", query = "", project = selectedProject) {
@@ -728,6 +730,38 @@ function App() {
     setInspectorOpen(true);
   }
 
+  function selectPrimaryNode(node, drawer = null) {
+    setReferenceHistory([]);
+    setSelectedNode(node);
+    if (drawer) showDrawer(drawer);
+  }
+
+  function openReference(reference) {
+    if (!reference.node) {
+      setMessage(`${reference.label} is a memory backlink and has no graph node to open.`);
+      return;
+    }
+    setReferenceHistory((current) => activeNode ? [...current, activeNode].slice(-24) : current);
+    setSelectedNode(reference.node);
+    setMessage(`Opened ${reference.label} from References.`);
+  }
+
+  function goBackReference() {
+    const previous = referenceHistory.at(-1);
+    if (!previous) return;
+    setReferenceHistory((current) => current.slice(0, -1));
+    setSelectedNode(previous);
+    setMessage(`Returned to ${previous.label}.`);
+  }
+
+  function goToReferenceStart() {
+    const first = referenceHistory[0];
+    if (!first) return;
+    setReferenceHistory([]);
+    setSelectedNode(first);
+    setMessage(`Returned to reference start: ${first.label}.`);
+  }
+
   function showWorkspace(view) {
     setViewMode(view);
     setSemanticFocus(null);
@@ -954,7 +988,7 @@ function App() {
               )}
             </div>
 
-          {viewMode === "graph" && <GraphCanvas graph={visibleGraph} selectedNode={selectedNode} onSelect={setSelectedNode} query={nodeQuery} showLabels={showLabels} showEdges={showEdges} />}
+          {viewMode === "graph" && <GraphCanvas graph={visibleGraph} selectedNode={selectedNode} onSelect={selectPrimaryNode} query={nodeQuery} showLabels={showLabels} showEdges={showEdges} />}
           {viewMode === "files" && (
             <FileExplorer
               tree={fileTree}
@@ -969,8 +1003,8 @@ function App() {
               onUse={(path) => setTask((current) => current.includes(path) ? current : `${current.trim()}\nRelevant file: ${path}`.trim())}
             />
           )}
-          {viewMode === "canvas" && <CanvasBoard project={selectedProject} graph={visibleGraph} onSelect={(node) => { setSelectedNode(node); showDrawer("evidence"); }} onExport={exportView} />}
-          {viewMode === "bases" && <BasesView memories={memories} graph={computedGraph} publish={publish} onSelect={(node) => { setSelectedNode(node); showDrawer("evidence"); }} initialTable={baseScope.table} kindFilter={baseScope.kind} />}
+          {viewMode === "canvas" && <CanvasBoard project={selectedProject} graph={visibleGraph} onSelect={(node) => selectPrimaryNode(node, "evidence")} onExport={exportView} />}
+          {viewMode === "bases" && <BasesView memories={memories} graph={computedGraph} publish={publish} onSelect={(node) => selectPrimaryNode(node, "evidence")} initialTable={baseScope.table} kindFilter={baseScope.kind} />}
 
           <TaskComposer
             task={task}
@@ -1031,7 +1065,16 @@ function App() {
               isRefreshing={isRefreshingIndex}
             />
           )}
-          {activeDrawer === "references" && <ReferencesPanel node={activeNode} references={references} onSelect={(reference) => setSelectedNode(reference.node || activeNode)} />}
+          {activeDrawer === "references" && (
+            <ReferencesPanel
+              node={activeNode}
+              references={references}
+              history={referenceHistory}
+              onSelect={openReference}
+              onBack={goBackReference}
+              onStart={goToReferenceStart}
+            />
+          )}
           {activeDrawer === "memory" && <MemoryLedger memories={memories} onReflect={reflect} />}
           {activeDrawer === "checkpoint" && (
             <CheckpointPanel
@@ -1760,10 +1803,29 @@ function EvidenceInspector({ node, memories, project, freshness, packText, publi
   );
 }
 
-function ReferencesPanel({ node, references, onSelect }) {
+function ReferencesPanel({ node, references, history, onSelect, onBack, onStart }) {
+  const path = [...history, node].filter(Boolean);
   return (
     <div className="drawerContent">
-      <h2>References & Backlinks</h2>
+      <div className="referenceHeader">
+        <h2>References & Backlinks</h2>
+        <div className="referenceNavigation" aria-label="Reference navigation">
+          <button type="button" onClick={onBack} disabled={!history.length} title={history.length ? `Back to ${history.at(-1).label}` : "No previous reference"}>
+            <ArrowLeft size={14} /> Back
+          </button>
+          <button type="button" onClick={onStart} disabled={!history.length} title={history.length ? `Return to ${history[0].label}` : "Already at reference start"}>
+            <RotateCcw size={14} /> Start
+          </button>
+        </div>
+      </div>
+      <nav className="referenceTrail" aria-label="Reference trail">
+        {path.slice(-4).map((item, index, visiblePath) => (
+          <React.Fragment key={`${item.id}-${index}`}>
+            <span className={index === visiblePath.length - 1 ? "active" : ""}>{item.label}</span>
+            {index < visiblePath.length - 1 && <ChevronRight size={11} />}
+          </React.Fragment>
+        ))}
+      </nav>
       <section className="selectedNode compact">
         <GitBranch size={28} />
         <div><p>Connected to</p><strong>{node?.label || "Project Brain"}</strong><span>{references.length} references</span></div>

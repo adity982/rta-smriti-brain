@@ -2391,6 +2391,64 @@ textarea:focus {
   grid-template-columns: 38px 1fr;
 }
 
+.referenceHeader {
+  display: grid;
+  gap: 8px;
+}
+
+.referenceNavigation {
+  display: flex;
+  gap: 6px;
+}
+
+.referenceNavigation button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 0 8px;
+  color: #c9d9e9;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.referenceNavigation button:hover:not(:disabled) {
+  color: #eef7ff;
+  border-color: rgba(56, 189, 248, 0.38);
+  background: rgba(56, 189, 248, 0.09);
+}
+
+.referenceNavigation button:disabled {
+  color: #52677b;
+  cursor: default;
+  opacity: 0.62;
+}
+
+.referenceTrail {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 25px;
+  overflow: hidden;
+  color: #647b90;
+  font-size: 10px;
+}
+
+.referenceTrail span {
+  overflow: hidden;
+  max-width: 92px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.referenceTrail span.active {
+  color: #7dd3fc;
+}
+
 .referenceList,
 .receiptList,
 .ledgerFilters {
