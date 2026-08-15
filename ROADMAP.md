@@ -2,7 +2,7 @@
 
 ## Next
 
-- Guided first-run onboarding and cross-platform install validation
+- Guided first-run onboarding beyond the current dashboard bootstrap
 - Richer retrieval evaluation corpus and relevance diagnostics
 - Optional background service wrappers around the foreground repository watcher
 - Approximate nearest-neighbor indexes for very large local embedding collections

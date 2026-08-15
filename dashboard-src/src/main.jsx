@@ -31,6 +31,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Route,
   Rocket,
   Search,
   ShieldCheck,
@@ -406,6 +407,8 @@ function App() {
   const [parserCapabilities, setParserCapabilities] = useState({});
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [receipts, setReceipts] = useState([]);
+  const [checkpoint, setCheckpoint] = useState(null);
+  const [isSavingCheckpoint, setIsSavingCheckpoint] = useState(false);
 
   const selectedParams = useMemo(() => {
     if (!selectedProject) return null;
@@ -452,11 +455,12 @@ function App() {
     const requestId = projectRequestRef.current + 1;
     projectRequestRef.current = requestId;
     const params = { db_path: project.db_path, project: project.project };
-    const [memoryPayload, graphPayload, stalePayload, settingsPayload] = await Promise.all([
+    const [memoryPayload, graphPayload, stalePayload, settingsPayload, checkpointPayload] = await Promise.all([
       api(`/api/memories?${qs({ ...params, limit: 40 })}`),
       api(`/api/graph?${qs({ ...params, limit: 120 })}`),
       api(`/api/stale-check?${qs(params)}`),
       api(`/api/settings?${qs(params)}`),
+      api(`/api/checkpoint?${qs(params)}`),
     ]);
     if (requestId !== projectRequestRef.current) return;
     setMemories(memoryPayload.memories || []);
@@ -464,6 +468,7 @@ function App() {
     setFreshness(stalePayload);
     setProjectSettings(settingsPayload.settings);
     setParserCapabilities(settingsPayload.parser_capabilities || {});
+    setCheckpoint(checkpointPayload.checkpoint || null);
     setSelectedNode(null);
   }
 
@@ -646,6 +651,33 @@ function App() {
     }
   }
 
+  async function saveCheckpoint(values) {
+    if (!selectedParams || isSavingCheckpoint) return;
+    setIsSavingCheckpoint(true);
+    try {
+      const payload = await api("/api/checkpoint", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, ...values }),
+      });
+      setCheckpoint(payload.checkpoint);
+      setMessage("Structured checkpoint saved for the next task.");
+    } catch (error) {
+      setMessage(`Checkpoint could not be saved: ${error.message}`);
+    } finally {
+      setIsSavingCheckpoint(false);
+    }
+  }
+
+  async function copyContinuationPrompt() {
+    if (!selectedParams) return setMessage("Select a project first.");
+    try {
+      const payload = await api(`/api/continuation-prompt?${qs(selectedParams)}`);
+      await copyText(payload.prompt, "New task prompt copied.");
+    } catch (error) {
+      setMessage(`Continuation prompt failed: ${error.message}`);
+    }
+  }
+
   function toggleType(type) {
     setActiveTypes((current) => {
       if (current.includes(type) && current.length === 1) return allGraphTypes;
@@ -766,11 +798,14 @@ function App() {
                       setSelectedProject(project);
                       setProjectsOpen(false);
                     }}
-                    aria-label={`${project.project}, ${safeNumber(project.sources)} files, ${project.ready ? "ready" : "needs attention"}`}
+                    aria-label={`${project.project}, ${safeNumber(project.sources)} files, ${project.root_conflict ? "root conflict" : project.ready ? "ready" : "needs attention"}`}
                   >
                     <Network size={15} />
-                    <span><strong>{project.project}</strong><small>{safeNumber(project.sources)} files / {safeNumber(project.memories)} memories</small></span>
-                    <i className={project.ready ? "ok" : "warn"} />
+                    <span>
+                      <strong>{project.project}</strong>
+                      <small>{safeNumber(project.sources)} files / {safeNumber(project.memories)} memories{project.git?.branch ? ` / ${project.git.branch}@${project.git.head || "unborn"}` : ""}</small>
+                    </span>
+                    <i className={project.ready && !project.root_conflict ? "ok" : "warn"} title={project.root_conflict ? "Same project name is bound to multiple roots" : ""} />
                   </button>
                 ))}
                 {isLoading && !projects.length && <div className="railEmpty">Scanning local brains...</div>}
@@ -799,6 +834,7 @@ function App() {
               <span className="navGroupLabel">Tools</span>
               <button className={searchOpen ? "active" : ""} onClick={() => { setViewMode("graph"); setNavContext("search"); setSearchOpen(true); }}><Search size={17} /><span>Search</span></button>
               <button className={inspectorOpen && activeDrawer === "memory" ? "active" : ""} onClick={() => showDrawer("memory")}><Database size={17} /><span>Memory Ledger</span></button>
+              <button className={inspectorOpen && activeDrawer === "checkpoint" ? "active" : ""} onClick={() => showDrawer("checkpoint")}><Route size={17} /><span>Continue Work</span></button>
               <button className={inspectorOpen && activeDrawer === "receipts" ? "active" : ""} onClick={() => showDrawer("receipts")}><Sparkles size={17} /><span>Context Packs</span><em>{receipts.length}</em></button>
               <button className={inspectorOpen && activeDrawer === "publish" ? "active" : ""} onClick={() => showDrawer("publish")}><Rocket size={17} /><span>Launch Readiness</span><em>{publishReady}/{publishTotal}</em></button>
               <button className={settingsOpen ? "active" : ""} onClick={() => { setViewMode("graph"); setSettingsOpen(true); }}><SlidersHorizontal size={17} /><span>Settings</span></button>
@@ -844,6 +880,13 @@ function App() {
             <button className="toolButton" onClick={() => setStageExpanded((value) => !value)} aria-label={stageExpanded ? "Exit expanded graph" : "Expand graph"}>
               <Maximize2 size={16} />
             </button>
+            {selectedProject?.root_conflict && (
+              <div className="rootConflictBanner" role="alert">
+                <ShieldCheck size={17} />
+                <span><strong>Canonical-root conflict.</strong> This project name is bound to more than one folder. Verify the selected checkout before using its context.</span>
+                <button onClick={() => showDrawer("checkpoint")}>Review</button>
+              </div>
+            )}
           </div>
 
           <div className={searchOpen || typesOpen || settingsOpen ? "graphFilters" : "graphFilters collapsed"}>
@@ -907,6 +950,7 @@ function App() {
             onGenerate={generatePack}
             onCopy={() => copyText(packText || command, packText ? "Context pack copied." : "Command copied.")}
             onReceipts={() => showDrawer("receipts")}
+            onCopyContinuation={copyContinuationPrompt}
             receiptCount={receipts.length}
             isGenerating={isGenerating}
             targetAgent={targetAgent}
@@ -926,6 +970,9 @@ function App() {
             </button>
             <button className={activeDrawer === "memory" ? "active" : ""} onClick={() => showDrawer("memory")}>
               <MemoryStick size={15} /> Memory
+            </button>
+            <button className={activeDrawer === "checkpoint" ? "active" : ""} onClick={() => showDrawer("checkpoint")}>
+              <Route size={15} /> Continue
             </button>
             <button className={activeDrawer === "receipts" ? "active" : ""} onClick={() => showDrawer("receipts")}>
               <Clipboard size={15} /> Packs
@@ -952,6 +999,15 @@ function App() {
           )}
           {activeDrawer === "references" && <ReferencesPanel node={activeNode} references={references} onSelect={(reference) => setSelectedNode(reference.node || activeNode)} />}
           {activeDrawer === "memory" && <MemoryLedger memories={memories} onReflect={reflect} />}
+          {activeDrawer === "checkpoint" && (
+            <CheckpointPanel
+              checkpoint={checkpoint}
+              project={selectedProject}
+              onSave={saveCheckpoint}
+              onCopy={copyContinuationPrompt}
+              isSaving={isSavingCheckpoint}
+            />
+          )}
           {activeDrawer === "receipts" && <ReceiptsPanel receipts={receipts} onCopy={copyText} onClear={() => setReceipts([])} />}
           {activeDrawer === "publish" && <PublishPanel publish={publish} />}
           {activeDrawer === "bootstrap" && <BootstrapPanel onDone={loadHealth} shellKind={shellKind} />}
@@ -1535,7 +1591,7 @@ function BasesView({ memories, graph, publish, onSelect, initialTable = "memory"
   );
 }
 
-function TaskComposer({ task, setTask, project, freshness, command, packText, onGenerate, onCopy, onReceipts, receiptCount, isGenerating, targetAgent, setTargetAgent, customAgent, setCustomAgent }) {
+function TaskComposer({ task, setTask, project, freshness, command, packText, onGenerate, onCopy, onReceipts, onCopyContinuation, receiptCount, isGenerating, targetAgent, setTargetAgent, customAgent, setCustomAgent }) {
   return (
     <section className="taskComposer">
       <div className="composerTitle">
@@ -1544,6 +1600,7 @@ function TaskComposer({ task, setTask, project, freshness, command, packText, on
         </span>
         <div className="composerActions">
           <button onClick={onReceipts}><Eye size={15} /> {receiptCount} receipts</button>
+          <button onClick={onCopyContinuation}><Route size={15} /> New Task Prompt</button>
           <button onClick={onCopy}><Clipboard size={15} /> {packText ? "Copy Pack" : "Copy Command"}</button>
         </div>
       </div>
@@ -1699,6 +1756,7 @@ function FreshnessBars({ freshness, onRefresh, isRefreshing }) {
 
 function RepoTree({ project }) {
   const root = project?.root_path || "memory-only";
+  const git = project?.git || {};
   return (
     <section>
       <div className="sectionHeader">
@@ -1706,9 +1764,16 @@ function RepoTree({ project }) {
         <em>{project?.project}</em>
       </div>
       <div className="repoTree">
-        <p>
+        <p title={root}>
           <FolderTree size={15} /> {root.split(/[\\/]/).pop() || root}
         </p>
+        {git.is_git_repo && (
+          <>
+            <p title={git.repository_root}><GitBranch size={15} /> {git.branch} @ {git.head || "unborn"}</p>
+            <p className={git.dirty_files ? "repoDirty" : "repoClean"}><CircleDot size={15} /> {git.dirty_files} dirty files</p>
+          </>
+        )}
+        {project?.root_conflict && <p className="repoConflict"><ShieldCheck size={15} /> duplicate project roots</p>}
         <p>
           <Files size={15} /> source files
         </p>
@@ -1720,6 +1785,53 @@ function RepoTree({ project }) {
         </p>
       </div>
     </section>
+  );
+}
+
+function CheckpointPanel({ checkpoint, project, onSave, onCopy, isSaving }) {
+  const [values, setValues] = useState({
+    objective: "",
+    verified_evidence: "",
+    remaining_gaps: "",
+    next_action: "",
+    prohibited_repetition: "",
+  });
+
+  useEffect(() => {
+    setValues({
+      objective: checkpoint?.objective || "",
+      verified_evidence: checkpoint?.verified_evidence || "",
+      remaining_gaps: checkpoint?.remaining_gaps || "",
+      next_action: checkpoint?.next_action || "",
+      prohibited_repetition: checkpoint?.prohibited_repetition || "",
+    });
+  }, [checkpoint?.id]);
+
+  const update = (key, value) => setValues((current) => ({ ...current, [key]: value }));
+  const git = project?.git || {};
+  return (
+    <div className="drawerContent checkpointPanel">
+      <div className="sectionHeader">
+        <h2>Continue Work</h2>
+        {checkpoint?.updated_at && <time>{new Date(checkpoint.updated_at).toLocaleString()}</time>}
+      </div>
+      <div className={project?.root_conflict ? "checkpointIdentity conflict" : "checkpointIdentity"}>
+        <strong>{project?.project || "Select a project"}</strong>
+        <span title={project?.root_path}>{displayPath(project?.root_path)}</span>
+        {git.is_git_repo && <small>{git.branch} @ {git.head || "unborn"} / {git.dirty_files} dirty</small>}
+      </div>
+      <label><span>Objective</span><textarea rows="2" value={values.objective} onChange={(event) => update("objective", event.target.value)} /></label>
+      <label><span>Verified Evidence</span><textarea rows="3" value={values.verified_evidence} onChange={(event) => update("verified_evidence", event.target.value)} /></label>
+      <label><span>Remaining Gaps</span><textarea rows="2" value={values.remaining_gaps} onChange={(event) => update("remaining_gaps", event.target.value)} /></label>
+      <label><span>Next Action</span><textarea rows="2" value={values.next_action} onChange={(event) => update("next_action", event.target.value)} /></label>
+      <label><span>Do Not Repeat</span><textarea rows="2" value={values.prohibited_repetition} onChange={(event) => update("prohibited_repetition", event.target.value)} /></label>
+      <div className="checkpointActions">
+        <button className="primarySmall" onClick={() => onSave(values)} disabled={isSaving || !values.objective.trim()}>
+          <CheckCircle2 size={16} /> {isSaving ? "Saving..." : "Save Checkpoint"}
+        </button>
+        <button onClick={onCopy}><Clipboard size={16} /> Copy New Task Prompt</button>
+      </div>
+    </div>
   );
 }
 
@@ -1742,6 +1854,11 @@ function MemoryLedger({ memories, onReflect }) {
             <span>{memory.pramana}</span>
             <strong>{memory.type}</strong>
             <p>{memory.text}</p>
+            {memory.provenance && (
+              <small className={`provenance ${memory.provenance.verification_status}`}>
+                {memory.provenance.verification_status} / {memory.provenance.source_path || "source not recorded"}
+              </small>
+            )}
           </article>
         ))}
       </div>
@@ -1793,6 +1910,7 @@ function BootstrapPanel({ onDone, shellKind }) {
   const [project, setProject] = useState("");
   const [output, setOutput] = useState("");
   const [writeAgents, setWriteAgents] = useState(false);
+  const [embeddingProvider, setEmbeddingProvider] = useState("hash");
   const [isBootstrapping, setIsBootstrapping] = useState(false);
 
   async function bootstrap() {
@@ -1805,7 +1923,7 @@ function BootstrapPanel({ onDone, shellKind }) {
       setOutput("Building local brain...");
       const payload = await api("/api/bootstrap", {
         method: "POST",
-        body: JSON.stringify({ path, project, write_agents: writeAgents }),
+        body: JSON.stringify({ path, project, write_agents: writeAgents, embedding_provider: embeddingProvider }),
       });
       setOutput(`Brain ready: ${payload.project}\nIndexed files: ${payload.ingest.indexed_files}\nDatabase: ${displayPath(payload.db_path)}${payload.agent_index_file ? `\nAgent bridge: ${displayPath(payload.agent_index_file)}` : ""}`);
       await onDone();
@@ -1830,6 +1948,13 @@ function BootstrapPanel({ onDone, shellKind }) {
       <label>
         <span>Project Name</span>
         <input value={project} onChange={(event) => setProject(event.target.value)} placeholder="my-project" />
+      </label>
+      <label>
+        <span>Retrieval</span>
+        <select value={embeddingProvider} onChange={(event) => setEmbeddingProvider(event.target.value)}>
+          <option value="hash">Local Hybrid (Recommended)</option>
+          <option value="none">Lexical + Structural Only</option>
+        </select>
       </label>
       <label className="checkLabel">
         <input type="checkbox" checked={writeAgents} onChange={(event) => setWriteAgents(event.target.checked)} />

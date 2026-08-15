@@ -156,13 +156,15 @@ this alpha does not install a background service or survive a reboot by itself.
 4. Choose the target agent. `Universal / Any Agent` is the safest default; named and custom agents add a clear handoff label to the pack and receipt.
 5. Generate the pack, copy it, and place it at the start of the agent chat. MCP-capable hosts can call the brain tools directly instead.
 
+Before ending a meaningful session, open **Continue Work** and record the objective, verified evidence, remaining gaps, safest next action, and exploration that should not be repeated. Save the checkpoint, then use **Copy New Task Prompt** when opening the next agent task.
+
 Graph is the map, Files is the source reader, Canvas is the working board, Bases is the structured database, and the Context-Pack Studio is the handoff point.
 
 ### What The Dashboard Shows
 
 **Projects**
 
-Every brain found in your brain folder. The switcher shows readiness, file count, memory count, and the project path without mixing data between projects.
+Every brain found in your brain folder. The switcher shows readiness, file count, memory count, Git branch and HEAD, and the project path without mixing data between projects. A yellow state warns when the same project name is bound to multiple folders; verify the canonical checkout before using that brain.
 
 **Files**
 
@@ -190,7 +192,7 @@ Filters the graph by node type.
 
 **Settings**
 
-Controls the active project's indexing policy. You can raise or lower the fail-closed source-file cap, keep the built-in regex parser, select an installed Tree-sitter adapter, configure an explicit local LSP bridge, or enable local hybrid retrieval. Optional providers never turn themselves on.
+Controls the active project's indexing policy. You can raise or lower the fail-closed source-file cap, keep the built-in regex parser, select an installed Tree-sitter adapter, configure an explicit local LSP bridge, or change hybrid retrieval. New dashboard and CLI bootstraps recommend the dependency-free hash provider; external providers are never installed automatically.
 
 **Context-Pack Studio**
 
@@ -198,7 +200,7 @@ The main daily workflow. Choose `Universal / Any Agent`, Codex, Claude Code, Cur
 
 **Evidence Inspector**
 
-Open the detail-panel button in the graph toolbar to see what is selected, must-know memories, measured freshness counts, repo tree hints, and publish readiness. A `Blocked` freshness count means an eligible source could not be safely inspected, such as an oversized or symlinked source. Use the refresh action to incrementally update the selected repo index.
+Open the detail-panel button in the graph toolbar to see what is selected, must-know memories, measured freshness counts, canonical root, Git branch, HEAD, dirty-file count, repo tree hints, and publish readiness. A `Blocked` freshness count means an eligible source could not be safely inspected, such as an oversized or symlinked source. Use the refresh action to incrementally update the selected repo index.
 
 **References**
 
@@ -206,7 +208,11 @@ Shows visible connections and backlinks for the selected graph node.
 
 **Memory Ledger**
 
-Shows remembered decisions and lets you run reflection to suppress duplicate memories or flag simple contradictions.
+Shows remembered decisions, their verification provenance when recorded, and lets you run reflection to suppress duplicate memories or flag simple contradictions.
+
+**Continue Work**
+
+Stores objective, verified evidence, remaining gaps, next action, and prohibited repetition as structured SQLite fields. The newest checkpoint leads future context packs and the one-click new-task prompt.
 
 **Launch Readiness**
 
@@ -302,7 +308,24 @@ Then:
 & $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json stale-check --project project-name
 ```
 
-Use `--deep` for SHA-256 freshness with stat-keyed cache reuse. Use `ingest-repo --force` when you need to re-read and re-index every eligible source regardless of cached metadata.
+Use `--deep` for SHA-256 freshness with stat-keyed cache reuse. Fresh file rows are summarized by default so the receipt stays compact; add `--details --detail-limit 100` only when individual fresh rows are needed. Use `ingest-repo --force` when you need to re-read and re-index every eligible source regardless of cached metadata.
+
+## Save A Continuation Checkpoint
+
+```powershell
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json checkpoint --project project-name --objective "Finish root protection" --verified-evidence "Regression test passes" --remaining-gaps "Dashboard review" --next-action "Run UI smoke" --prohibited-repetition "Do not rescan unrelated folders"
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" continue-prompt --project project-name
+```
+
+The equivalent macOS/Linux commands use `"$RtaBrain"` and `$BrainDir/project-name.sqlite` as shown earlier.
+
+## Attach Claim Provenance
+
+```powershell
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json remember "Checkout verification fails closed." --project project-name --type evidence --pramana pratyaksha --source-path tests/test_checkout.py --source-hash abc123 --verification-command "python -m unittest tests.test_checkout" --verification-status verified
+```
+
+Verification status can be `unverified`, `verified`, `failed`, or `stale`. Rta-Smriti records the verification timestamp automatically unless one is supplied.
 
 Keep a repository refreshed while you work:
 
@@ -314,7 +337,7 @@ This watcher stays in the foreground and stops cleanly with `Ctrl+C`; it does no
 
 ## Configure Retrieval And Parsing
 
-The defaults are deterministic regex parsing, FTS5 retrieval, and a 512 KB source cap. Read the active policy:
+The recommended bootstrap defaults are deterministic regex parsing, FTS5 plus dependency-free hash hybrid retrieval, and a 512 KB source cap. A raw `init` remains lexical-only until configured. Read the active policy:
 
 ```powershell
 & $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json settings --project project-name

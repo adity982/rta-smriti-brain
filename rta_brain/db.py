@@ -7,6 +7,7 @@ from pathlib import Path
 from .embeddings import cosine_similarity, create_provider
 from .ingest import build_file_record, chunk_text, extract_terms, read_text, sha256_text, walk_repo
 from .parsers import ParserRegistry
+from .repository import canonical_root, same_root
 
 
 VALID_PRAMANA = {"pratyaksha", "sabda", "anumana", "smriti", "kalpana"}
@@ -84,6 +85,28 @@ def init_schema(conn: sqlite3.Connection) -> None:
             priority INTEGER NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
             metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS memory_provenance (
+            memory_id INTEGER PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+            source_path TEXT,
+            source_hash TEXT,
+            command TEXT,
+            timestamp TEXT NOT NULL,
+            verification_status TEXT NOT NULL DEFAULT 'unverified',
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE TABLE IF NOT EXISTS checkpoints (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            objective TEXT NOT NULL,
+            verified_evidence TEXT NOT NULL DEFAULT '',
+            remaining_gaps TEXT NOT NULL DEFAULT '',
+            next_action TEXT NOT NULL DEFAULT '',
+            prohibited_repetition TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -189,30 +212,56 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_edges_project_memory_id ON edges(project_id, memory_id, id);
         CREATE INDEX IF NOT EXISTS idx_sources_project_kind_title ON sources(project_id, kind, title);
         CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_project_provider ON chunk_embeddings(project_id, provider, model);
+        CREATE INDEX IF NOT EXISTS idx_checkpoints_project_updated ON checkpoints(project_id, updated_at DESC, id DESC);
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO memory_provenance(memory_id, timestamp, verification_status, metadata_json)
+        SELECT id, created_at, 'unverified', '{}' FROM memories
         """
     )
     conn.commit()
 
 
-def ensure_project(conn: sqlite3.Connection, name: str, root_path: str | None = None) -> int:
+def ensure_project(
+    conn: sqlite3.Connection,
+    name: str,
+    root_path: str | None = None,
+    allow_root_rebind: bool = False,
+) -> int:
     init_schema(conn)
-    row = conn.execute("SELECT id FROM projects WHERE name = ?", (name,)).fetchone()
+    row = conn.execute("SELECT id, root_path FROM projects WHERE name = ?", (name,)).fetchone()
     if row:
         if root_path:
-            conn.execute("UPDATE projects SET root_path = ? WHERE id = ?", (root_path, row["id"]))
-            conn.commit()
+            requested = canonical_root(root_path)
+            stored = row["root_path"]
+            if stored and not same_root(stored, requested):
+                if not allow_root_rebind:
+                    raise ValueError(
+                        f"canonical root mismatch for project '{name}': brain is bound to '{stored}', "
+                        f"but '{requested}' was requested; use an explicit root rebind only after verifying the checkout"
+                    )
+                conn.execute("UPDATE projects SET root_path = ? WHERE id = ?", (requested, row["id"]))
+                conn.execute("DELETE FROM repo_manifests WHERE project_id = ?", (row["id"],))
+                conn.execute("DELETE FROM file_hash_cache WHERE project_id = ?", (row["id"],))
+                conn.commit()
+            elif not stored:
+                conn.execute("UPDATE projects SET root_path = ? WHERE id = ?", (requested, row["id"]))
+                conn.commit()
         return int(row["id"])
+    canonical = canonical_root(root_path) if root_path else None
     cur = conn.execute(
         "INSERT INTO projects(name, root_path, created_at) VALUES (?, ?, ?)",
-        (name, root_path, now_iso()),
+        (name, canonical, now_iso()),
     )
     conn.commit()
     return int(cur.lastrowid)
 
 
-def init_project(conn: sqlite3.Connection, name: str, root_path: str) -> dict:
-    project_id = ensure_project(conn, name, root_path)
-    return {"status": "ok", "project": {"id": project_id, "name": name, "root_path": root_path}}
+def init_project(conn: sqlite3.Connection, name: str, root_path: str, allow_root_rebind: bool = False) -> dict:
+    project_id = ensure_project(conn, name, root_path, allow_root_rebind=allow_root_rebind)
+    return {"status": "ok", "project": {"id": project_id, "name": name, "root_path": canonical_root(root_path)}}
 
 
 def _validate_project_settings(settings: dict) -> dict:
@@ -336,6 +385,52 @@ def add_edge(
     return conn.total_changes > before
 
 
+def _validated_provenance(provenance: dict | None) -> dict:
+    provenance = provenance or {}
+    allowed = {"source_path", "source_hash", "command", "timestamp", "verification_status", "metadata"}
+    unknown = set(provenance) - allowed
+    if unknown:
+        raise ValueError(f"unknown provenance field(s): {', '.join(sorted(unknown))}")
+    status = str(provenance.get("verification_status") or "unverified").strip().lower()
+    if status not in {"unverified", "verified", "failed", "stale"}:
+        raise ValueError("verification_status must be unverified, verified, failed, or stale")
+    normalized = {
+        "source_path": str(provenance.get("source_path") or "").strip()[:4_000] or None,
+        "source_hash": str(provenance.get("source_hash") or "").strip()[:256] or None,
+        "command": str(provenance.get("command") or "").strip()[:8_000] or None,
+        "timestamp": str(provenance.get("timestamp") or now_iso()).strip()[:100],
+        "verification_status": status,
+        "metadata": provenance.get("metadata") if isinstance(provenance.get("metadata"), dict) else {},
+    }
+    return normalized
+
+
+def attach_memory_provenance(row: dict) -> dict | None:
+    timestamp = row.pop("provenance_timestamp", None)
+    source_path = row.pop("provenance_source_path", None)
+    source_hash = row.pop("provenance_source_hash", None)
+    command = row.pop("provenance_command", None)
+    verification_status = row.pop("provenance_verification_status", None)
+    metadata_json = row.pop("provenance_metadata_json", None)
+    if not any((timestamp, source_path, source_hash, command, verification_status, metadata_json)):
+        row["provenance"] = None
+        return None
+    try:
+        metadata = json.loads(metadata_json or "{}")
+    except json.JSONDecodeError:
+        metadata = {}
+    provenance = {
+        "source_path": source_path,
+        "source_hash": source_hash,
+        "command": command,
+        "timestamp": timestamp,
+        "verification_status": verification_status or "unverified",
+        "metadata": metadata,
+    }
+    row["provenance"] = provenance
+    return provenance
+
+
 def remember(
     conn: sqlite3.Connection,
     text: str,
@@ -345,6 +440,7 @@ def remember(
     confidence: float = 0.75,
     priority: int = 5,
     metadata: dict | None = None,
+    provenance: dict | None = None,
 ) -> dict:
     init_schema(conn)
     text = str(text).strip()
@@ -357,6 +453,21 @@ def remember(
     confidence = max(0.0, min(1.0, float(confidence)))
     priority = max(1, min(10, int(priority)))
     project_id = ensure_project(conn, project)
+    provenance_input = dict(provenance or {})
+    if provenance_input.get("source_path") and not provenance_input.get("source_hash"):
+        project_row = conn.execute("SELECT root_path FROM projects WHERE id = ?", (project_id,)).fetchone()
+        source_path = Path(str(provenance_input["source_path"])).expanduser()
+        if not source_path.is_absolute() and project_row and project_row["root_path"]:
+            source_path = Path(project_row["root_path"]) / source_path
+        try:
+            resolved_source = source_path.resolve(strict=True)
+            if project_row and project_row["root_path"]:
+                resolved_source.relative_to(Path(project_row["root_path"]).resolve())
+            source_text = read_text(resolved_source, max_bytes=16_000_000)
+            if source_text is not None:
+                provenance_input["source_hash"] = sha256_text(source_text)
+        except (OSError, ValueError):
+            pass
     timestamp = now_iso()
     cur = conn.execute(
         """
@@ -366,6 +477,23 @@ def remember(
         (project_id, memory_type, pramana, text, float(confidence), int(priority), json.dumps(metadata or {}), timestamp, timestamp),
     )
     memory_id = int(cur.lastrowid)
+    normalized_provenance = _validated_provenance(provenance_input)
+    conn.execute(
+        """
+        INSERT INTO memory_provenance(
+            memory_id, source_path, source_hash, command, timestamp, verification_status, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            memory_id,
+            normalized_provenance["source_path"],
+            normalized_provenance["source_hash"],
+            normalized_provenance["command"],
+            normalized_provenance["timestamp"],
+            normalized_provenance["verification_status"],
+            json.dumps(normalized_provenance["metadata"]),
+        ),
+    )
     conn.execute(
         "INSERT INTO memory_fts(memory_id, project_id, text, type, pramana) VALUES (?, ?, ?, ?, ?)",
         (memory_id, project_id, text, memory_type, pramana),
@@ -385,8 +513,66 @@ def remember(
             "confidence": float(confidence),
             "priority": int(priority),
             "text": text,
+            "provenance": normalized_provenance,
         },
     }
+
+
+def save_checkpoint(
+    conn: sqlite3.Connection,
+    project: str,
+    objective: str,
+    verified_evidence: str = "",
+    remaining_gaps: str = "",
+    next_action: str = "",
+    prohibited_repetition: str = "",
+) -> dict:
+    init_schema(conn)
+    values = {
+        "objective": str(objective).strip(),
+        "verified_evidence": str(verified_evidence).strip(),
+        "remaining_gaps": str(remaining_gaps).strip(),
+        "next_action": str(next_action).strip(),
+        "prohibited_repetition": str(prohibited_repetition).strip(),
+    }
+    if not values["objective"]:
+        raise ValueError("checkpoint objective must not be empty")
+    for key, value in values.items():
+        if len(value) > 20_000:
+            raise ValueError(f"checkpoint {key} exceeds the 20,000 character limit")
+    project_id = ensure_project(conn, project)
+    timestamp = now_iso()
+    cursor = conn.execute(
+        """
+        INSERT INTO checkpoints(
+            project_id, objective, verified_evidence, remaining_gaps, next_action,
+            prohibited_repetition, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            project_id, values["objective"], values["verified_evidence"], values["remaining_gaps"],
+            values["next_action"], values["prohibited_repetition"], timestamp, timestamp,
+        ),
+    )
+    conn.commit()
+    return {"status": "ok", "project": project, "checkpoint": {"id": int(cursor.lastrowid), **values, "created_at": timestamp, "updated_at": timestamp}}
+
+
+def latest_checkpoint(conn: sqlite3.Connection, project: str = "default") -> dict | None:
+    init_schema(conn)
+    row = conn.execute(
+        """
+        SELECT c.id, c.objective, c.verified_evidence, c.remaining_gaps, c.next_action,
+               c.prohibited_repetition, c.created_at, c.updated_at
+        FROM checkpoints c
+        JOIN projects p ON p.id = c.project_id
+        WHERE p.name = ?
+        ORDER BY c.updated_at DESC, c.id DESC
+        LIMIT 1
+        """,
+        (project,),
+    ).fetchone()
+    return dict(row) if row else None
 
 
 def _collect_json_strings(value) -> list[str]:
@@ -445,6 +631,7 @@ def ingest_thread(conn: sqlite3.Connection, path: Path, project: str = "default"
     if not path.exists() or not path.is_file():
         raise ValueError(f"thread path does not exist or is not a file: {path}")
     text = _read_thread_text(path)
+    thread_hash = sha256_text(text)
     project_id = ensure_project(conn, project)
     source_title = title or path.name
     source_id = upsert_source(
@@ -453,7 +640,7 @@ def ingest_thread(conn: sqlite3.Connection, path: Path, project: str = "default"
         "thread",
         str(path),
         source_title,
-        sha256_text(text),
+        thread_hash,
         {"title": source_title, "suffix": path.suffix.lower()},
     )
     conn.execute("DELETE FROM chunk_fts WHERE source_id = ?", (source_id,))
@@ -497,6 +684,12 @@ def ingest_thread(conn: sqlite3.Connection, path: Path, project: str = "default"
             confidence=0.55,
             priority=4,
             metadata={"source": "ingest-thread", "source_path": str(path), "source_title": source_title, "verified": False},
+            provenance={
+                "source_path": str(path),
+                "source_hash": thread_hash,
+                "verification_status": "unverified",
+                "metadata": {"source_title": source_title, "source_kind": "thread"},
+            },
         )
         promoted += 1
         if promoted >= MAX_THREAD_PROMOTIONS:
@@ -567,12 +760,18 @@ def _configured_manifest_digest(file_digest: str, settings: dict, parser_registr
     }, sort_keys=True))
 
 
-def ingest_repo(conn: sqlite3.Connection, root: Path, project: str = "default", force: bool = False) -> dict:
+def ingest_repo(
+    conn: sqlite3.Connection,
+    root: Path,
+    project: str = "default",
+    force: bool = False,
+    allow_root_rebind: bool = False,
+) -> dict:
     init_schema(conn)
     root = root.resolve()
     if not root.exists() or not root.is_dir():
         raise ValueError(f"repo path does not exist or is not a directory: {root}")
-    project_id = ensure_project(conn, project, str(root))
+    project_id = ensure_project(conn, project, str(root), allow_root_rebind=allow_root_rebind)
     settings = get_project_settings(conn, project)
     max_file_bytes = int(settings["max_file_bytes"])
     parser_adapter = str(settings["parser_adapter"])
@@ -817,9 +1016,16 @@ def search(
             for row in conn.execute(
                 f"""
                 SELECT m.id, p.name AS project, m.type, m.pramana, m.text, m.confidence,
-                       m.priority, m.status, m.metadata_json
+                       m.priority, m.status, m.metadata_json,
+                       mp.source_path AS provenance_source_path,
+                       mp.source_hash AS provenance_source_hash,
+                       mp.command AS provenance_command,
+                       mp.timestamp AS provenance_timestamp,
+                       mp.verification_status AS provenance_verification_status,
+                       mp.metadata_json AS provenance_metadata_json
                 FROM memories m
                 JOIN projects p ON p.id = m.project_id
+                LEFT JOIN memory_provenance mp ON mp.memory_id = m.id
                 WHERE m.id IN ({placeholders}) AND m.status IN ('active', 'pinned')
                 """,
                 memory_ids,
@@ -828,6 +1034,7 @@ def search(
         for candidate in selected_memories:
             item = rows_by_id.get(int(candidate["memory_id"]))
             if item:
+                attach_memory_provenance(item)
                 item["rank"] = candidate["rank"]
                 memories.append(item)
 
@@ -1110,14 +1317,22 @@ def indexed_freshness(conn: sqlite3.Connection, project: str = "default") -> dic
     }
 
 
-def stale_check(conn: sqlite3.Connection, project: str = "default", deep: bool = False) -> dict:
+def stale_check(
+    conn: sqlite3.Connection,
+    project: str = "default",
+    deep: bool = False,
+    detail_limit: int = 50,
+    include_fresh_details: bool = False,
+) -> dict:
     init_schema(conn)
+    detail_limit = max(0, min(500, int(detail_limit)))
     row = conn.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()
     if not row:
         return {
             "status": "ok", "project": project, "mode": "sha256" if deep else "stat-manifest",
             "state": "unknown", "fresh": 0, "changed": 0, "missing": 0, "added": 0,
             "hash_cache_hits": 0, "hash_cache_misses": 0, "details": [],
+            "details_total": 0, "details_truncated": False, "fresh_details_omitted": 0,
         }
     settings = get_project_settings(conn, project)
     details = []
@@ -1153,12 +1368,26 @@ def stale_check(conn: sqlite3.Connection, project: str = "default", deep: bool =
                         "status": "uninspectable",
                         "reason": item["reason"],
                     })
+                compact_details = rejected_details
+                if include_fresh_details:
+                    compact_details = [
+                        {
+                            "source_id": None,
+                            "path": str(path),
+                            "title": path.relative_to(root_path).as_posix(),
+                            "status": "fresh",
+                        }
+                        for path, _stat in path_stats
+                    ] + rejected_details
                 return {
                     "status": "ok", "project": project, "mode": "stat-manifest",
                     "state": "stale" if rejected else "fresh",
                     "fresh": len(path_stats), "changed": 0, "missing": 0, "added": 0,
                     "uninspectable": len(rejected), "hash_cache_hits": 0, "hash_cache_misses": 0,
-                    "details": rejected_details,
+                    "details": compact_details[:detail_limit],
+                    "details_total": len(compact_details),
+                    "details_truncated": len(compact_details) > detail_limit,
+                    "fresh_details_omitted": 0 if include_fresh_details else len(path_stats),
                 }
     hash_cache_hits = 0
     hash_cache_misses = 0
@@ -1202,7 +1431,8 @@ def stale_check(conn: sqlite3.Connection, project: str = "default", deep: bool =
                     indexed_at = 0
                 status = "fresh" if stat.st_mtime <= indexed_at else "changed"
         counts[status] += 1
-        details.append({"source_id": source["id"], "path": source["path"], "title": source["title"], "status": status})
+        if status != "fresh" or include_fresh_details:
+            details.append({"source_id": source["id"], "path": source["path"], "title": source["title"], "status": status})
     if root_path and root_path.exists():
         current_titles = {path.relative_to(root_path).as_posix() for path in map(Path, current_by_path)}
         for title in sorted(current_titles - indexed_titles):
@@ -1227,9 +1457,16 @@ def stale_check(conn: sqlite3.Connection, project: str = "default", deep: bool =
     state = "stale" if anomalies else ("unknown" if total == 0 else "fresh")
     if deep:
         conn.commit()
+    details_total = len(details)
     return {
         "status": "ok", "project": project, "mode": "sha256" if deep else "stat-manifest", "state": state,
-        **counts, "hash_cache_hits": hash_cache_hits, "hash_cache_misses": hash_cache_misses, "details": details,
+        **counts,
+        "hash_cache_hits": hash_cache_hits,
+        "hash_cache_misses": hash_cache_misses,
+        "details": details[:detail_limit],
+        "details_total": details_total,
+        "details_truncated": details_total > detail_limit,
+        "fresh_details_omitted": 0 if include_fresh_details else counts["fresh"],
     }
 
 

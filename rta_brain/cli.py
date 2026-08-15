@@ -4,11 +4,11 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .context import build_context_pack
+from .context import build_context_pack, build_continuation_prompt
 from .console import publish_readiness, run_dashboard
 from .db import (
     connect, doctor, get_project_settings, graph, ingest_repo, ingest_thread, init_project, reflect,
-    remember, search, stale_check, update_project_settings,
+    remember, save_checkpoint, search, stale_check, update_project_settings,
 )
 from .project import bootstrap_project, install_local, mcp_config_payload, projects_list, self_check
 from .watch import watch_repository
@@ -46,6 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(init)
     init.add_argument("--project", default="default")
     init.add_argument("--root", default=str(Path.cwd()))
+    init.add_argument("--rebind-root", action="store_true", help="Explicitly replace an existing canonical project root")
 
     remember_cmd = sub.add_parser("remember", help="Store a durable memory")
     add_common_options(remember_cmd)
@@ -55,12 +56,18 @@ def build_parser() -> argparse.ArgumentParser:
     remember_cmd.add_argument("--pramana", default="smriti", choices=["pratyaksha", "sabda", "anumana", "smriti", "kalpana"])
     remember_cmd.add_argument("--confidence", type=float, default=0.75)
     remember_cmd.add_argument("--priority", type=int, default=5)
+    remember_cmd.add_argument("--source-path")
+    remember_cmd.add_argument("--source-hash")
+    remember_cmd.add_argument("--verification-command")
+    remember_cmd.add_argument("--verification-status", choices=("unverified", "verified", "failed", "stale"), default="unverified")
+    remember_cmd.add_argument("--verification-timestamp")
 
     ingest = sub.add_parser("ingest-repo", help="Index a repository or folder")
     add_common_options(ingest)
     ingest.add_argument("path")
     ingest.add_argument("--project", default="default")
     ingest.add_argument("--force", action="store_true", help="Re-read and re-index every eligible file even when metadata is unchanged")
+    ingest.add_argument("--rebind-root", action="store_true", help="Explicitly replace the brain's canonical project root")
 
     watch = sub.add_parser("watch-repo", help="Continuously refresh a repository using the incremental index")
     add_common_options(watch)
@@ -105,6 +112,21 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(stale)
     stale.add_argument("--project", default="default")
     stale.add_argument("--deep", action="store_true", help="Hash file contents instead of using the fast stat manifest")
+    stale.add_argument("--details", action="store_true", help="Include fresh file rows as well as anomalies")
+    stale.add_argument("--detail-limit", type=int, default=50, help="Maximum freshness detail rows to emit (0-500)")
+
+    checkpoint = sub.add_parser("checkpoint", help="Save a structured project continuation checkpoint")
+    add_common_options(checkpoint)
+    checkpoint.add_argument("--project", default="default")
+    checkpoint.add_argument("--objective", required=True)
+    checkpoint.add_argument("--verified-evidence", default="")
+    checkpoint.add_argument("--remaining-gaps", default="")
+    checkpoint.add_argument("--next-action", default="")
+    checkpoint.add_argument("--prohibited-repetition", default="")
+
+    continuation = sub.add_parser("continue-prompt", help="Build a compact prompt for a new agent task")
+    add_common_options(continuation)
+    continuation.add_argument("--project", default="default")
 
     reflect_cmd = sub.add_parser("reflect", help="Consolidate duplicate memories and flag contradictions")
     add_common_options(reflect_cmd)
@@ -121,6 +143,7 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap.add_argument("--project", required=True)
     bootstrap.add_argument("--brain-dir", default=str(Path.home() / "Documents" / "Codex" / "brains"))
     bootstrap.add_argument("--write-agents", action="store_true")
+    bootstrap.add_argument("--embedding-provider", choices=("none", "hash", "sentence-transformers"), default="hash")
 
     self_check_cmd = sub.add_parser("self-check", help="Verify that a project brain is ready to use")
     add_common_options(self_check_cmd)
@@ -175,8 +198,17 @@ def main(argv=None) -> int:
         conn = connect(Path(args.db))
         with conn:
             if args.command == "init":
-                payload = init_project(conn, args.project, str(Path(args.root).resolve()))
+                payload = init_project(conn, args.project, str(Path(args.root).resolve()), allow_root_rebind=args.rebind_root)
             elif args.command == "remember":
+                provenance = None
+                if any((args.source_path, args.source_hash, args.verification_command, args.verification_timestamp)) or args.verification_status != "unverified":
+                    provenance = {
+                        "source_path": args.source_path,
+                        "source_hash": args.source_hash,
+                        "command": args.verification_command,
+                        "timestamp": args.verification_timestamp,
+                        "verification_status": args.verification_status,
+                    }
                 payload = remember(
                     conn,
                     args.text,
@@ -185,9 +217,10 @@ def main(argv=None) -> int:
                     pramana=args.pramana,
                     confidence=args.confidence,
                     priority=args.priority,
+                    provenance=provenance,
                 )
             elif args.command == "ingest-repo":
-                payload = ingest_repo(conn, Path(args.path), project=args.project, force=args.force)
+                payload = ingest_repo(conn, Path(args.path), project=args.project, force=args.force, allow_root_rebind=args.rebind_root)
             elif args.command == "watch-repo":
                 payload = watch_repository(conn, Path(args.path), project=args.project, interval_seconds=args.interval)
             elif args.command == "settings":
@@ -213,13 +246,39 @@ def main(argv=None) -> int:
             elif args.command == "context-pack":
                 payload = build_context_pack(conn, args.task, project=args.project, limit=args.limit)
             elif args.command == "stale-check":
-                payload = stale_check(conn, project=args.project, deep=args.deep)
+                payload = stale_check(
+                    conn,
+                    project=args.project,
+                    deep=args.deep,
+                    detail_limit=args.detail_limit,
+                    include_fresh_details=args.details,
+                )
+            elif args.command == "checkpoint":
+                payload = save_checkpoint(
+                    conn,
+                    project=args.project,
+                    objective=args.objective,
+                    verified_evidence=args.verified_evidence,
+                    remaining_gaps=args.remaining_gaps,
+                    next_action=args.next_action,
+                    prohibited_repetition=args.prohibited_repetition,
+                )
+            elif args.command == "continue-prompt":
+                payload = build_continuation_prompt(conn, project=args.project)
             elif args.command == "reflect":
                 payload = reflect(conn, project=args.project)
             elif args.command == "mcp-config":
                 payload = build_mcp_config(args.db, args.project, args.name)
             elif args.command == "bootstrap-project":
-                payload = bootstrap_project(conn, Path(args.path), args.project, Path(args.brain_dir), args.write_agents, tool_root())
+                payload = bootstrap_project(
+                    conn,
+                    Path(args.path),
+                    args.project,
+                    Path(args.brain_dir),
+                    args.write_agents,
+                    tool_root(),
+                    embedding_provider=args.embedding_provider,
+                )
             elif args.command == "self-check":
                 payload = self_check(conn, project=args.project, check_files=args.check_files)
             elif args.command == "projects-list":

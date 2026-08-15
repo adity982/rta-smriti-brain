@@ -6,7 +6,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from .db import doctor, ensure_project, ingest_repo, init_project, stale_check
+from .db import doctor, ensure_project, ingest_repo, init_project, stale_check, update_project_settings
 
 
 def _slug(value: str) -> str:
@@ -118,10 +118,12 @@ For MCP hosts, configure:
 
 Rules:
 
+- Confirm the canonical root and Git state before repo work.
 - Treat Rta-Smriti output as memory-derived unless freshness is verified.
 - Re-read changed files before acting on stale context.
 - Do not store secrets or credentials.
 - Store one durable fact at a time with `remember`.
+- Save a structured `checkpoint` before ending a meaningful work session.
 """
 
 
@@ -150,7 +152,8 @@ Use the dashboard for inspection:
 {cli} --db {shell_quote(db_path)} dashboard --project {shell_quote(project)}
 ```
 
-Treat brain output as memory-derived until freshness is verified.
+Confirm the canonical root before working. Treat brain output as memory-derived until freshness is verified.
+Save a structured checkpoint before ending a meaningful work session.
 <!-- END:rta-smriti-brain -->
 """
 
@@ -174,7 +177,15 @@ def upsert_agent_index(repo_path: Path, tool_root: Path, db_path: Path, project:
     return agent_index
 
 
-def bootstrap_project(conn: sqlite3.Connection, repo_path: Path, project: str, brain_dir: Path, write_agents: bool, tool_root: Path) -> dict:
+def bootstrap_project(
+    conn: sqlite3.Connection,
+    repo_path: Path,
+    project: str,
+    brain_dir: Path,
+    write_agents: bool,
+    tool_root: Path,
+    embedding_provider: str | None = None,
+) -> dict:
     repo_path = repo_path.resolve()
     if not repo_path.exists() or not repo_path.is_dir():
         raise ValueError(f"project path does not exist or is not a directory: {repo_path}")
@@ -183,20 +194,25 @@ def bootstrap_project(conn: sqlite3.Connection, repo_path: Path, project: str, b
         raise ValueError(f"refusing to use a linked brain database: {db_path}")
     if db_path.exists() and db_path.stat().st_nlink > 1:
         raise ValueError(f"refusing to use a hard-linked brain database: {db_path}")
-    agent_path = None
+    agent_path = _safe_agent_target(repo_path, "AGENTS.rta-smriti.md") if write_agents else None
+    if write_agents:
+        _safe_agent_target(repo_path, "AGENTS.md")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     wrote_agent_file = False
     agent_index_path = None
-    if write_agents:
-        agent_path = _safe_agent_target(repo_path, "AGENTS.rta-smriti.md")
-        _safe_agent_target(repo_path, "AGENTS.md")
-        _atomic_write_text(agent_path, agent_file_text(tool_root, db_path, project))
-        agent_index_path = upsert_agent_index(repo_path, tool_root, db_path, project)
-        wrote_agent_file = True
-    db_path.parent.mkdir(parents=True, exist_ok=True)
     project_conn = sqlite3.connect(str(db_path))
     project_conn.row_factory = sqlite3.Row
     try:
         init_payload = init_project(project_conn, project, str(repo_path))
+        settings_payload = (
+            update_project_settings(project_conn, project, {"embedding_provider": embedding_provider})
+            if embedding_provider
+            else None
+        )
+        if write_agents:
+            _atomic_write_text(agent_path, agent_file_text(tool_root, db_path, project))
+            agent_index_path = upsert_agent_index(repo_path, tool_root, db_path, project)
+            wrote_agent_file = True
         ingest_payload = ingest_repo(project_conn, repo_path, project=project)
     finally:
         project_conn.close()
@@ -209,6 +225,7 @@ def bootstrap_project(conn: sqlite3.Connection, repo_path: Path, project: str, b
         "repo_path": str(repo_path),
         "db_path": str(db_path),
         "init": init_payload,
+        "settings": settings_payload,
         "ingest": ingest_payload,
         "agent_file": str(agent_path) if wrote_agent_file else None,
         "agent_index_file": str(agent_index_path) if agent_index_path else None,

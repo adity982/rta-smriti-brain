@@ -12,6 +12,12 @@ This alpha turns repository memory from a manual snapshot into an operator-contr
 - Pluggable regex, Tree-sitter, LSP-command, and entry-point parser registry
 - Per-project source-size, parser, embedding, model, and ranking policy
 - Dashboard controls with blocked-source and optional-provider warnings
+- Canonical-root binding with explicit rebind protection and duplicate-root dashboard warnings
+- Repository root, branch, HEAD, and dirty-file diagnostics
+- Structured continuation checkpoints and one-click new-task prompts
+- Claim provenance fields for source path, hash, verification command, timestamp, and status
+- Compact anomaly-first deep freshness output with bounded details
+- Default exclusions for worktrees, bundled browser runtimes, test scratch folders, and generated tool caches
 
 ## Fixed On Main
 
@@ -21,13 +27,14 @@ This alpha turns repository memory from a manual snapshot into an operator-contr
 - Setup no longer assumes the wrapper directory is already on `PATH`.
 - Dashboard recovery guidance now explains the foreground process and one-session capability URL.
 - Windows, Ubuntu, and macOS CI build and smoke-test an installed wheel through bootstrap, retrieval, wrappers, MCP config, dashboard assets, and API authorization.
+- Bootstrap now writes agent bridge files before the final index pass, so a newly created brain starts fresh instead of immediately reporting those generated files as added.
 
 ## Defaults And Boundaries
 
 - SQLite remains local.
 - No hosted account, sync service, telemetry, or background daemon is added.
-- FTS5 and regex remain the defaults.
-- Optional parsers and embeddings are never silently enabled.
+- FTS5 and regex remain available deterministic defaults.
+- The recommended bootstrap flow enables the dependency-free hash provider; lexical-only retrieval remains selectable and external embedding packages are never installed automatically.
 - Sources above the selected cap remain blocked and keep freshness fail-closed.
 
 See [Architecture](ARCHITECTURE.md) and [Usage Guide](USAGE_GUIDE.md).

@@ -9,6 +9,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlencode
 
 
 def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -74,6 +75,8 @@ def main() -> int:
         db = Path(bootstrap["db_path"])
         if not db.is_file() or bootstrap["ingest"]["indexed_files"] < 1:
             raise AssertionError("bootstrap did not create an indexed project brain")
+        if bootstrap["settings"]["embedding_provider"] != "hash":
+            raise AssertionError("bootstrap did not enable dependency-free hybrid retrieval")
 
         agent_text = Path(bootstrap["agent_file"]).read_text(encoding="utf-8")
         if "rta_brain.cli" not in agent_text or "rta_brain.mcp_server" not in agent_text:
@@ -108,6 +111,38 @@ def main() -> int:
         ).stdout
         if "# Rta-Smriti Context Pack" not in pack or "Project: sample" not in pack:
             raise AssertionError("installed CLI did not generate a context pack")
+
+        checkpoint = json.loads(
+            run(
+                [
+                    str(cli), "--db", str(db), "--json", "checkpoint", "--project", "sample",
+                    "--objective", "Continue the installed-package smoke",
+                    "--verified-evidence", "Wheel bootstrap and context pack passed",
+                    "--remaining-gaps", "Dashboard continuation endpoint",
+                    "--next-action", "Probe the authenticated endpoint",
+                    "--prohibited-repetition", "Do not repeat repository discovery",
+                ],
+                project,
+            ).stdout
+        )
+        if checkpoint["checkpoint"]["next_action"] != "Probe the authenticated endpoint":
+            raise AssertionError("installed CLI did not persist a structured checkpoint")
+
+        continuation = run(
+            [str(cli), "--db", str(db), "continue-prompt", "--project", "sample"],
+            project,
+        ).stdout
+        if "Canonical repository root" not in continuation or "Do not repeat repository discovery" not in continuation:
+            raise AssertionError("installed CLI did not generate a grounded continuation prompt")
+
+        freshness = json.loads(
+            run(
+                [str(cli), "--db", str(db), "--json", "stale-check", "--project", "sample", "--deep"],
+                project,
+            ).stdout
+        )
+        if freshness["state"] != "fresh" or freshness["details"] or not freshness["fresh_details_omitted"]:
+            raise AssertionError(f"deep freshness output was not compact and fresh: {freshness}")
 
         mcp = json.loads(
             run(
@@ -154,6 +189,10 @@ def main() -> int:
                 raise AssertionError("installed dashboard did not expose a working CLI command bridge")
             if dashboard_health["shell"] != shell_kind:
                 raise AssertionError("installed dashboard reported the wrong command shell")
+            query = urlencode({"db_path": str(db), "project": "sample"})
+            dashboard_prompt = request_json(base_url + "/api/continuation-prompt?" + query, token)
+            if "Probe the authenticated endpoint" not in dashboard_prompt["prompt"]:
+                raise AssertionError("installed dashboard did not expose the saved continuation checkpoint")
             try:
                 request_json(base_url + "/api/health")
             except urllib.error.HTTPError as exc:
@@ -169,7 +208,7 @@ def main() -> int:
                 dashboard.kill()
                 dashboard.wait(timeout=5)
 
-        print(json.dumps({"status": "ok", "checks": 10}, sort_keys=True))
+        print(json.dumps({"status": "ok", "checks": 15}, sort_keys=True))
     return 0
 
 

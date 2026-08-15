@@ -2269,15 +2269,113 @@ textarea:focus {
   min-height: 30px;
 }
 
+.composerActions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .inspectorTabs {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
 .inspectorTabs button {
   min-width: 0;
   padding: 0 4px;
 }
+
+.rootConflictBanner {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 9px;
+  color: #fde68a;
+  border: 1px solid rgba(245, 158, 11, 0.38);
+  border-radius: 7px;
+  background: rgba(245, 158, 11, 0.1);
+  font-size: 11px;
+}
+
+.rootConflictBanner button {
+  min-height: 26px;
+  padding: 0 8px;
+  color: #fde68a;
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+  cursor: pointer;
+}
+
+.repoTree .repoClean { color: #86efac; }
+.repoTree .repoDirty,
+.repoTree .repoConflict { color: #fbbf24; }
+
+.checkpointPanel {
+  gap: 12px;
+}
+
+.checkpointPanel .sectionHeader {
+  margin: 0;
+}
+
+.checkpointPanel time {
+  color: #7890a8;
+  font-size: 10px;
+}
+
+.checkpointIdentity {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid rgba(94, 234, 212, 0.22);
+  border-radius: 7px;
+  background: rgba(20, 184, 166, 0.06);
+}
+
+.checkpointIdentity.conflict {
+  border-color: rgba(245, 158, 11, 0.42);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.checkpointIdentity span,
+.checkpointIdentity small {
+  overflow: hidden;
+  color: #8fa4b9;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.checkpointPanel textarea {
+  resize: vertical;
+}
+
+.checkpointActions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.checkpointActions button {
+  min-height: 40px;
+  cursor: pointer;
+}
+
+.provenance {
+  display: block;
+  margin-top: 7px;
+  overflow: hidden;
+  color: #94a3b8;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+
+.provenance.verified { color: #86efac; }
+.provenance.failed,
+.provenance.stale { color: #fbbf24; }
 
 .selectedNode.compact {
   grid-template-columns: 38px 1fr;

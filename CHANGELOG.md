@@ -9,7 +9,10 @@ All notable changes are documented here. The project follows semantic versioning
 - Added a parser registry with deterministic regex, optional Tree-sitter, explicit LSP command, and Python entry-point adapters.
 - Added per-project ingestion policies for parser choice, retrieval provider, semantic weight, and source-file size caps up to 16 MB.
 - Added authenticated loopback settings APIs and dashboard controls with explicit blocked-file and optional-dependency warnings.
-- Kept the defaults dependency-free, deterministic, FTS-only, and fail-closed.
+- Added canonical-root protection, Git checkout diagnostics, structured continuation checkpoints, claim provenance, compact freshness output, and generated-artifact exclusions.
+- Added a one-click new-task prompt to the dashboard and MCP/CLI continuation tools.
+- Made the recommended bootstrap dependency-free hybrid retrieval with deterministic hash embeddings; lexical-only mode remains selectable.
+- Fixed bootstrap ordering so generated agent bridge files are included in the initial index and a new brain starts fresh.
 
 ## [0.3.0-alpha] - 2026-08-15
 

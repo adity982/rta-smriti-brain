@@ -168,7 +168,13 @@ class RtaBrainNextReleaseTests(unittest.TestCase):
         self.assertIn("Hybrid retrieval", source)
         self.assertIn("Parser adapter", source)
         self.assertIn("Blocked files stay excluded", source)
+        self.assertIn("Canonical-root conflict", source)
+        self.assertIn("Copy New Task Prompt", source)
+        self.assertIn("Save Checkpoint", source)
+        self.assertIn("Local Hybrid (Recommended)", source)
         self.assertIn('"/api/settings"', console)
+        self.assertIn('"/api/checkpoint"', console)
+        self.assertIn('"/api/continuation-prompt"', console)
 
 
 if __name__ == "__main__":

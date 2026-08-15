@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .context import build_context_pack
-from .db import connect, doctor, graph, ingest_repo, ingest_thread, reflect, remember, search, stale_check
+from .context import build_context_pack, build_continuation_prompt
+from .db import connect, doctor, graph, ingest_repo, ingest_thread, reflect, remember, save_checkpoint, search, stale_check
 
 
 def tool_schema(name: str, description: str, properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
@@ -57,6 +57,17 @@ TOOLS = [
             "project": {"type": "string", "description": "Project memory bank name."},
             "confidence": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.75},
             "priority": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
+            "provenance": {
+                "type": "object",
+                "properties": {
+                    "source_path": {"type": "string"},
+                    "source_hash": {"type": "string"},
+                    "command": {"type": "string"},
+                    "timestamp": {"type": "string"},
+                    "verification_status": {"type": "string", "enum": ["unverified", "verified", "failed", "stale"]},
+                },
+                "additionalProperties": False,
+            },
         },
         ["text"],
     ),
@@ -90,8 +101,31 @@ TOOLS = [
     ),
     tool_schema(
         "brain_stale_check",
-        "Report indexed files that are fresh, changed, or missing.",
-        {"project": {"type": "string", "description": "Project memory bank name."}, "deep": {"type": "boolean", "default": False, "description": "Hash file contents instead of using the fast stat manifest."}},
+        "Compactly report freshness counts and anomalous files; fresh file rows are omitted by default.",
+        {
+            "project": {"type": "string", "description": "Project memory bank name."},
+            "deep": {"type": "boolean", "default": False, "description": "Hash file contents instead of using the fast stat manifest."},
+            "include_fresh_details": {"type": "boolean", "default": False},
+            "detail_limit": {"type": "integer", "minimum": 0, "maximum": 500, "default": 50},
+        },
+    ),
+    tool_schema(
+        "brain_checkpoint",
+        "Save a structured continuation checkpoint for the next agent task.",
+        {
+            "project": {"type": "string"},
+            "objective": {"type": "string"},
+            "verified_evidence": {"type": "string"},
+            "remaining_gaps": {"type": "string"},
+            "next_action": {"type": "string"},
+            "prohibited_repetition": {"type": "string"},
+        },
+        ["objective"],
+    ),
+    tool_schema(
+        "brain_continuation_prompt",
+        "Build a compact new-task prompt from the canonical root, Git state, freshness, and latest checkpoint.",
+        {"project": {"type": "string"}},
     ),
     tool_schema(
         "brain_reflect",
@@ -143,6 +177,7 @@ class RtaBrainMcpServer:
                 pramana=str(args.get("pramana", "smriti")),
                 confidence=float(args.get("confidence", 0.75)),
                 priority=int(args.get("priority", 5)),
+                provenance=args.get("provenance"),
             )
             return text_result(json_text(payload), payload)
         if name == "brain_ingest_repo":
@@ -155,8 +190,27 @@ class RtaBrainMcpServer:
             payload = graph(conn, project=project, limit=int(args.get("limit", 100)))
             return text_result(json_text(payload), payload)
         if name == "brain_stale_check":
-            payload = stale_check(conn, project=project, deep=bool(args.get("deep", False)))
+            payload = stale_check(
+                conn,
+                project=project,
+                deep=bool(args.get("deep", False)),
+                detail_limit=int(args.get("detail_limit", 50)),
+                include_fresh_details=bool(args.get("include_fresh_details", False)),
+            )
             return text_result(json_text(payload), payload)
+        if name == "brain_checkpoint":
+            payload = save_checkpoint(
+                conn,
+                project=project,
+                objective=str(args["objective"]),
+                verified_evidence=str(args.get("verified_evidence", "")),
+                remaining_gaps=str(args.get("remaining_gaps", "")),
+                next_action=str(args.get("next_action", "")),
+                prohibited_repetition=str(args.get("prohibited_repetition", "")),
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_continuation_prompt":
+            return text_result(build_continuation_prompt(conn, project=project))
         if name == "brain_reflect":
             payload = reflect(conn, project=project)
             return text_result(json_text(payload), payload)

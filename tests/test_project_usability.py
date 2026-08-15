@@ -62,7 +62,9 @@ class RtaBrainProjectUsabilityTests(unittest.TestCase):
             self.assertEqual(self_check_full.returncode, 0, self_check_full.stderr)
             full_health = json.loads(self_check_full.stdout)
             self.assertEqual(full_health["freshness"]["mode"], "file-hash")
+            self.assertEqual(full_health["freshness"]["state"], "fresh")
             self.assertEqual(full_health["freshness"]["changed"], 0)
+            self.assertEqual(full_health["freshness"]["added"], 0)
 
     def test_projects_list_reports_registered_projects(self):
         with tempfile.TemporaryDirectory() as tmp:

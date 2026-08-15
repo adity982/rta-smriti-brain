@@ -18,6 +18,9 @@ Rta-Smriti gives each project a memory that stays on your machine.
 
 - Indexes your repo into local SQLite: files, chunks, symbols, imports, and graph edges.
 - Stores durable memories: decisions, constraints, procedures, facts, and hypotheses.
+- Binds every project brain to one canonical root and refuses silent checkout switching.
+- Records structured checkpoints: objective, verified evidence, remaining gaps, next action, and prohibited repetition.
+- Attaches source path, hash, verification command, timestamp, and verification status to remembered claims.
 - Ingests long threads or handoff notes as explicitly unverified prior memory so useful context survives compaction without self-assigning trust.
 - Builds a focused **context pack** for the next agent task.
 - Runs a local operator console with graph, canvas, typed bases, context-pack receipts, memory ledger, freshness checks, and bootstrap flow.
@@ -39,6 +42,7 @@ Rta-Smriti combines all three into a small, inspectable project brain:
 | Memory ledger | Durable decisions, constraints, procedures, and facts |
 | Thread memory | Long sessions become searchable project evidence |
 | Context pack | A compact, copyable brief for the next agent turn |
+| Continuation checkpoint | Structured state that tells the next agent what is done, what remains, and what not to repeat |
 | Pramana model | Evidence labels so observed facts, trusted docs, inference, memory, and hypotheses are not treated equally |
 | Local operator console | Visual graph, freshness, publish checks, bootstrap, and memory reflection |
 
@@ -135,6 +139,7 @@ printed URL.
 The dashboard runs on `127.0.0.1` and includes:
 
 - **Project switcher**: every local brain, readiness, file count, memory count
+- **Canonical-root and Git identity**: bound project root, repository root, branch, HEAD, dirty-file count, and duplicate-root warnings
 - **File explorer**: browse the real indexed folder tree, preview source without exposing absolute paths, search files, and add a relevant path directly to the current task
 - **Semantic brain graph**: the active project sits at the center of stable Files, Symbols, Imports, Memories, and Evidence hubs; compact leaves reveal labels on hover, focus, or selection
 - **Graph navigation**: collapse semantic hubs, pan or zoom the workspace, use the overview minimap, and switch between Global, Local, and Task scopes
@@ -148,6 +153,7 @@ The dashboard runs on `127.0.0.1` and includes:
 - **Indexing policy**: configure the fail-closed source-size cap, parser adapter, and optional local hybrid retrieval per project
 - **References and backlinks**: inspect why a node is connected and follow its visible relationships
 - **Memory ledger**: inspect stored memories and run reflection
+- **Continue Work**: edit the structured checkpoint and copy a ready-to-use prompt for a new agent task
 - **Launch readiness**: repo files and publish checks
 - **Bootstrap flow**: create a new project brain from the UI
 - **Command palette**: copy common commands into your agent chat
@@ -201,6 +207,8 @@ search            Search memories and indexed files
 graph             Read the local entity graph
 context-pack      Build a focused task context pack
 stale-check       Check stat-manifest freshness; add --deep for SHA-256 verification
+checkpoint        Save structured continuation state for the next agent task
+continue-prompt   Build a compact new-task prompt from root, Git, freshness, and checkpoint state
 reflect           Consolidate duplicate memories and flag simple contradictions
 mcp-config        Generate an MCP host config snippet
 bootstrap-project Create a brain, index a repo, and optionally write agent instructions
@@ -227,6 +235,8 @@ Tools exposed:
 - `brain_ingest_thread`
 - `brain_repo_map`
 - `brain_stale_check`
+- `brain_checkpoint`
+- `brain_continuation_prompt`
 - `brain_reflect`
 - `brain_doctor`
 
@@ -278,18 +288,20 @@ Verified:
 - optional local hybrid retrieval
 - parser adapter registry with regex, Tree-sitter, LSP, and entry-point extension paths
 - configurable fail-closed large-file policy
+- canonical-root protection and Git checkout awareness
+- structured checkpoints, claim provenance, and compact freshness receipts
 
 Intentional design constraints:
 
 - Project brains stay in local SQLite files. There is no cloud sync or hosted account system.
 - The dashboard is loopback-only. Remote and LAN hosting are deliberately rejected.
-- Retrieval and reflection are inspectable and deterministic by default. Embeddings are not required or silently enabled, and reflection is conservative rather than a full semantic judge.
+- Retrieval and reflection are inspectable and deterministic by default. The main bootstrap flow selects the dependency-free local hash provider by default and operators can choose lexical-only or an installed Sentence Transformers model; reflection remains conservative rather than a full semantic judge.
 - Eligible source files above the 512 KB per-file cap are reported as `Blocked`. Freshness remains fail-closed until the operator changes the source or ingestion policy.
 
 Current alpha limitations:
 
 - `watch-repo` runs in the foreground. Rta-Smriti does not install an operating-system service or background daemon.
-- Hybrid retrieval is optional and off by default. The built-in hash provider is dependency-free; Sentence Transformers requires a separately installed local package and model.
+- Hybrid retrieval is dependency-free in the recommended bootstrap flow through the built-in hash provider. Sentence Transformers remains optional and requires a separately installed local package and model.
 - Regex remains the deterministic default parser. Tree-sitter requires `tree-sitter-language-pack`; LSP integration requires an explicitly configured local adapter command. Parser failures fall back to regex and are reported.
 - The first deep SHA-256 pass can still take several minutes on repositories with tens of thousands of files. Later checks reuse hashes when file size and modification time are unchanged.
 - The per-file ingestion cap is configurable up to 16 MB. Files above the selected cap remain blocked and keep freshness fail-closed.

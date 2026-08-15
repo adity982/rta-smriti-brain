@@ -47,6 +47,8 @@ class RtaBrainMcpTests(unittest.TestCase):
             self.assertIn("brain_context_pack", tool_names)
             self.assertIn("brain_remember", tool_names)
             self.assertIn("brain_stale_check", tool_names)
+            self.assertIn("brain_checkpoint", tool_names)
+            self.assertIn("brain_continuation_prompt", tool_names)
 
     def test_tool_calls_remember_search_and_context_pack(self):
         with tempfile.TemporaryDirectory() as tmp:

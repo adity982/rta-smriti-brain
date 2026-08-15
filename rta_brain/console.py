@@ -2,7 +2,6 @@ import hmac
 import ipaddress
 import json
 import mimetypes
-import os
 import secrets
 import socket
 import sqlite3
@@ -15,13 +14,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .context import build_context_pack
+from .context import build_context_pack, build_continuation_prompt
 from .db import (
-    connect, get_project_settings, graph, ingest_repo, init_schema, reflect, remember, search,
-    stale_check, update_project_settings,
+    attach_memory_provenance, connect, get_project_settings, graph, ingest_repo, init_schema,
+    latest_checkpoint, reflect, remember, save_checkpoint, search, stale_check, update_project_settings,
 )
 from .parsers import ParserRegistry
 from .project import bootstrap_project, mcp_config_payload, runtime_shell, shell_cli_command, projects_list, self_check
+from .repository import canonical_root, canonical_root_key, repository_state, trusted_git_candidates
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,10 @@ class ConsoleConfig:
 MAX_REQUEST_BYTES = 1_048_576
 MAX_TREE_ITEMS = 500
 MAX_FILE_PREVIEW_CHARS = 20_000
+
+
+def _trusted_git_candidates() -> list[Path]:
+    return trusted_git_candidates()
 
 
 def resolve_brain_db(config: ConsoleConfig, value: str | Path, must_exist: bool = True) -> Path:
@@ -87,6 +91,7 @@ def scan_brain_databases(brain_dir: Path) -> list[dict]:
             for project in payload["projects"]:
                 health = self_check(conn, project=project["name"], check_files=False)
                 project_id = int(project["id"])
+                git = repository_state(project.get("root_path"))
                 entries.append(
                     {
                         "status": "ok",
@@ -94,6 +99,8 @@ def scan_brain_databases(brain_dir: Path) -> list[dict]:
                         "db_file": db_path.name,
                         "project": project["name"],
                         "root_path": project.get("root_path"),
+                        "canonical_root": canonical_root(project["root_path"]) if project.get("root_path") else None,
+                        "git": git,
                         "created_at": project.get("created_at"),
                         "ready": bool(health["ready"]),
                         "sources": int(health["sources"]),
@@ -118,6 +125,17 @@ def scan_brain_databases(brain_dir: Path) -> list[dict]:
         finally:
             if conn is not None:
                 conn.close()
+    roots_by_project: dict[str, dict[str, str]] = {}
+    for entry in entries:
+        if entry.get("status") != "ok" or not entry.get("canonical_root"):
+            continue
+        root = str(entry["canonical_root"])
+        roots_by_project.setdefault(str(entry["project"]).casefold(), {})[canonical_root_key(root)] = root
+    for entry in entries:
+        roots = roots_by_project.get(str(entry.get("project", "")).casefold(), {})
+        entry["root_conflict"] = len(roots) > 1
+        if len(roots) > 1:
+            entry["root_conflict_roots"] = sorted(roots.values())
     return entries
 
 
@@ -136,34 +154,43 @@ def read_memories(
         row = conn.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()
         if not row:
             return {"status": "ok", "project": project, "memories": []}
-        clauses = ["project_id = ?"]
+        clauses = ["m.project_id = ?"]
         params: list = [int(row["id"])]
         if query:
-            clauses.append("LOWER(text) LIKE ?")
+            clauses.append("LOWER(m.text) LIKE ?")
             params.append(f"%{query.lower()}%")
         if memory_type:
-            clauses.append("type = ?")
+            clauses.append("m.type = ?")
             params.append(memory_type)
         if pramana:
-            clauses.append("pramana = ?")
+            clauses.append("m.pramana = ?")
             params.append(pramana)
         if status:
-            clauses.append("status = ?")
+            clauses.append("m.status = ?")
             params.append(status)
         params.append(max(1, min(int(limit), 500)))
-        rows = [
-            dict(item)
-            for item in conn.execute(
+        rows = []
+        for item in conn.execute(
                 f"""
-                SELECT id, type, pramana, text, confidence, priority, status, created_at, updated_at
-                FROM memories
+                SELECT m.id, m.type, m.pramana, m.text, m.confidence, m.priority, m.status,
+                       m.created_at, m.updated_at,
+                       mp.source_path AS provenance_source_path,
+                       mp.source_hash AS provenance_source_hash,
+                       mp.command AS provenance_command,
+                       mp.timestamp AS provenance_timestamp,
+                       mp.verification_status AS provenance_verification_status,
+                       mp.metadata_json AS provenance_metadata_json
+                FROM memories m
+                LEFT JOIN memory_provenance mp ON mp.memory_id = m.id
                 WHERE {" AND ".join(clauses)}
-                ORDER BY status = 'pinned' DESC, priority DESC, updated_at DESC, id DESC
+                ORDER BY m.status = 'pinned' DESC, m.priority DESC, m.updated_at DESC, m.id DESC
                 LIMIT ?
                 """,
                 params,
-            )
-        ]
+            ):
+            memory = dict(item)
+            attach_memory_provenance(memory)
+            rows.append(memory)
         return {"status": "ok", "project": project, "memories": rows}
     finally:
         conn.close()
@@ -366,38 +393,6 @@ def read_file_preview(db_path: str | Path, project: str, relative_path: str) -> 
         conn.close()
 
 
-def _trusted_git_candidates() -> list[Path]:
-    if os.name != "nt":
-        candidates = []
-        for value in ("/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git", "/opt/local/bin/git"):
-            candidate = Path(value)
-            if candidate.is_file():
-                candidates.append(candidate.resolve())
-        return candidates
-    roots = [
-        os.environ.get("ProgramFiles") or "C:/Program Files",
-        os.environ.get("ProgramFiles(x86)") or "C:/Program Files (x86)",
-        os.environ.get("LOCALAPPDATA"),
-    ]
-    suffixes = ["Git/cmd/git.exe", "Git/cmd/git.exe", "Programs/Git/cmd/git.exe"]
-    candidates = []
-    for raw_root, suffix in zip(roots, suffixes):
-        if not raw_root:
-            continue
-        root = Path(raw_root)
-        if not root.is_absolute():
-            continue
-        trusted_root = root.resolve()
-        candidate = (trusted_root / suffix).resolve()
-        try:
-            candidate.relative_to(trusted_root)
-        except ValueError:
-            continue
-        if candidate.is_file():
-            candidates.append(candidate)
-    return candidates
-
-
 def publish_readiness(tool_root: Path) -> dict:
     tool_root = tool_root.resolve()
     required_files = [
@@ -418,7 +413,7 @@ def publish_readiness(tool_root: Path) -> dict:
     git_clean = False
     git_note = "Not initialized as a git repository."
     try:
-        git_executable = next((str(path) for path in _trusted_git_candidates()), None)
+        git_executable = next((str(path) for path in trusted_git_candidates()), None)
         if not git_executable:
             raise FileNotFoundError("Git was not found in a trusted installation directory")
         result = subprocess.run(
@@ -656,6 +651,22 @@ def make_handler(config: ConsoleConfig):
                     finally:
                         conn.close()
                     return
+                if parsed.path == "/api/checkpoint":
+                    q = _query(self)
+                    conn = _open_db(resolve_brain_db(config, q["db_path"]))
+                    try:
+                        self._json({"status": "ok", "project": q["project"], "checkpoint": latest_checkpoint(conn, q["project"])})
+                    finally:
+                        conn.close()
+                    return
+                if parsed.path == "/api/continuation-prompt":
+                    q = _query(self)
+                    conn = _open_db(resolve_brain_db(config, q["db_path"]))
+                    try:
+                        self._json({"status": "ok", "project": q["project"], "prompt": build_continuation_prompt(conn, q["project"])})
+                    finally:
+                        conn.close()
+                    return
                 if parsed.path == "/api/mcp-config":
                     q = _query(self)
                     db_path = resolve_brain_db(config, q["db_path"])
@@ -723,6 +734,24 @@ def make_handler(config: ConsoleConfig):
                                 pramana=payload.get("pramana", "smriti"),
                                 confidence=float(payload.get("confidence", 0.75)),
                                 priority=int(payload.get("priority", 5)),
+                                provenance=payload.get("provenance"),
+                            )
+                        )
+                    finally:
+                        conn.close()
+                    return
+                if self.path == "/api/checkpoint":
+                    conn = _open_db(resolve_brain_db(config, payload["db_path"]))
+                    try:
+                        self._json(
+                            save_checkpoint(
+                                conn,
+                                project=payload["project"],
+                                objective=payload["objective"],
+                                verified_evidence=payload.get("verified_evidence", ""),
+                                remaining_gaps=payload.get("remaining_gaps", ""),
+                                next_action=payload.get("next_action", ""),
+                                prohibited_repetition=payload.get("prohibited_repetition", ""),
                             )
                         )
                     finally:
@@ -768,6 +797,7 @@ def make_handler(config: ConsoleConfig):
                                 config.brain_dir,
                                 bool(payload.get("write_agents", False)),
                                 config.tool_root,
+                                embedding_provider=payload.get("embedding_provider", "hash"),
                             )
                         )
                     finally:

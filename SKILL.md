@@ -73,6 +73,8 @@ Available MCP tools:
 - `brain_ingest_thread`
 - `brain_repo_map`
 - `brain_stale_check`
+- `brain_checkpoint`
+- `brain_continuation_prompt`
 - `brain_reflect`
 - `brain_doctor`
 
@@ -84,7 +86,7 @@ Generate a context pack:
 rta-brain.cmd context-pack "<task>" --project <project-name> --db <brain.sqlite>
 ```
 
-Read the freshness line. If it says stale, re-read changed or missing files before relying on memory-derived context.
+Verify the canonical root and Git identity at the top of the pack. Read the freshness line; if it says stale, re-read changed or missing files before relying on memory-derived context.
 
 ## Search
 
@@ -101,6 +103,8 @@ Use one atomic memory per command:
 ```powershell
 rta-brain.cmd remember "<durable fact>" --type decision --pramana sabda --project <project-name> --priority 8 --db <brain.sqlite>
 ```
+
+For a verified claim, attach `--source-path`, `--source-hash`, `--verification-command`, and `--verification-status verified`.
 
 Pramana policy:
 
@@ -131,6 +135,16 @@ Then run reflection:
 ```powershell
 rta-brain.cmd reflect --project <project-name> --json --db <brain.sqlite>
 ```
+
+## End A Work Session
+
+Save a structured checkpoint before handing work to another task or agent:
+
+```powershell
+rta-brain.cmd checkpoint --project <project-name> --db <brain.sqlite> --objective "<objective>" --verified-evidence "<verified evidence>" --remaining-gaps "<remaining gaps>" --next-action "<next action>" --prohibited-repetition "<do not repeat>"
+```
+
+Use `continue-prompt` or the dashboard's **Copy New Task Prompt** action for the next task.
 
 ## Do Not
 
