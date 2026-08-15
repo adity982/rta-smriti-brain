@@ -183,6 +183,9 @@ class RtaBrainConsoleTests(unittest.TestCase):
         self.assertFalse(is_authorized_request(Handler({}), config))
         self.assertFalse(is_authorized_request(Handler({"X-Rta-Smriti-Token": "wrong-token"}), config))
         self.assertTrue(is_authorized_request(Handler({"X-Rta-Smriti-Token": "correct-token"}), config))
+        self.assertFalse(is_authorized_request(Handler({"Cookie": "rta_smriti_cap=wrong-token"}), config))
+        self.assertTrue(is_authorized_request(Handler({"Cookie": "theme=dark; rta_smriti_cap=correct-token"}), config))
+        self.assertFalse(is_authorized_request(Handler({"X-Rta-Smriti-Token": "wrong-token", "Cookie": "rta_smriti_cap=correct-token"}), config))
 
     def test_console_confines_databases_and_host_to_loopback(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -10,6 +10,7 @@ import sys
 import threading
 import webbrowser
 from dataclasses import dataclass, field
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -36,6 +37,7 @@ class ConsoleConfig:
 MAX_REQUEST_BYTES = 1_048_576
 MAX_TREE_ITEMS = 500
 MAX_FILE_PREVIEW_CHARS = 20_000
+CAPABILITY_COOKIE = "rta_smriti_cap"
 
 
 def _trusted_git_candidates() -> list[Path]:
@@ -522,8 +524,29 @@ def is_local_request(handler: BaseHTTPRequestHandler) -> bool:
         return client == "localhost"
 
 
-def is_authorized_request(handler: BaseHTTPRequestHandler, config: ConsoleConfig) -> bool:
+def _request_capability(handler: BaseHTTPRequestHandler) -> str:
     supplied = handler.headers.get("X-Rta-Smriti-Token") or ""
+    if supplied:
+        return supplied
+    raw_cookie = handler.headers.get("Cookie") or ""
+    if not raw_cookie:
+        return ""
+    try:
+        cookies = SimpleCookie()
+        cookies.load(raw_cookie)
+        morsel = cookies.get(CAPABILITY_COOKIE)
+        return morsel.value if morsel else ""
+    except Exception:
+        return ""
+
+
+def is_authorized_header_request(handler: BaseHTTPRequestHandler, config: ConsoleConfig) -> bool:
+    supplied = handler.headers.get("X-Rta-Smriti-Token") or ""
+    return bool(supplied) and hmac.compare_digest(supplied, config.capability_token)
+
+
+def is_authorized_request(handler: BaseHTTPRequestHandler, config: ConsoleConfig) -> bool:
+    supplied = _request_capability(handler)
     return bool(supplied) and hmac.compare_digest(supplied, config.capability_token)
 
 
@@ -554,6 +577,8 @@ def make_handler(config: ConsoleConfig):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self._security_headers()
+            if status < 400 and is_local_request(self) and is_local_origin(self) and is_authorized_header_request(self, config):
+                self.send_header("Set-Cookie", f"{CAPABILITY_COOKIE}={config.capability_token}; HttpOnly; SameSite=Strict; Path=/")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
