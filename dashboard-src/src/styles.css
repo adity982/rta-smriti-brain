@@ -1490,6 +1490,58 @@ textarea:focus {
   cursor: pointer;
 }
 
+.freshnessAction:disabled {
+  opacity: 0.62;
+  cursor: wait;
+}
+
+.releaseSummary {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.releaseSummary.ready {
+  color: #5eead4;
+  border-color: rgba(94, 234, 212, 0.24);
+  background: rgba(20, 184, 166, 0.07);
+}
+
+.releaseSummary.open {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.24);
+  background: rgba(245, 158, 11, 0.07);
+}
+
+.releaseSummary strong,
+.releaseSummary span {
+  display: block;
+}
+
+.releaseSummary strong {
+  overflow: hidden;
+  color: #eef7ff;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.releaseSummary span {
+  margin-top: 2px;
+  color: #8298ad;
+  font-size: 10px;
+}
+
+.releaseSummary em {
+  font-size: 15px;
+  font-style: normal;
+  font-weight: 850;
+}
+
 .memoryList,
 .ledgerList,
 .launchChecks {
@@ -1621,6 +1673,19 @@ textarea:focus {
   display: grid;
   grid-template-columns: 20px 1fr;
   gap: 8px;
+}
+
+.launchChecks article.ready > svg {
+  color: #5eead4;
+}
+
+.launchChecks article.open {
+  border-color: rgba(251, 191, 36, 0.26);
+  background: rgba(245, 158, 11, 0.06);
+}
+
+.launchChecks article.open > svg {
+  color: #fbbf24;
 }
 
 .launchChecks strong,

@@ -439,6 +439,7 @@ function App() {
   const [receipts, setReceipts] = useState([]);
   const [checkpoint, setCheckpoint] = useState(null);
   const [isSavingCheckpoint, setIsSavingCheckpoint] = useState(false);
+  const [isRefreshingPublish, setIsRefreshingPublish] = useState(false);
   const [referenceHistory, setReferenceHistory] = useState([]);
 
   const selectedParams = useMemo(() => {
@@ -478,6 +479,21 @@ function App() {
       setMessage(`Dashboard refresh failed: ${error.message}`);
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function refreshPublishReadiness() {
+    if (isRefreshingPublish) return;
+    setIsRefreshingPublish(true);
+    try {
+      const payload = await api("/api/publish-readiness");
+      setPublish(payload);
+      const ready = payload.checks?.filter((check) => check.ok).length || 0;
+      setMessage(`Rta-Smriti release checks refreshed: ${ready}/${payload.checks?.length || 0} ready.`);
+    } catch (error) {
+      setMessage(`Rta-Smriti release checks failed: ${error.message}`);
+    } finally {
+      setIsRefreshingPublish(false);
     }
   }
 
@@ -759,6 +775,11 @@ function App() {
     setInspectorOpen(true);
   }
 
+  function showPublishReadiness() {
+    showDrawer("publish");
+    refreshPublishReadiness();
+  }
+
   function selectPrimaryNode(node, drawer = null) {
     setReferenceHistory([]);
     setSelectedNode(node);
@@ -850,7 +871,7 @@ function App() {
           <button className="ghostButton" onClick={() => showDrawer("bootstrap")}>
             <Plus size={16} /> New Brain
           </button>
-          <button className="ghostButton" onClick={() => showDrawer("publish")}>
+          <button className="ghostButton" onClick={showPublishReadiness}>
             <GitPullRequest size={16} /> Publish
           </button>
           <button className="ghostButton commandButton" onClick={() => setCommandOpen(true)}>
@@ -931,7 +952,7 @@ function App() {
               <button className={inspectorOpen && activeDrawer === "memory" ? "active" : ""} onClick={() => showDrawer("memory")}><Database size={17} /><span>Memory Ledger</span></button>
               <button className={inspectorOpen && activeDrawer === "checkpoint" ? "active" : ""} onClick={() => showDrawer("checkpoint")}><Route size={17} /><span>Continue Work</span></button>
               <button className={inspectorOpen && activeDrawer === "receipts" ? "active" : ""} onClick={() => showDrawer("receipts")}><Sparkles size={17} /><span>Context Packs</span><em>{receipts.length}</em></button>
-              <button className={inspectorOpen && activeDrawer === "publish" ? "active" : ""} onClick={() => showDrawer("publish")}><Rocket size={17} /><span>Launch Readiness</span><em>{publishReady}/{publishTotal}</em></button>
+              <button title="Check this Rta-Smriti checkout for GitHub release requirements" className={inspectorOpen && activeDrawer === "publish" ? "active" : ""} onClick={showPublishReadiness}><Rocket size={17} /><span>Rta-Smriti Release</span><em>{publishReady}/{publishTotal}</em></button>
               <button className={settingsOpen ? "active" : ""} onClick={() => { setViewMode("graph"); setSettingsOpen(true); }}><SlidersHorizontal size={17} /><span>Settings</span></button>
             </div>
           </nav>
@@ -1074,8 +1095,8 @@ function App() {
             <button className={activeDrawer === "receipts" ? "active" : ""} onClick={() => showDrawer("receipts")}>
               <Clipboard size={15} /> Packs
             </button>
-            <button className={activeDrawer === "publish" ? "active" : ""} onClick={() => showDrawer("publish")}>
-              <Rocket size={15} /> Launch
+            <button className={activeDrawer === "publish" ? "active" : ""} onClick={showPublishReadiness}>
+              <Rocket size={15} /> Release
             </button>
           </div>
 
@@ -1086,8 +1107,6 @@ function App() {
               project={selectedProject}
               freshness={freshness}
               packText={packText}
-              publishReady={publishReady}
-              publishTotal={publishTotal}
               onCopy={() => copyText(packText || command)}
               onBootstrap={() => showDrawer("bootstrap")}
               onRefresh={refreshIndex}
@@ -1115,7 +1134,7 @@ function App() {
             />
           )}
           {activeDrawer === "receipts" && <ReceiptsPanel receipts={receipts} onCopy={copyText} onClear={() => setReceipts([])} />}
-          {activeDrawer === "publish" && <PublishPanel publish={publish} />}
+          {activeDrawer === "publish" && <PublishPanel publish={publish} onRefresh={refreshPublishReadiness} isRefreshing={isRefreshingPublish} />}
           {activeDrawer === "bootstrap" && <BootstrapPanel onDone={loadHealth} shellKind={shellKind} />}
         </aside>
       </div>
@@ -1863,7 +1882,7 @@ function TaskComposer({ task, setTask, project, freshness, command, packText, on
   );
 }
 
-function EvidenceInspector({ node, memories, project, freshness, packText, publishReady, publishTotal, onCopy, onBootstrap, onRefresh, isRefreshing }) {
+function EvidenceInspector({ node, memories, project, freshness, packText, onCopy, onBootstrap, onRefresh, isRefreshing }) {
   return (
     <div className="drawerContent">
       <h2>Evidence Inspector</h2>
@@ -1894,10 +1913,7 @@ function EvidenceInspector({ node, memories, project, freshness, packText, publi
       <RepoTree project={project} />
       <section className="publishMini">
         <div>
-          <span>Publish Readiness</span>
-          <strong>
-            {publishReady}/{publishTotal || "?"}
-          </strong>
+          <span>Project Actions</span>
         </div>
         <button onClick={onCopy}>
           <Clipboard size={16} /> {packText ? "Copy Context" : "Copy Command"}
@@ -2120,13 +2136,27 @@ function ReceiptsPanel({ receipts, onCopy, onClear }) {
   );
 }
 
-function PublishPanel({ publish }) {
+function PublishPanel({ publish, onRefresh, isRefreshing }) {
+  const checks = publish?.checks || [];
+  const readyCount = checks.filter((check) => check.ok).length;
+  const checkout = String(publish?.tool_root || "rta-smriti-brain").split(/[\\/]/).filter(Boolean).at(-1);
   return (
-    <div className="drawerContent">
-      <h2>Launch Readiness</h2>
+    <div className="drawerContent releasePanel">
+      <div className="sectionHeader">
+        <h2>Rta-Smriti Release</h2>
+        <button className="freshnessAction" onClick={onRefresh} disabled={isRefreshing}>
+          <RefreshCw className={isRefreshing ? "spin" : ""} size={13} /> {isRefreshing ? "Checking" : "Refresh"}
+        </button>
+      </div>
+      <p className="drawerIntro">GitHub release requirements for this Rta-Smriti source checkout. The selected project brain is not assessed here.</p>
+      <section className={publish?.ready ? "releaseSummary ready" : "releaseSummary open"}>
+        <Rocket size={22} />
+        <div><strong>{checkout}</strong><span>Local source checkout</span></div>
+        <em>{readyCount}/{checks.length || "?"}</em>
+      </section>
       <div className="launchChecks">
-        {(publish?.checks || []).map((check) => (
-          <article key={check.name}>
+        {checks.map((check) => (
+          <article key={check.name} className={check.ok ? "ready" : "open"}>
             {check.ok ? <CheckCircle2 size={16} /> : <CircleDot size={16} />}
             <div>
               <strong>{check.name}</strong>
@@ -2214,7 +2244,7 @@ function CommandPalette({ command, cliCommand, shellKind, brainDir, onClose, onC
   const commands = [
     ["Copy context-pack command", command],
     ["Open dashboard", `${cliCommand} dashboard --brain-dir ${defaultBrainDir}`],
-    ["Check publish readiness", `${cliCommand} publish-readiness --json`],
+    ["Check Rta-Smriti release", `${cliCommand} publish-readiness --json`],
   ];
   return (
     <div className="paletteBackdrop" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={onClose}>
