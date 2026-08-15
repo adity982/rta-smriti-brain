@@ -2096,8 +2096,8 @@ textarea:focus {
 
 .canvasBoard {
   background-image:
-    linear-gradient(rgba(148, 163, 184, 0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, 0.045) 1px, transparent 1px);
+    linear-gradient(rgba(148, 163, 184, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.035) 1px, transparent 1px);
   background-size: 24px 24px;
 }
 
@@ -2129,71 +2129,255 @@ textarea:focus {
   text-transform: uppercase;
 }
 
+.canvasHeader span em {
+  padding-left: 8px;
+  color: #698096;
+  border-left: 1px solid rgba(148, 163, 184, 0.16);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 750;
+}
+
 .canvasHeader button {
   min-height: 32px;
   padding: 0 10px;
+  color: #a9bed1;
+  border-color: rgba(148, 163, 184, 0.15);
+  background: rgba(255, 255, 255, 0.035);
   cursor: pointer;
+}
+
+.canvasHeader button:hover {
+  color: #e8f4ff;
+  border-color: rgba(56, 189, 248, 0.32);
+  background: rgba(56, 189, 248, 0.07);
+}
+
+.canvasField {
+  position: absolute;
+  inset: 53px 0 0;
+  overflow: hidden;
 }
 
 .canvasThread {
   position: absolute;
-  inset: 46px 0 0;
+  inset: 0;
   z-index: 1;
   width: 100%;
-  height: calc(100% - 46px);
+  height: 100%;
+  overflow: visible;
   pointer-events: none;
 }
 
-.canvasThread line {
-  stroke: rgba(94, 234, 212, 0.18);
-  stroke-width: 1.4;
+.canvasThread marker path {
+  fill: #5b7892;
+}
+
+.canvasEdge {
+  color: var(--edge-color);
+  transition: opacity 160ms ease;
+}
+
+.canvasEdge.muted {
+  opacity: 0.07;
+}
+
+.canvasLink,
+.canvasLinkHalo {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.canvasLinkHalo {
+  stroke: var(--edge-color);
+  stroke-width: 5;
+  opacity: 0.055;
+}
+
+.canvasLink {
+  stroke: color-mix(in srgb, var(--edge-color) 52%, #5a7188);
+  stroke-width: 1.1;
+  stroke-linecap: round;
+  stroke-dasharray: 1 4;
+  opacity: 0.58;
+}
+
+.canvasEdge.active .canvasLink {
+  stroke-dasharray: none;
+}
+
+.canvasField.hasTrace .canvasEdge.active .canvasLinkHalo {
+  opacity: 0.16;
+}
+
+.canvasField.hasTrace .canvasEdge.active .canvasLink {
+  stroke: var(--edge-color);
+  stroke-width: 1.6;
+  opacity: 0.96;
 }
 
 .canvasCard {
   position: absolute;
   z-index: 2;
-  display: grid;
-  grid-template-columns: 9px minmax(0, 1fr);
-  width: clamp(118px, 16%, 168px);
-  min-height: 68px;
-  padding: 10px;
-  border: 1px solid;
-  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: clamp(92px, 13%, 122px);
+  min-height: 46px;
+  padding: 6px 7px;
+  border: 1px solid color-mix(in srgb, var(--node-color) 42%, #24374a);
+  border-radius: 7px;
   color: #e8f3ff;
-  background: rgba(12, 24, 37, 0.96);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+  background: rgba(10, 21, 33, 0.96);
+  box-shadow: 0 7px 18px rgba(0, 0, 0, 0.22);
   text-align: left;
   touch-action: none;
   user-select: none;
   cursor: grab;
+  transition: opacity 140ms ease, border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
 }
 
 .canvasCard:active {
   cursor: grabbing;
 }
 
-.canvasCard i {
-  width: 7px;
-  height: 7px;
-  margin-top: 4px;
-  border-radius: 999px;
+.canvasNodeIcon {
+  display: grid;
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  color: var(--node-color);
+  border: 1px solid color-mix(in srgb, var(--node-color) 42%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--node-color) 8%, #0b1622);
 }
 
-.canvasCard strong,
-.canvasCard span {
+.canvasNodeCopy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.canvasNodeCopy strong,
+.canvasNodeCopy small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.canvasCard strong {
-  font-size: 12px;
+.canvasNodeCopy strong {
+  font-size: 10px;
+  line-height: 1.2;
 }
 
-.canvasCard span {
-  grid-column: 2;
+.canvasNodeCopy small {
   color: #8398ad;
-  font-size: 10px;
+  font-size: 8px;
+  line-height: 1.2;
+}
+
+.canvasCard > em {
+  position: absolute;
+  top: -6px;
+  right: -5px;
+  display: grid;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  place-items: center;
+  color: #9ab0c5;
+  border: 1px solid rgba(148, 163, 184, 0.23);
+  border-radius: 999px;
+  background: #0a1420;
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.canvasPort {
+  position: absolute;
+  top: calc(50% - 3px);
+  width: 6px;
+  height: 6px;
+  border: 1px solid color-mix(in srgb, var(--node-color) 62%, #7890a8);
+  border-radius: 999px;
+  background: #07101a;
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+
+.canvasPort.incoming {
+  left: -4px;
+}
+
+.canvasPort.outgoing {
+  right: -4px;
+}
+
+.canvasCard.traced,
+.canvasCard.pinned {
+  z-index: 3;
+  border-color: var(--node-color);
+  background: color-mix(in srgb, var(--node-color) 7%, #0a1521);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--node-color) 14%, transparent), 0 10px 24px rgba(0, 0, 0, 0.3);
+}
+
+.canvasCard.traced .canvasPort,
+.canvasCard.related .canvasPort {
+  background: var(--node-color);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--node-color) 55%, transparent);
+}
+
+.canvasField.hasTrace .canvasCard:not(.traced):not(.related) {
+  opacity: 0.38;
+}
+
+.canvasCard.related {
+  border-color: color-mix(in srgb, var(--node-color) 72%, #4b6278);
+}
+
+.canvasCard:focus-visible {
+  outline: 2px solid #7dd3fc;
+  outline-offset: 3px;
+}
+
+.canvasTraceStatus {
+  position: absolute;
+  bottom: 10px;
+  left: 12px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: calc(100% - 24px);
+  min-height: 27px;
+  padding: 0 9px;
+  color: #7890a8;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 7px;
+  background: rgba(5, 12, 21, 0.82);
+  backdrop-filter: blur(8px);
+  font-size: 9px;
+  pointer-events: none;
+}
+
+.canvasTraceStatus i {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  box-shadow: 0 0 7px currentColor;
+}
+
+.canvasTraceStatus strong {
+  overflow: hidden;
+  max-width: 180px;
+  color: #c6d7e7;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvasTraceStatus span {
+  white-space: nowrap;
 }
 
 .basesView {

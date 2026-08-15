@@ -44,7 +44,7 @@ import "./styles.css";
 
 const DEFAULT_TASK = "Prepare this project for a focused coding task";
 const LEGACY_RECEIPT_STORAGE_KEY = "rta-smriti.context-pack-receipts.v1";
-const CANVAS_STORAGE_KEY = "rta-smriti.canvas-layout.v1";
+const CANVAS_STORAGE_KEY = "rta-smriti.canvas-layout.v2";
 const AGENT_STORAGE_KEY = "rta-smriti.target-agent.v1";
 const API_TOKEN_SESSION_KEY = "rta-smriti.api-token.v1";
 
@@ -72,6 +72,35 @@ const graphPalette = {
   data: "#94a3b8",
   artifact: "#f472b6",
 };
+
+const canvasNodeIcons = {
+  file: FileCode2,
+  memory: MemoryStick,
+  docs: FileText,
+  config: SlidersHorizontal,
+  test: ShieldCheck,
+  data: Database,
+  artifact: Sparkles,
+};
+
+const canvasDefaultSlots = [
+  { x: 4, y: 9 }, { x: 23, y: 6 }, { x: 42, y: 10 }, { x: 61, y: 6 }, { x: 80, y: 10 },
+  { x: 9, y: 35 }, { x: 28, y: 31 }, { x: 47, y: 36 }, { x: 66, y: 31 }, { x: 84, y: 35 },
+  { x: 4, y: 63 }, { x: 20, y: 68 }, { x: 36, y: 62 }, { x: 52, y: 68 }, { x: 68, y: 62 }, { x: 84, y: 68 },
+];
+
+function canvasCurvePath(source, target) {
+  const start = { x: source.x + 6.5, y: source.y + 4.5 };
+  const end = { x: target.x + 6.5, y: target.y + 4.5 };
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    const control = Math.max(5, Math.abs(dx) * 0.46) * Math.sign(dx || 1);
+    return `M ${start.x.toFixed(2)} ${start.y.toFixed(2)} C ${(start.x + control).toFixed(2)} ${start.y.toFixed(2)}, ${(end.x - control).toFixed(2)} ${end.y.toFixed(2)}, ${end.x.toFixed(2)} ${end.y.toFixed(2)}`;
+  }
+  const control = Math.max(5, Math.abs(dy) * 0.46) * Math.sign(dy || 1);
+  return `M ${start.x.toFixed(2)} ${start.y.toFixed(2)} C ${start.x.toFixed(2)} ${(start.y + control).toFixed(2)}, ${end.x.toFixed(2)} ${(end.y - control).toFixed(2)}, ${end.x.toFixed(2)} ${end.y.toFixed(2)}`;
+}
 
 const allGraphTypes = Object.keys(graphPalette);
 const graphModes = ["global", "local", "task"];
@@ -1562,33 +1591,64 @@ function FileExplorer({ tree, preview, loading, freshness, onOpen, onNavigate, o
 function CanvasBoard({ project, graph, onSelect, onExport }) {
   const storageKey = `${CANVAS_STORAGE_KEY}:${project?.project || "default"}`;
   const [positions, setPositions] = useState(() => readLocalJson(storageKey, {}));
-  const boardRef = useRef(null);
+  const [focusedNodeId, setFocusedNodeId] = useState("");
+  const [hoveredNodeId, setHoveredNodeId] = useState("");
+  const fieldRef = useRef(null);
+  const draggedNodeIdRef = useRef("");
+  const cards = useMemo(() => graph.nodes.slice(0, 16), [graph.nodes]);
+  const cardById = useMemo(() => new Map(cards.map((node, index) => [node.id, { node, index }])), [cards]);
+  const visibleEdges = useMemo(
+    () => graph.edges.filter((edge) => cardById.has(edge.source) && cardById.has(edge.target)),
+    [graph.edges, cardById],
+  );
+  const traceNodeId = hoveredNodeId || focusedNodeId;
+  const relatedNodeIds = useMemo(() => {
+    const ids = new Set();
+    if (!traceNodeId) return ids;
+    visibleEdges.forEach((edge) => {
+      if (edge.source === traceNodeId) ids.add(edge.target);
+      if (edge.target === traceNodeId) ids.add(edge.source);
+    });
+    return ids;
+  }, [traceNodeId, visibleEdges]);
+  const tracedNode = cardById.get(traceNodeId)?.node;
+  const tracedLinks = visibleEdges.filter((edge) => edge.source === traceNodeId || edge.target === traceNodeId).length;
 
   useEffect(() => {
     setPositions(readLocalJson(storageKey, {}));
+    setFocusedNodeId("");
+    setHoveredNodeId("");
   }, [storageKey]);
 
+  useEffect(() => {
+    setFocusedNodeId("");
+    setHoveredNodeId("");
+  }, [cards]);
+
   function positionFor(node, index) {
-    return positions[node.id] || { x: 7 + (index % 4) * 23, y: 10 + Math.floor(index / 4) * 23 };
+    return positions[node.id] || canvasDefaultSlots[index % canvasDefaultSlots.length];
   }
 
   function beginDrag(event, node, index) {
-    const board = boardRef.current;
-    if (!board) return;
+    const field = fieldRef.current;
+    if (!field) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
     const start = positionFor(node, index);
-    const rect = board.getBoundingClientRect();
+    const rect = field.getBoundingClientRect();
     const origin = { x: event.clientX, y: event.clientY };
+    let moved = false;
     const move = (moveEvent) => {
+      if (Math.hypot(moveEvent.clientX - origin.x, moveEvent.clientY - origin.y) > 4) moved = true;
       const next = {
-        x: Math.max(1, Math.min(82, start.x + ((moveEvent.clientX - origin.x) / rect.width) * 100)),
-        y: Math.max(2, Math.min(84, start.y + ((moveEvent.clientY - origin.y) / rect.height) * 100)),
+        x: Math.max(1, Math.min(86, start.x + ((moveEvent.clientX - origin.x) / rect.width) * 100)),
+        y: Math.max(2, Math.min(86, start.y + ((moveEvent.clientY - origin.y) / rect.height) * 100)),
       };
       setPositions((current) => ({ ...current, [node.id]: next }));
     };
     const end = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", end);
+      draggedNodeIdRef.current = moved ? node.id : "";
       setPositions((current) => {
         writeLocalJson(storageKey, current);
         return current;
@@ -1600,6 +1660,8 @@ function CanvasBoard({ project, graph, onSelect, onExport }) {
 
   function resetLayout() {
     setPositions({});
+    setFocusedNodeId("");
+    setHoveredNodeId("");
     try {
       localStorage.removeItem(storageKey);
     } catch {
@@ -1607,37 +1669,82 @@ function CanvasBoard({ project, graph, onSelect, onExport }) {
     }
   }
 
-  const cards = graph.nodes.slice(0, 16);
   return (
-    <section ref={boardRef} className="canvasBoard" aria-label="Spatial project canvas">
+    <section className="canvasBoard" aria-label="Spatial project canvas">
       <div className="canvasHeader">
-        <span><MapIcon size={16} /> Spatial Canvas</span>
+        <span><MapIcon size={16} /> Spatial Canvas <em>{cards.length} nodes / {visibleEdges.length} links</em></span>
         <div className="canvasActions">
           <button onClick={resetLayout}><RotateCcw size={15} /> Reset Layout</button>
           <button onClick={() => onExport(`${project?.project || "rta-smriti"}-canvas.json`, { project: project?.project, positions, nodes: cards })}><Download size={15} /> Export JSON</button>
         </div>
       </div>
-      <svg className="canvasThread" aria-hidden="true">
-        {graph.edges.map((edge) => {
-          const sourceIndex = cards.findIndex((node) => node.id === edge.source);
-          const targetIndex = cards.findIndex((node) => node.id === edge.target);
-          if (sourceIndex < 0 || targetIndex < 0) return null;
-          const source = positionFor(cards[sourceIndex], sourceIndex);
-          const target = positionFor(cards[targetIndex], targetIndex);
-          return <line key={edge.id} x1={`${source.x + 8}%`} y1={`${source.y + 6}%`} x2={`${target.x + 8}%`} y2={`${target.y + 6}%`} />;
+      <div ref={fieldRef} className={traceNodeId ? "canvasField hasTrace" : "canvasField"}>
+        <svg className="canvasThread" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <marker id="canvas-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+              <path d="M 0 1 L 7 4 L 0 7 z" />
+            </marker>
+          </defs>
+          {visibleEdges.map((edge) => {
+            const sourceEntry = cardById.get(edge.source);
+            const targetEntry = cardById.get(edge.target);
+            const source = positionFor(sourceEntry.node, sourceEntry.index);
+            const target = positionFor(targetEntry.node, targetEntry.index);
+            const active = !traceNodeId || edge.source === traceNodeId || edge.target === traceNodeId;
+            const color = sourceEntry.node.color || graphPalette[sourceEntry.node.type] || graphPalette.data;
+            const path = canvasCurvePath(source, target);
+            return (
+              <g key={edge.id} className={active ? "canvasEdge active" : "canvasEdge muted"} style={{ "--edge-color": color }}>
+                <title>{sourceEntry.node.label} {edge.label || "connects to"} {targetEntry.node.label}</title>
+                <path className="canvasLinkHalo" d={path} />
+                <path className="canvasLink" d={path} markerEnd="url(#canvas-arrow)" />
+              </g>
+            );
+          })}
+        </svg>
+        {cards.map((node, index) => {
+          const position = positionFor(node, index);
+          const NodeIcon = canvasNodeIcons[node.type] || CircleDot;
+          const isTraced = traceNodeId === node.id;
+          const isRelated = relatedNodeIds.has(node.id);
+          const linkCount = visibleEdges.filter((edge) => edge.source === node.id || edge.target === node.id).length;
+          return (
+            <button
+              key={node.id}
+              className={`canvasCard${isTraced ? " traced" : ""}${isRelated ? " related" : ""}${focusedNodeId === node.id ? " pinned" : ""}`}
+              style={{ left: `${position.x}%`, top: `${position.y}%`, "--node-color": node.color || graphPalette[node.type] || graphPalette.data }}
+              onPointerDown={(event) => beginDrag(event, node, index)}
+              onPointerEnter={() => setHoveredNodeId(node.id)}
+              onPointerLeave={() => setHoveredNodeId("")}
+              onFocus={() => setHoveredNodeId(node.id)}
+              onBlur={() => setHoveredNodeId("")}
+              onClick={() => {
+                if (draggedNodeIdRef.current === node.id) {
+                  draggedNodeIdRef.current = "";
+                  return;
+                }
+                setFocusedNodeId((current) => current === node.id ? "" : node.id);
+              }}
+              onDoubleClick={() => onSelect(node)}
+              aria-pressed={focusedNodeId === node.id}
+              aria-label={`${node.label}, ${node.meta}, ${linkCount} direct links`}
+              title="Drag to arrange. Click to trace links. Double-click to inspect."
+            >
+              <span className="canvasPort incoming" aria-hidden="true" />
+              <span className="canvasNodeIcon" aria-hidden="true"><NodeIcon size={14} /></span>
+              <span className="canvasNodeCopy"><strong>{node.label}</strong><small>{node.meta}</small></span>
+              {linkCount > 0 && <em>{linkCount}</em>}
+              <span className="canvasPort outgoing" aria-hidden="true" />
+            </button>
+          );
         })}
-      </svg>
-      {cards.map((node, index) => {
-        const position = positionFor(node, index);
-        return (
-          <button key={node.id} className="canvasCard" style={{ left: `${position.x}%`, top: `${position.y}%`, borderColor: node.color || graphPalette[node.type] }} onPointerDown={(event) => beginDrag(event, node, index)} onDoubleClick={() => onSelect(node)} title="Drag to arrange. Double-click to inspect.">
-            <i style={{ background: graphPalette[node.type] }} />
-            <strong>{node.label}</strong>
-            <span>{node.meta}</span>
-          </button>
-        );
-      })}
-      {!cards.length && <div className="emptyGraph"><MapIcon size={24} /><strong>No nodes to arrange</strong></div>}
+        <div className="canvasTraceStatus" aria-live="polite">
+          <i style={{ background: tracedNode?.color || graphPalette[tracedNode?.type] || graphPalette.data }} />
+          <strong>{tracedNode?.label || project?.project || "Project canvas"}</strong>
+          <span>{tracedNode ? `${tracedLinks} direct links` : `${cards.length} visible nodes`}</span>
+        </div>
+        {!cards.length && <div className="emptyGraph"><MapIcon size={24} /><strong>No nodes to arrange</strong></div>}
+      </div>
     </section>
   );
 }
