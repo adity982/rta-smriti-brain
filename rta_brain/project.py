@@ -47,12 +47,12 @@ def shell_quote(value: str | Path, shell: str | None = None) -> str:
     return _ps_quote(value) if (shell or runtime_shell()) == "powershell" else shlex.quote(str(value))
 
 
-def shell_cli_command(tool_root: Path) -> str:
-    return _shell_command(_launch_parts(tool_root, "rta-brain.py", "rta_brain.cli"))
+def shell_cli_command(tool_root: Path, shell: str | None = None) -> str:
+    return _shell_command(_launch_parts(tool_root, "rta-brain.py", "rta_brain.cli"), shell)
 
 
-def shell_mcp_command(tool_root: Path) -> str:
-    return _shell_command(_launch_parts(tool_root, "rta-brain-mcp.py", "rta_brain.mcp_server"))
+def shell_mcp_command(tool_root: Path, shell: str | None = None) -> str:
+    return _shell_command(_launch_parts(tool_root, "rta-brain-mcp.py", "rta_brain.mcp_server"), shell)
 
 
 def _mcp_launch(tool_root: Path) -> tuple[str, list[str]]:
@@ -91,11 +91,11 @@ def _atomic_write_text(target: Path, text: str) -> None:
         temp_path.unlink(missing_ok=True)
 
 
-def agent_file_text(tool_root: Path, db_path: Path, project: str) -> str:
-    shell = runtime_shell()
+def agent_file_text(tool_root: Path, db_path: Path, project: str, shell: str | None = None) -> str:
+    shell = shell or runtime_shell()
     fence = "powershell" if shell == "powershell" else "bash"
-    cli = shell_cli_command(tool_root)
-    mcp = shell_mcp_command(tool_root)
+    cli = shell_cli_command(tool_root, shell)
+    mcp = shell_mcp_command(tool_root, shell)
     return f"""# Rta-Smriti Project Brain
 
 Before repo work, retrieve local context:
@@ -125,10 +125,10 @@ Rules:
 """
 
 
-def agent_index_block(tool_root: Path, db_path: Path, project: str) -> str:
-    shell = runtime_shell()
+def agent_index_block(tool_root: Path, db_path: Path, project: str, shell: str | None = None) -> str:
+    shell = shell or runtime_shell()
     fence = "powershell" if shell == "powershell" else "bash"
-    cli = shell_cli_command(tool_root)
+    cli = shell_cli_command(tool_root, shell)
     return f"""<!-- BEGIN:rta-smriti-brain -->
 ## Rta-Smriti Local Brain
 
@@ -266,10 +266,10 @@ def self_check(conn: sqlite3.Connection, project: str, check_files: bool = False
     }
 
 
-def install_local(target: Path, tool_root: Path) -> dict:
+def install_local(target: Path, tool_root: Path, shell: str | None = None) -> dict:
     target = target.resolve()
     target.mkdir(parents=True, exist_ok=True)
-    shell = runtime_shell()
+    shell = shell or runtime_shell()
     suffix = ".cmd" if shell == "powershell" else ""
     wrappers = {
         f"rta-brain{suffix}": _launch_parts(tool_root, "rta-brain.py", "rta_brain.cli"),

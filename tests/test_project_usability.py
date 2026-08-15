@@ -5,7 +5,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from rta_brain.project import agent_file_text, install_local, mcp_config_payload
 
@@ -185,9 +184,8 @@ class RtaBrainProjectUsabilityTests(unittest.TestCase):
             installed_package_root = root / "site-packages"
             installed_package_root.mkdir()
 
-            with patch("rta_brain.project.os.name", "posix"):
-                payload = install_local(target, installed_package_root)
-                agent_text = agent_file_text(installed_package_root, root / "brain.sqlite", "demo")
+            payload = install_local(target, installed_package_root, shell="posix")
+            agent_text = agent_file_text(installed_package_root, root / "brain.sqlite", "demo", shell="posix")
 
             self.assertEqual(payload["shell"], "posix")
             self.assertEqual(Path(payload["wrappers"][0]).name, "rta-brain")
