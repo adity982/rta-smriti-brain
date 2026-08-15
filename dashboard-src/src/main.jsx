@@ -757,6 +757,16 @@ function App() {
     }
   }
 
+  function addFileToTask(path) {
+    if (task.includes(path)) {
+      setMessage(`${path} is already in the task objective.`);
+      return "existing";
+    }
+    setTask(`${task.trim()}\nRelevant file: ${path}`.trim());
+    setMessage(`${path} added to the task objective.`);
+    return "added";
+  }
+
   function toggleType(type) {
     setActiveTypes((current) => {
       if (current.includes(type) && current.length === 1) return allGraphTypes;
@@ -1050,7 +1060,7 @@ function App() {
               onSearch={(query) => loadFiles("", query)}
               onRefresh={() => loadFiles(fileTree.prefix || "", fileTree.query || "")}
               onCopy={(path) => copyText(path, "Relative path copied.")}
-              onUse={(path) => setTask((current) => current.includes(path) ? current : `${current.trim()}\nRelevant file: ${path}`.trim())}
+              onUse={addFileToTask}
             />
           )}
           {viewMode === "canvas" && <CanvasBoard project={selectedProject} graph={visibleGraph} onSelect={(node) => selectPrimaryNode(node, "evidence")} onExport={exportView} />}
@@ -1515,11 +1525,48 @@ function GraphCanvas({ graph, selectedNode, onSelect, query, showLabels, showEdg
 
 function FileExplorer({ tree, preview, loading, freshness, onOpen, onNavigate, onSearch, onRefresh, onCopy, onUse }) {
   const [draft, setDraft] = useState(tree.query || "");
+  const [previewAction, setPreviewAction] = useState({ kind: "", status: "" });
+  const previewActionTimer = useRef(null);
   const parts = String(tree.prefix || "").split("/").filter(Boolean);
 
   useEffect(() => {
     setDraft(tree.query || "");
   }, [tree.query]);
+
+  useEffect(() => {
+    window.clearTimeout(previewActionTimer.current);
+    setPreviewAction({ kind: "", status: "" });
+  }, [preview?.relative_path]);
+
+  useEffect(() => () => window.clearTimeout(previewActionTimer.current), []);
+
+  function settlePreviewAction(kind, status) {
+    window.clearTimeout(previewActionTimer.current);
+    setPreviewAction({ kind, status });
+    previewActionTimer.current = window.setTimeout(() => setPreviewAction({ kind: "", status: "" }), 2400);
+  }
+
+  async function addPreviewToTask() {
+    if (!preview?.relative_path || previewAction.status === "working") return;
+    setPreviewAction({ kind: "task", status: "working" });
+    try {
+      const result = await onUse(preview.relative_path);
+      settlePreviewAction("task", result === "existing" ? "existing" : "added");
+    } catch {
+      settlePreviewAction("task", "failed");
+    }
+  }
+
+  async function copyPreviewPath() {
+    if (!preview?.relative_path || previewAction.status === "working") return;
+    setPreviewAction({ kind: "copy", status: "working" });
+    try {
+      const copied = await onCopy(preview.relative_path);
+      settlePreviewAction("copy", copied ? "copied" : "failed");
+    } catch {
+      settlePreviewAction("copy", "failed");
+    }
+  }
 
   function submitSearch(event) {
     event.preventDefault();
@@ -1586,9 +1633,14 @@ function FileExplorer({ tree, preview, loading, freshness, onOpen, onNavigate, o
             <>
               <div className="filePreviewHeader">
                 <div><FileCode2 size={18} /><span><strong>{preview.name}</strong><small>{preview.relative_path}</small></span></div>
-                <div>
-                  <button onClick={() => onUse(preview.relative_path)}><Plus size={14} /> Add to Task</button>
-                  <button onClick={() => onCopy(preview.relative_path)} title="Copy relative path" aria-label="Copy relative path"><Clipboard size={14} /></button>
+                <div className="filePreviewActions" aria-live="polite">
+                  <button className={previewAction.kind === "task" && ["added", "existing"].includes(previewAction.status) ? "success" : ""} onClick={addPreviewToTask} disabled={previewAction.status === "working"}>
+                    {previewAction.kind === "task" && ["added", "existing"].includes(previewAction.status) ? <CheckCircle2 size={14} /> : <Plus size={14} />}
+                    {previewAction.kind === "task" && previewAction.status === "working" ? "Adding..." : previewAction.kind === "task" && previewAction.status === "added" ? "Added" : previewAction.kind === "task" && previewAction.status === "existing" ? "Already Added" : previewAction.kind === "task" && previewAction.status === "failed" ? "Add Failed" : "Add to Task"}
+                  </button>
+                  <button className={previewAction.kind === "copy" && previewAction.status === "copied" ? "success" : ""} onClick={copyPreviewPath} disabled={previewAction.status === "working"} title={previewAction.kind === "copy" && previewAction.status === "copied" ? "Relative path copied" : "Copy relative path"} aria-label={previewAction.kind === "copy" && previewAction.status === "copied" ? "Path copied" : "Copy relative path"}>
+                    {previewAction.kind === "copy" && previewAction.status === "copied" ? <><CheckCircle2 size={14} /> Copied</> : previewAction.kind === "copy" && previewAction.status === "working" ? <RefreshCw className="spin" size={14} /> : previewAction.kind === "copy" && previewAction.status === "failed" ? <>Copy Failed</> : <Clipboard size={14} />}
+                  </button>
                 </div>
               </div>
               <div className="filePreviewMeta">

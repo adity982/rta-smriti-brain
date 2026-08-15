@@ -2114,6 +2114,27 @@ textarea:focus {
   cursor: pointer;
 }
 
+.filePreviewActions {
+  flex: 0 0 auto;
+}
+
+.filePreviewHeader button:hover:not(:disabled) {
+  color: #eef7ff;
+  border-color: rgba(56, 189, 248, 0.32);
+  background: rgba(56, 189, 248, 0.07);
+}
+
+.filePreviewHeader button.success {
+  color: #5eead4;
+  border-color: rgba(94, 234, 212, 0.34);
+  background: rgba(20, 184, 166, 0.1);
+}
+
+.filePreviewHeader button:disabled {
+  opacity: 0.66;
+  cursor: wait;
+}
+
 .filePreviewMeta {
   gap: 8px;
   min-height: 34px;
