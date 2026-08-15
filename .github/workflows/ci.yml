@@ -30,4 +30,16 @@ jobs:
       - run: python -m unittest discover -s tests -v
       - run: python -m compileall -q rta_brain tests
       - run: python -m pip install -e . --dry-run --no-deps
+      - name: Smoke-test installed wheel
+        shell: pwsh
+        run: |
+          $smokeRoot = Join-Path $env:RUNNER_TEMP "rta-smriti-wheel-smoke"
+          $wheelDir = Join-Path $smokeRoot "wheel"
+          $venv = Join-Path $smokeRoot "venv"
+          New-Item -ItemType Directory -Path $wheelDir -Force | Out-Null
+          python -m pip wheel --no-deps --wheel-dir $wheelDir .
+          python -m venv $venv
+          $wheel = Get-ChildItem "$wheelDir\*.whl" | Select-Object -First 1
+          & "$venv\Scripts\python.exe" -m pip install --no-deps $wheel.FullName
+          & "$venv\Scripts\python.exe" scripts\installed_distribution_smoke.py --cli "$venv\Scripts\rta-brain.exe"
       - run: python rta-brain.py publish-readiness --json

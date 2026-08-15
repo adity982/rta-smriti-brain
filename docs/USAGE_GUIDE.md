@@ -17,6 +17,22 @@ That brain remembers:
 
 When you start a new Codex, Claude Code, Cursor, or other agent chat, ask Rta-Smriti for a context pack and paste it into the chat before the task.
 
+## Install The Windows Launcher
+
+From a cloned Rta-Smriti repository, run:
+
+```powershell
+$RtaBin = "$env:LOCALAPPDATA\Rta-Smriti\bin"
+python .\rta-brain.py --json install-local --target $RtaBin
+$RtaBrain = Join-Path $RtaBin "rta-brain.cmd"
+& $RtaBrain --json doctor
+```
+
+Use `& $RtaBrain` for the examples in this guide. It works immediately and does
+not assume the wrapper directory is already on `PATH`. Set `$RtaBrain` again
+after opening a new PowerShell session, or add the printed install directory to
+your user `PATH` and restart the terminal.
+
 ## Recommended Folder Layout
 
 Use one central folder for all project brains:
@@ -41,7 +57,7 @@ Do not commit this folder to GitHub.
 Run once per project:
 
 ```powershell
-rta-brain.cmd --json bootstrap-project C:\path\to\project --project project-name --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains" --write-agents
+& $RtaBrain --json bootstrap-project C:\path\to\project --project project-name --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains" --write-agents
 ```
 
 This creates:
@@ -54,7 +70,7 @@ This creates:
 ## Check A Project Brain
 
 ```powershell
-rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json self-check --project project-name --check-files
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json self-check --project project-name --check-files
 ```
 
 Look for:
@@ -67,7 +83,7 @@ Look for:
 ## Generate Context Before A Task
 
 ```powershell
-rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" context-pack "describe the task here" --project project-name
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" context-pack "describe the task here" --project project-name
 ```
 
 Paste the output into the agent chat, then ask the agent to do the task.
@@ -86,10 +102,15 @@ continue the release hardening work from the previous thread
 Run:
 
 ```powershell
-rta-brain.cmd dashboard --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains"
+& $RtaBrain dashboard --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains"
 ```
 
 Open the URL printed in the terminal.
+
+Keep the terminal open while the dashboard is in use. The complete printed URL,
+including `#token=...`, authorizes that browser session. If the browser later
+reports `connection refused`, rerun the dashboard command and open its new URL;
+this alpha does not install a background service or survive a reboot by itself.
 
 ### The Daily Five-Step Loop
 
@@ -194,8 +215,8 @@ Keep one SQLite brain per project. The dashboard switches between them while all
 You do not need to run a test before normal daily use. Before publishing the tool or after changing its indexing code, validate at least one tiny, one medium, and one large repository:
 
 ```powershell
-rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json self-check --project project-name --check-files
-rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" context-pack "explain the architecture and safest next step" --project project-name
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json self-check --project project-name --check-files
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" context-pack "explain the architecture and safest next step" --project project-name
 ```
 
 Confirm that the project is ready, Files opens, a preview can be added to the task, the selected target agent appears on the receipt, and the generated pack contains only that project's evidence.
@@ -203,7 +224,7 @@ Confirm that the project is ready, Files opens, a preview can be added to the ta
 ## Add A Memory Manually
 
 ```powershell
-rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" remember "Payments must fail closed when verification is missing." --project project-name --type constraint --pramana sabda --priority 9
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" remember "Payments must fail closed when verification is missing." --project project-name --type constraint --pramana sabda --priority 9
 ```
 
 Use memory types like:
@@ -226,7 +247,7 @@ Use pramana labels:
 ## Ingest A Long Thread Or Handoff
 
 ```powershell
-rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json ingest-thread C:\path\to\handoff.md --project project-name --title "release handoff"
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json ingest-thread C:\path\to\handoff.md --project project-name --title "release handoff"
 ```
 
 Use this after a long agent session so the next chat can recover the useful decisions and evidence.
@@ -236,13 +257,13 @@ Use this after a long agent session so the next chat can recover the useful deci
 After significant code changes:
 
 ```powershell
-rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json ingest-repo C:\path\to\project --project project-name
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json ingest-repo C:\path\to\project --project project-name
 ```
 
 Then:
 
 ```powershell
-rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json stale-check --project project-name
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json stale-check --project project-name
 ```
 
 Use `--deep` for SHA-256 freshness with stat-keyed cache reuse. Use `ingest-repo --force` when you need to re-read and re-index every eligible source regardless of cached metadata.
@@ -250,7 +271,7 @@ Use `--deep` for SHA-256 freshness with stat-keyed cache reuse. Use `ingest-repo
 Keep a repository refreshed while you work:
 
 ```powershell
-rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" watch-repo C:\path\to\project --project project-name --interval 2
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" watch-repo C:\path\to\project --project project-name --interval 2
 ```
 
 This watcher stays in the foreground and stops cleanly with `Ctrl+C`; it does not install a daemon or operating-system service.
@@ -260,13 +281,13 @@ This watcher stays in the foreground and stops cleanly with `Ctrl+C`; it does no
 The defaults are deterministic regex parsing, FTS5 retrieval, and a 512 KB source cap. Read the active policy:
 
 ```powershell
-rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json settings --project project-name
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json settings --project project-name
 ```
 
 Enable the dependency-free local hash provider and a 1 MB source cap:
 
 ```powershell
-rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json settings --project project-name --embedding-provider hash --max-file-mb 1
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json settings --project project-name --embedding-provider hash --max-file-mb 1
 ```
 
 Changing an indexing policy invalidates the fast manifest. Run `ingest-repo` or use the dashboard refresh action to rebuild affected records. Sources above the selected cap remain visibly blocked.

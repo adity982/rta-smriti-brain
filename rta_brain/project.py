@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+import sys
 import tempfile
 from pathlib import Path
 
@@ -17,6 +18,28 @@ def project_db_path(brain_dir: Path, project: str) -> Path:
 
 def _ps_quote(value: str | Path) -> str:
     return "'" + str(value).replace("'", "''") + "'"
+
+
+def _cmd_quote(value: str | Path) -> str:
+    return '"' + str(value).replace('"', '""') + '"'
+
+
+def _powershell_command(tool_root: Path, wrapper_name: str, module_name: str) -> str:
+    wrapper = tool_root / wrapper_name
+    if wrapper.is_file():
+        return f"& {_ps_quote(wrapper)}"
+    return f"& {_ps_quote(Path(sys.executable))} -m {module_name}"
+
+
+def powershell_cli_command(tool_root: Path) -> str:
+    return _powershell_command(tool_root, "rta-brain.cmd", "rta_brain.cli")
+
+
+def _mcp_launch(tool_root: Path) -> tuple[str, list[str]]:
+    wrapper = tool_root / "rta-brain-mcp.cmd"
+    if wrapper.is_file():
+        return str(wrapper), []
+    return str(Path(sys.executable)), ["-m", "rta_brain.mcp_server"]
 
 
 def _safe_agent_target(repo_path: Path, name: str) -> Path:
@@ -51,26 +74,26 @@ def _atomic_write_text(target: Path, text: str) -> None:
 
 
 def agent_file_text(tool_root: Path, db_path: Path, project: str) -> str:
-    cli = tool_root / "rta-brain.cmd"
-    mcp = tool_root / "rta-brain-mcp.cmd"
+    cli = powershell_cli_command(tool_root)
+    mcp = _powershell_command(tool_root, "rta-brain-mcp.cmd", "rta_brain.mcp_server")
     return f"""# Rta-Smriti Project Brain
 
 Before repo work, retrieve local context:
 
 ```powershell
-{_ps_quote(cli)} --db {_ps_quote(db_path)} context-pack "<task>" --project {_ps_quote(project)}
+{cli} --db {_ps_quote(db_path)} context-pack "<task>" --project {_ps_quote(project)}
 ```
 
 After meaningful code or docs changes, refresh the repo graph:
 
 ```powershell
-{_ps_quote(cli)} --db {_ps_quote(db_path)} ingest-repo . --project {_ps_quote(project)}
+{cli} --db {_ps_quote(db_path)} ingest-repo . --project {_ps_quote(project)}
 ```
 
 For MCP hosts, configure:
 
 ```powershell
-{_ps_quote(mcp)} --db {_ps_quote(db_path)} --project {_ps_quote(project)}
+{mcp} --db {_ps_quote(db_path)} --project {_ps_quote(project)}
 ```
 
 Rules:
@@ -83,26 +106,26 @@ Rules:
 
 
 def agent_index_block(tool_root: Path, db_path: Path, project: str) -> str:
-    cli = tool_root / "rta-brain.cmd"
+    cli = powershell_cli_command(tool_root)
     return f"""<!-- BEGIN:rta-smriti-brain -->
 ## Rta-Smriti Local Brain
 
 Before repo work, retrieve local project context and use it as working memory:
 
 ```powershell
-{_ps_quote(cli)} --db {_ps_quote(db_path)} context-pack "<task>" --project {_ps_quote(project)}
+{cli} --db {_ps_quote(db_path)} context-pack "<task>" --project {_ps_quote(project)}
 ```
 
 After meaningful code or docs changes, refresh the repo graph:
 
 ```powershell
-{_ps_quote(cli)} --db {_ps_quote(db_path)} ingest-repo . --project {_ps_quote(project)}
+{cli} --db {_ps_quote(db_path)} ingest-repo . --project {_ps_quote(project)}
 ```
 
 Use the dashboard for inspection:
 
 ```powershell
-{_ps_quote(cli)} --db {_ps_quote(db_path)} dashboard --project {_ps_quote(project)}
+{cli} --db {_ps_quote(db_path)} dashboard --project {_ps_quote(project)}
 ```
 
 Treat brain output as memory-derived until freshness is verified.
@@ -155,6 +178,8 @@ def bootstrap_project(conn: sqlite3.Connection, repo_path: Path, project: str, b
         ingest_payload = ingest_repo(project_conn, repo_path, project=project)
     finally:
         project_conn.close()
+    cli = powershell_cli_command(tool_root)
+    mcp = _powershell_command(tool_root, "rta-brain-mcp.cmd", "rta_brain.mcp_server")
     return {
         "status": "ok",
         "project": project,
@@ -165,8 +190,8 @@ def bootstrap_project(conn: sqlite3.Connection, repo_path: Path, project: str, b
         "agent_file": str(agent_path) if wrote_agent_file else None,
         "agent_index_file": str(agent_index_path) if agent_index_path else None,
         "next_commands": {
-            "context_pack": f"{_ps_quote(tool_root / 'rta-brain.cmd')} --db {_ps_quote(db_path)} context-pack \"<task>\" --project {_ps_quote(project)}",
-            "mcp_server": f"{_ps_quote(tool_root / 'rta-brain-mcp.cmd')} --db {_ps_quote(db_path)} --project {_ps_quote(project)}",
+            "context_pack": f"{cli} --db {_ps_quote(db_path)} context-pack \"<task>\" --project {_ps_quote(project)}",
+            "mcp_server": f"{mcp} --db {_ps_quote(db_path)} --project {_ps_quote(project)}",
         },
     }
 
@@ -222,14 +247,19 @@ def install_local(target: Path, tool_root: Path) -> dict:
     target = target.resolve()
     target.mkdir(parents=True, exist_ok=True)
     wrappers = {
-        "rta-brain.cmd": tool_root / "rta-brain.py",
-        "rta-brain-mcp.cmd": tool_root / "rta-brain-mcp.py",
+        "rta-brain.cmd": (tool_root / "rta-brain.py", "rta_brain.cli"),
+        "rta-brain-mcp.cmd": (tool_root / "rta-brain-mcp.py", "rta_brain.mcp_server"),
     }
     written = []
-    for name, script in wrappers.items():
+    python = _cmd_quote(Path(sys.executable))
+    for name, (script, module) in wrappers.items():
         wrapper = target / name
+        if script.is_file():
+            invocation = f"{python} {_cmd_quote(script)} %*"
+        else:
+            invocation = f"{python} -m {module} %*"
         wrapper.write_text(
-            f'@echo off\nsetlocal\npython "{script}" %*\n',
+            f"@echo off\nsetlocal\n{invocation}\n",
             encoding="utf-8",
         )
         written.append(str(wrapper))
@@ -238,17 +268,19 @@ def install_local(target: Path, tool_root: Path) -> dict:
         "target": str(target),
         "wrappers": written,
         "path_note": f"Add {target} to PATH if it is not already there.",
+        "powershell_command": f"& {_ps_quote(target / 'rta-brain.cmd')}",
     }
 
 
 def mcp_config_payload(db_path: str, project: str, name: str, tool_root: Path) -> dict:
+    command, prefix_args = _mcp_launch(tool_root)
     return {
         "status": "ok",
         "config": {
             "mcpServers": {
                 name: {
-                    "command": str(tool_root / "rta-brain-mcp.cmd"),
-                    "args": ["--db", str(Path(db_path)), "--project", project],
+                    "command": command,
+                    "args": [*prefix_args, "--db", str(Path(db_path)), "--project", project],
                 }
             }
         },

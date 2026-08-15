@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from rta_brain.project import agent_file_text, install_local, mcp_config_payload
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "rta-brain.py"
@@ -42,6 +44,7 @@ class RtaBrainProjectUsabilityTests(unittest.TestCase):
             self.assertIn("Rta-Smriti Local Brain", (repo / "AGENTS.md").read_text(encoding="utf-8"))
             self.assertIn("agent_index_file", payload)
             self.assertIn("context-pack", payload["next_commands"]["context_pack"])
+            self.assertTrue(payload["next_commands"]["context_pack"].startswith("& '"))
 
             self_check = run_cli("--db", payload["db_path"], "--json", "self-check", "--project", "demo")
             self.assertEqual(self_check.returncode, 0, self_check.stderr)
@@ -140,6 +143,31 @@ class RtaBrainProjectUsabilityTests(unittest.TestCase):
             )
             self.assertEqual(doctor.returncode, 0, doctor.stderr)
             self.assertEqual(json.loads(doctor.stdout)["status"], "ok")
+
+    def test_installed_distribution_uses_module_commands_when_source_wrappers_are_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            installed_package_root = root / "site-packages"
+            installed_package_root.mkdir()
+            db = root / "brains" / "demo.sqlite"
+
+            agent_text = agent_file_text(installed_package_root, db, "demo")
+            self.assertIn("-m rta_brain.cli", agent_text)
+            self.assertIn("-m rta_brain.mcp_server", agent_text)
+            self.assertNotIn("site-packages\\rta-brain.cmd", agent_text)
+
+            mcp = mcp_config_payload(str(db), "demo", "rta-smriti", installed_package_root)
+            server = mcp["config"]["mcpServers"]["rta-smriti"]
+            self.assertEqual(Path(server["command"]), Path(sys.executable))
+            self.assertEqual(server["args"][:2], ["-m", "rta_brain.mcp_server"])
+
+            target = root / "bin"
+            install_local(target, installed_package_root)
+            cli_wrapper = (target / "rta-brain.cmd").read_text(encoding="utf-8")
+            mcp_wrapper = (target / "rta-brain-mcp.cmd").read_text(encoding="utf-8")
+            self.assertIn("-m rta_brain.cli", cli_wrapper)
+            self.assertIn("-m rta_brain.mcp_server", mcp_wrapper)
+            self.assertNotIn("site-packages\\rta-brain.py", cli_wrapper)
 
 
 if __name__ == "__main__":

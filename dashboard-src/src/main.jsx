@@ -681,8 +681,9 @@ function App() {
   const commandDbPath = presentationMode
     ? `$env:USERPROFILE\\Documents\\Rta-Smriti\\brains\\${selectedProject?.project || "project"}.sqlite`
     : selectedProject?.db_path;
+  const cliCommand = health?.cli_command || "rta-brain";
   const command = selectedProject
-    ? `rta-brain.cmd --db ${psPathArg(commandDbPath)} context-pack ${psQuote(task || "<task>")} --project ${psQuote(selectedProject.project)}`
+    ? `${cliCommand} --db ${psPathArg(commandDbPath)} context-pack ${psQuote(task || "<task>")} --project ${psQuote(selectedProject.project)}`
     : "Select a project";
 
   return (
@@ -954,7 +955,7 @@ function App() {
         </span>
       </footer>
 
-      {commandOpen && <CommandPalette command={command} onClose={() => setCommandOpen(false)} onCopy={copyText} />}
+      {commandOpen && <CommandPalette command={command} cliCommand={cliCommand} onClose={() => setCommandOpen(false)} onCopy={copyText} />}
     </div>
   );
 }
@@ -1814,7 +1815,7 @@ function BootstrapPanel({ onDone }) {
   );
 }
 
-function CommandPalette({ command, onClose, onCopy }) {
+function CommandPalette({ command, cliCommand, onClose, onCopy }) {
   const paletteRef = useRef(null);
   useEffect(() => {
     paletteRef.current?.querySelector("button")?.focus();
@@ -1822,8 +1823,8 @@ function CommandPalette({ command, onClose, onCopy }) {
   const defaultBrainDir = command.includes("--db ") ? ".\\.rta-smriti" : '"$env:USERPROFILE\\Documents\\Rta-Smriti\\brains"';
   const commands = [
     ["Copy context-pack command", command],
-    ["Open dashboard", `rta-brain.cmd dashboard --brain-dir ${defaultBrainDir}`],
-    ["Check publish readiness", "python rta-brain.py publish-readiness --json"],
+    ["Open dashboard", `${cliCommand} dashboard --brain-dir ${defaultBrainDir}`],
+    ["Check publish readiness", `${cliCommand} publish-readiness --json`],
   ];
   return (
     <div className="paletteBackdrop" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={onClose}>

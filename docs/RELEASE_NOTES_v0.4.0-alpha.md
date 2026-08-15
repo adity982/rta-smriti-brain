@@ -13,6 +13,15 @@ This alpha turns repository memory from a manual snapshot into an operator-contr
 - Per-project source-size, parser, embedding, model, and ranking policy
 - Dashboard controls with blocked-source and optional-provider warnings
 
+## Fixed On Main
+
+- Installed wheels now generate valid Python-module commands instead of pointing to repository-only `.cmd` files.
+- Generated PowerShell agent commands include the required invocation operator.
+- Dashboard-copied commands now use the exact source or installed-package launcher instead of assuming a global command.
+- Windows setup no longer assumes the wrapper directory is already on `PATH`.
+- Dashboard recovery guidance now explains the foreground process and one-session capability URL.
+- Windows CI now builds and smoke-tests an installed wheel through bootstrap, retrieval, wrappers, MCP config, dashboard assets, and API authorization.
+
 ## Defaults And Boundaries
 
 - SQLite remains local.

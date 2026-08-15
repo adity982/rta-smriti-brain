@@ -7,7 +7,7 @@ from os import chdir, getcwd
 from pathlib import Path
 from unittest.mock import patch
 
-from rta_brain.console import ConsoleConfig, _trusted_git_candidates, is_authorized_request, is_local_origin, publish_readiness, read_file_preview, read_file_tree, read_memories, resolve_brain_db, resolve_static_asset, run_dashboard, scan_brain_databases
+from rta_brain.console import ConsoleConfig, _trusted_git_candidates, dashboard_snapshot, is_authorized_request, is_local_origin, publish_readiness, read_file_preview, read_file_tree, read_memories, resolve_brain_db, resolve_static_asset, run_dashboard, scan_brain_databases
 from rta_brain.db import connect, graph, ingest_repo, init_project, remember
 from rta_brain.ingest import walk_repo
 
@@ -17,6 +17,12 @@ CLI = ROOT / "rta-brain.py"
 
 
 class RtaBrainConsoleTests(unittest.TestCase):
+    def test_dashboard_snapshot_exposes_an_executable_cli_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = dashboard_snapshot(ConsoleConfig(tool_root=ROOT, brain_dir=Path(tmp)))
+            self.assertTrue(snapshot["cli_command"].startswith("& '"))
+            self.assertIn("rta-brain.cmd", snapshot["cli_command"])
+
     def test_git_candidates_never_fall_back_to_the_working_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             fake = Path(tmp) / "Programs" / "Git" / "cmd" / "git.exe"

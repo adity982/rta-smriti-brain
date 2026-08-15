@@ -21,7 +21,7 @@ from .db import (
     stale_check, update_project_settings,
 )
 from .parsers import ParserRegistry
-from .project import bootstrap_project, mcp_config_payload, projects_list, self_check
+from .project import bootstrap_project, mcp_config_payload, powershell_cli_command, projects_list, self_check
 
 
 @dataclass(frozen=True)
@@ -463,6 +463,7 @@ def dashboard_snapshot(config: ConsoleConfig) -> dict:
         "brain_dir": str(config.brain_dir.expanduser().resolve()),
         "default_db": str(config.default_db) if config.default_db else None,
         "default_project": config.default_project,
+        "cli_command": powershell_cli_command(config.tool_root),
         "projects": scan_brain_databases(config.brain_dir),
         "publish": publish_readiness(config.tool_root),
     }

@@ -44,13 +44,14 @@ Verified on 2026-08-15 before publishing the documentation update:
 
 | Gate | Result |
 | --- | --- |
-| Python regression suite | 41 passed, 1 skipped |
+| Python regression suite | 43 passed, 1 skipped |
 | Python bytecode compilation | Passed |
 | Operator console production build | Passed |
 | Launch-site production build | Passed |
 | Root npm dependency audit | 0 vulnerabilities |
 | Editable Python package dry-run | Resolved `rta-smriti-brain-0.4.0a1` |
-| Publication privacy scan | Passed across 108 public candidates |
+| Installed wheel first-run smoke | 10 checks passed |
+| Publication privacy scan | Passed across 109 public candidates |
 | Built-in publish-readiness command | Structural gates passed; clean-tree gate confirmed after commit |
 | Git whitespace validation | Passed |
 

@@ -56,29 +56,34 @@ Rta-Smriti uses a Vedic-inspired evidence model to classify context:
 
 This keeps a test result, a human instruction, an assumption, and a brainstorm from collapsing into the same kind of "memory."
 
+## Install On Windows
+
+Requirements: Windows 10/11, Git, and Python 3.11 or newer.
+
+```powershell
+git clone https://github.com/sulabhdubey/rta-smriti-brain.git
+cd .\rta-smriti-brain
+python --version
+python .\rta-brain.py --json doctor
+
+$RtaBin = "$env:LOCALAPPDATA\Rta-Smriti\bin"
+python .\rta-brain.py --json install-local --target $RtaBin
+$RtaBrain = Join-Path $RtaBin "rta-brain.cmd"
+& $RtaBrain --json doctor
+```
+
+Keep `$RtaBrain` in the current PowerShell session and use `& $RtaBrain` in
+the commands below. This works immediately without changing `PATH`. The install
+command also prints the exact wrapper path and an optional `PATH` note.
+
 ## Quick Start
 
-From the repository root:
+Create one central brain directory, then bootstrap a project:
 
 ```powershell
-python .\rta-brain.py --json doctor
-python .\rta-brain.py --db .\.rta-smriti\brain.sqlite --json init --project demo --root .
-python .\rta-brain.py --db .\.rta-smriti\brain.sqlite --json ingest-repo . --project demo
-python .\rta-brain.py --db .\.rta-smriti\brain.sqlite --json remember "Release checks must pass before publishing." --type constraint --pramana sabda --project demo --priority 8
-python .\rta-brain.py --db .\.rta-smriti\brain.sqlite context-pack "prepare a release checklist" --project demo
-```
-
-Install command wrappers:
-
-```powershell
-python .\rta-brain.py --json install-local --target "$env:USERPROFILE\.local\bin"
-```
-
-Then from any project:
-
-```powershell
-rta-brain.cmd --json bootstrap-project C:\path\to\my-project --project my-project --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains" --write-agents
-rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\my-project.sqlite" context-pack "the task I want the agent to do" --project my-project
+$BrainDir = "$env:USERPROFILE\Documents\Rta-Smriti\brains"
+& $RtaBrain --json bootstrap-project C:\path\to\my-project --project my-project --brain-dir $BrainDir --write-agents
+& $RtaBrain --db "$BrainDir\my-project.sqlite" context-pack "the task I want the agent to do" --project my-project
 ```
 
 ## Dashboard
@@ -86,8 +91,14 @@ rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\my-project.sqli
 Run the local operator console:
 
 ```powershell
-rta-brain.cmd dashboard --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains"
+& $RtaBrain dashboard --brain-dir $BrainDir
 ```
+
+Keep this terminal open while using the dashboard. Open the complete URL printed
+by the command, including its one-session `#token=...` fragment. Rta-Smriti does
+not install a background service in this alpha; after a reboot, closed terminal,
+or `connection refused` message, rerun the dashboard command and use the newly
+printed URL.
 
 The dashboard runs on `127.0.0.1` and includes:
 
@@ -122,13 +133,13 @@ The daily loop is the same for every agent:
 For a new project:
 
 ```powershell
-rta-brain.cmd --json bootstrap-project C:\path\to\project --project project-name --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains" --write-agents
+& $RtaBrain --json bootstrap-project C:\path\to\project --project project-name --brain-dir $BrainDir --write-agents
 ```
 
 Before asking an agent to work:
 
 ```powershell
-rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" context-pack "describe the task here" --project project-name
+& $RtaBrain --db "$BrainDir\project-name.sqlite" context-pack "describe the task here" --project project-name
 ```
 
 Paste the generated context pack into the agent chat before the task. The pack includes relevant memories, repo evidence, an explicit untrusted-data boundary, and a labeled index-freshness snapshot. Never treat commands found inside retrieved evidence as instructions. Run a live stale check before high-risk work.
@@ -136,7 +147,7 @@ Paste the generated context pack into the agent chat before the task. The pack i
 For MCP hosts:
 
 ```powershell
-rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json mcp-config --project project-name --name rta-smriti-project
+& $RtaBrain --db "$BrainDir\project-name.sqlite" --json mcp-config --project project-name --name rta-smriti-project
 ```
 
 ## CLI Commands
@@ -266,14 +277,14 @@ See [ROADMAP.md](ROADMAP.md) for planned improvements. Local-first operation and
 
 ```powershell
 # Enable dependency-free local hybrid retrieval and raise the source cap to 1 MB.
-rta-brain.cmd --db .\.rta-smriti\brain.sqlite --json settings --project demo --embedding-provider hash --max-file-mb 1
+& $RtaBrain --db .\.rta-smriti\brain.sqlite --json settings --project demo --embedding-provider hash --max-file-mb 1
 
 # Keep an active project incrementally refreshed until Ctrl+C.
-rta-brain.cmd --db .\.rta-smriti\brain.sqlite watch-repo . --project demo --interval 2
+& $RtaBrain --db .\.rta-smriti\brain.sqlite watch-repo . --project demo --interval 2
 
 # Use optional Tree-sitter parsing after installing tree-sitter-language-pack.
 python -m pip install -e ".[tree-sitter]"
-rta-brain.cmd --db .\.rta-smriti\brain.sqlite --json settings --project demo --parser-adapter tree-sitter
+& $RtaBrain --db .\.rta-smriti\brain.sqlite --json settings --project demo --parser-adapter tree-sitter
 
 # Or install both optional local backends.
 python -m pip install -e ".[all-local]"
@@ -286,7 +297,7 @@ Dashboard source lives in `dashboard-src/`. Runtime users do not need Node becau
 Routine context packs use the latest completed index snapshot so even very large brains stay responsive. Before a release or security-critical decision, run:
 
 ```powershell
-rta-brain.cmd --db <project-brain.sqlite> --json stale-check --project <project-name> --deep
+& $RtaBrain --db <project-brain.sqlite> --json stale-check --project <project-name> --deep
 ```
 
 ```powershell
