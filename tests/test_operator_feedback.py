@@ -117,7 +117,8 @@ class RtaBrainOperatorFeedbackTests(unittest.TestCase):
                 target = root / directory
                 target.mkdir()
                 (target / "noise.py").write_text("NOISE = True\n", encoding="utf-8")
-            indexed = [path.relative_to(root).as_posix() for path in walk_repo(root)]
+            canonical_root = root.resolve()
+            indexed = [path.relative_to(canonical_root).as_posix() for path in walk_repo(root)]
             self.assertEqual(indexed, ["src/keep.py"])
 
     def test_repository_state_reports_git_identity_and_dirty_count(self):
