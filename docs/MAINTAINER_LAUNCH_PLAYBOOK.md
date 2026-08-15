@@ -1,12 +1,21 @@
-# Rta-Smriti Brain Launch Kit
+# Maintainer Launch Playbook
 
-This is the source of truth for the GitHub and Product Hunt launch. Replace only the bracketed public URLs after the repository and Product Hunt page exist.
+This public maintainer guide contains reusable launch copy and release steps.
+It is not end-user documentation and does not record private campaign contacts,
+credentials, schedules, or unpublished URLs.
+
+## Current Publication State
+
+- Website: https://sulabhdubey.github.io/rta-smriti-brain/
+- Repository: https://github.com/sulabhdubey/rta-smriti-brain
+- Source on `main`: `0.4.0-alpha`
+- Formal `v0.4.0-alpha` tag and GitHub Release: intentionally not created
 
 ## Positioning
 
 **Product:** Rta-Smriti Brain
 
-**Tagline (53 characters):**
+**Tagline:**
 
 ```text
 Stop re-explaining your project to every new AI chat.
@@ -20,9 +29,13 @@ Local project memory and context packs for AI coding agents.
 
 **Simple explanation:**
 
-AI coding agents are powerful, but every new chat starts with amnesia. Rta-Smriti gives each software project a private local brain. It indexes the repository, remembers durable decisions, preserves long-session handoffs, and prepares a focused context pack for the next task. The memory stays on your machine.
+AI coding agents are powerful, but every new chat starts with amnesia.
+Rta-Smriti gives each software project a private local brain. It indexes the
+repository, remembers durable decisions, preserves long-session handoffs, and
+prepares a focused context pack for the next task. The memory stays on the
+operator's machine.
 
-## Product Hunt Fields
+## Product Directory Copy
 
 **Name**
 
@@ -36,7 +49,7 @@ Rta-Smriti Brain
 Stop re-explaining your project to every new AI chat.
 ```
 
-**Description (under 500 characters)**
+**Description**
 
 ```text
 Give every software project a private local brain. Rta-Smriti indexes repository structure, remembers durable decisions, preserves long agent-session handoffs, and generates focused context packs for Codex, Claude Code, Cursor, and other agents. SQLite, CLI, MCP, and the visual operator console all run locally with no account, telemetry, or cloud database.
@@ -48,14 +61,6 @@ Give every software project a private local brain. Rta-Smriti indexes repository
 Developer Tools, Artificial Intelligence, Open Source, Productivity, GitHub
 ```
 
-**Links**
-
-```text
-Website: https://sulabhdubey.github.io/rta-smriti-brain/
-GitHub: https://github.com/sulabhdubey/rta-smriti-brain
-Video: [PUBLIC-YOUTUBE-URL]
-```
-
 ## Maker Comment
 
 ```text
@@ -65,7 +70,7 @@ I built Rta-Smriti Brain to move that memory out of the chat and into the projec
 
 The unusual part is the Pramana evidence model. An observed test result, a trusted human instruction, an inference, a prior memory, and a hypothesis remain different kinds of knowledge instead of becoming one undifferentiated memory blob.
 
-This is an alpha developer release. It is open source, local-first, and already tested across six project brains, including a 26,482-file repository. I would especially value feedback on onboarding, retrieval quality, and integrations with your preferred coding agent.
+This is an alpha developer release. It is open source and local-first. I would especially value feedback on onboarding, retrieval quality, and integrations with your preferred coding agent.
 ```
 
 ## What Makes It Different
@@ -84,11 +89,11 @@ This is an alpha developer release. It is open source, local-first, and already 
 2. `launch-assets/product-hunt/gallery-02-any-agent.png`
 3. `launch-assets/product-hunt/gallery-03-evidence.png`
 4. `launch-assets/product-hunt/gallery-04-focused-pack.png`
-5. YouTube video generated from `launch-video/`
+5. Video generated from `launch-video/`
 
 Use `launch-assets/product-hunt/thumbnail-240.png` as the thumbnail.
 
-## Launch Posts
+## Reusable Launch Posts
 
 **LinkedIn / X**
 
@@ -100,7 +105,6 @@ It gives each repository a private local brain: repo structure, durable decision
 Open source. SQLite. CLI + MCP + visual operator console. No account or telemetry.
 
 https://github.com/sulabhdubey/rta-smriti-brain
-[PRODUCT-HUNT-URL]
 ```
 
 **Show HN**
@@ -111,26 +115,24 @@ Show HN: Rta-Smriti Brain - local project memory for AI coding agents
 I built an open-source local memory layer that indexes repository structure, durable decisions, and long agent-session handoffs into SQLite, then generates bounded context packs for a concrete task. It includes a CLI, stdio MCP server, and an inspectable React operator console. The evidence model keeps observed facts, trusted instructions, inferences, memories, and hypotheses distinct. I would value feedback on retrieval quality and agent integrations.
 ```
 
-## Launch-Day Sequence
+## Release Sequence
 
-1. Create the public GitHub repository and set the social preview to `launch-assets/social/github-social-preview.png`.
-2. Confirm the default branch, description, topics, Pages workflow, Discussions, and vulnerability reporting.
-3. Create release `v0.3.0-alpha` using `docs/RELEASE_NOTES_v0.3.0-alpha.md`.
-4. Upload the MP4 to YouTube as an unlisted or public full URL and add captions if narration is later added.
-5. Schedule Product Hunt for 12:01 a.m. Pacific and upload the thumbnail plus four gallery images.
-6. Add the maker comment immediately after launch.
-7. Publish the GitHub, Product Hunt, LinkedIn/X, and Show HN posts.
-8. Reply to feedback with concrete answers; do not ask for upvotes or use voting groups.
+1. Run every command in `docs/RELEASE_VERIFICATION.md` and review the output.
+2. Confirm the default branch, repository description, topics, Pages workflow, Discussions, and vulnerability reporting.
+3. Inspect launch media manually for private names, paths, metadata, and unreleased product information.
+4. Update release notes for the version being published.
+5. Create a Git tag and GitHub Release only after explicit maintainer approval.
+6. Publish approved directory, social, and community posts without asking for votes or using voting groups.
+7. Reply to feedback with concrete technical answers and record actionable issues.
 
-## Human Review Gate
+## Maintainer Review Gate
 
-- [ ] Product name and tagline approved
-- [ ] Public GitHub owner/repository URL inserted
-- [ ] YouTube URL inserted
-- [ ] Product Hunt maker profile and launch date selected
-- [ ] Screenshots and video visually approved
-- [ ] Final commit and release tag approved
-- [ ] No real local project names, paths, databases, context packs, or secrets in tracked files
+- [ ] Product name, tagline, copy, screenshots, and video approved
+- [ ] Public links resolve without authentication
+- [ ] Current release notes match the source version
+- [ ] Verification and privacy commands pass
+- [ ] No local project names, paths, databases, context packs, or secrets are tracked
+- [ ] Tag and GitHub Release decision explicitly approved
 
 ## Official References
 

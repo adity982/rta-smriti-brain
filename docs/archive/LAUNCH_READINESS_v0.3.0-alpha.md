@@ -1,10 +1,17 @@
-# Rta-Smriti Brain Launch Readiness
+# Historical Launch Readiness: v0.3.0-alpha
+
+> **Archived snapshot:** This document records a pre-publication v0.3 review.
+> It is retained for historical traceability and is not the current release
+> state. See [`../RELEASE_VERIFICATION.md`](../RELEASE_VERIFICATION.md) for the
+> current, reproducible verification record.
+
+## Status At The Time
 
 **Status:** Review-ready. Not published, tagged, or pushed.
 
 **Release candidate:** `v0.3.0-alpha`
 
-## What Is Ready
+## What Was Ready
 
 - Local-first Python and SQLite project brain with repository, thread, memory, graph, freshness, and context-pack workflows.
 - Secure React operator console with project switching, graph, file explorer, canvas, bases, memory ledger, evidence inspector, bootstrap, and publish-readiness views.
@@ -13,9 +20,9 @@
 - Product launch site, Product Hunt gallery, GitHub social preview, editable Remotion project, and a 60-second launch video.
 - Public documentation for installation, usage, privacy, security, contribution, governance, roadmap, release notes, and launch operations.
 
-## Verification Evidence
+## Verification Evidence At The Time
 
-| Gate | Result |
+| Gate | Recorded result |
 | --- | --- |
 | Python regression suite | 33 passed, 1 skipped |
 | Python bytecode compilation | Passed |
@@ -30,22 +37,18 @@
 | Browser smoke checks | Desktop and mobile passed |
 | Video validation | H.264, 1920 x 1080, 30 fps, 60 seconds |
 
-The skipped test exercises Windows symlink rejection. This machine account does not hold the privilege required to create the test symlink. Hard-link rejection and all other filesystem boundary tests passed.
-
-## Security Qualification
-
-The initial independent scan identified dashboard authorization, origin, filesystem-link, parser-bounds, prompt-boundary, workflow-permission, receipt-storage, and privacy risks. These were remediated and regression-tested.
-
-The post-remediation review validated the major fixes and identified one additional low-severity publication-scan coverage gap. The scanner now checks command files, UTF-8 paths, UTF-16 metadata, and printable media metadata without interpreting compressed payload bytes. The final authoritative security report is generated as the last local release gate.
+The skipped test exercised Windows symlink rejection. The machine account did
+not hold the privilege required to create the test symlink. Hard-link rejection
+and all other filesystem boundary tests passed.
 
 ## Privacy Boundary
 
-- No local brain databases, repository contents, user paths, capability tokens, or private project names belong in the public package.
-- Synthetic `atlas-demo` data is the only project shown in public screenshots and launch media.
-- Public candidates are scanned before release; media still receives a manual visual inspection.
-- Dashboard capability tokens remain session-only and are removed from the browser URL after bootstrap.
+- No local brain databases, repository contents, user paths, capability tokens, or private project names belonged in the public package.
+- Synthetic `atlas-demo` data was the only project shown in public screenshots and launch media.
+- Public candidates were scanned before release; media still required manual visual inspection.
+- Dashboard capability tokens remained session-only and were removed from the browser URL after bootstrap.
 
-## Human Approval Gates
+## Human Approval Gates At The Time
 
 1. Approve the launch page, screenshots, video, Product Hunt copy, and maker comment.
 2. Choose the GitHub owner and final repository name, then replace public URL placeholders.
@@ -53,15 +56,4 @@ The post-remediation review validated the major fixes and identified one additio
 4. Choose the Product Hunt account, launch date, and maker profiles.
 5. Commit the reviewed tree, create the release tag, push, enable GitHub Pages, and submit Product Hunt.
 
-## Review Map
-
-- Product introduction: `README.md`
-- Product Hunt and launch copy: `docs/LAUNCH_KIT.md`
-- Asset inventory: `launch-assets/ASSET_MANIFEST.md`
-- Brand rules: `launch-assets/BRAND_GUIDE.md`
-- Privacy procedure: `docs/PUBLISHING_PRIVACY.md`
-- Security policy: `SECURITY.md`
-- Release notes: `docs/RELEASE_NOTES_v0.3.0-alpha.md`
-- Publish checklist: `GITHUB_PUBLISH_CHECKLIST.md`
-
-The only expected publish-readiness check still open before approval is a clean Git working tree. That check becomes green after the reviewed release files are committed.
+These gates describe the historical pre-publication state only.

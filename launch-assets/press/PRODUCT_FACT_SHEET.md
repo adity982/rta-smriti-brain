@@ -2,7 +2,9 @@
 
 **Category:** Open-source developer tool, local AI project memory
 
-**Release:** `v0.3.0-alpha`
+**Current source:** `0.4.0-alpha` on `main`
+
+**Release state:** The `v0.4.0-alpha` tag and GitHub Release are intentionally not created.
 
 **License:** MIT
 
@@ -16,6 +18,6 @@
 
 **Privacy:** Local SQLite storage, loopback-only console, no account, no telemetry, no hosted database.
 
-**Validation snapshot:** 24 tests passed and 1 skipped in the prior full suite; six local project brains exercised; largest indexed project contained 26,482 files. Run the current release verification commands before publishing because this snapshot can become stale.
+**Validation:** See `docs/RELEASE_VERIFICATION.md` for current, reproducible checks. Historical test counts and private-project scale claims are intentionally excluded from this fact sheet.
 
 **Primary differentiator:** Repository evidence, durable human memory, session handoffs, evidence class, freshness, and agent-ready context are combined in one inspectable local layer.
