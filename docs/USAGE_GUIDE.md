@@ -131,6 +131,10 @@ Searches graph nodes so you can quickly find a file, memory, symbol, or generate
 
 Filters the graph by node type.
 
+**Settings**
+
+Controls the active project's indexing policy. You can raise or lower the fail-closed source-file cap, keep the built-in regex parser, select an installed Tree-sitter adapter, configure an explicit local LSP bridge, or enable local hybrid retrieval. Optional providers never turn themselves on.
+
 **Context-Pack Studio**
 
 The main daily workflow. Choose `Universal / Any Agent`, Codex, Claude Code, Cursor, GitHub Copilot, Gemini CLI, Windsurf, Cline, Aider, OpenCode, Continue, or enter a custom agent name. Type the task, click `Generate Context Pack`, then copy the pack into the agent chat. Each generation creates privacy-safe receipt metadata; the full pack stays available only in the current browser session.
@@ -241,7 +245,38 @@ Then:
 rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json stale-check --project project-name
 ```
 
-Use `--deep` to hash every indexed file before release or security-critical work.
+Use `--deep` for SHA-256 freshness with stat-keyed cache reuse. Use `ingest-repo --force` when you need to re-read and re-index every eligible source regardless of cached metadata.
+
+Keep a repository refreshed while you work:
+
+```powershell
+rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" watch-repo C:\path\to\project --project project-name --interval 2
+```
+
+This watcher stays in the foreground and stops cleanly with `Ctrl+C`; it does not install a daemon or operating-system service.
+
+## Configure Retrieval And Parsing
+
+The defaults are deterministic regex parsing, FTS5 retrieval, and a 512 KB source cap. Read the active policy:
+
+```powershell
+rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json settings --project project-name
+```
+
+Enable the dependency-free local hash provider and a 1 MB source cap:
+
+```powershell
+rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json settings --project project-name --embedding-provider hash --max-file-mb 1
+```
+
+Changing an indexing policy invalidates the fast manifest. Run `ingest-repo` or use the dashboard refresh action to rebuild affected records. Sources above the selected cap remain visibly blocked.
+
+Install optional local backends from the repository only when you need them:
+
+```powershell
+python -m pip install -e ".[tree-sitter]"
+python -m pip install -e ".[embeddings]"
+```
 
 ## What Not To Publish
 

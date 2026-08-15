@@ -16,7 +16,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .context import build_context_pack
-from .db import connect, graph, ingest_repo, init_schema, reflect, remember, search, stale_check
+from .db import (
+    connect, get_project_settings, graph, ingest_repo, init_schema, reflect, remember, search,
+    stale_check, update_project_settings,
+)
+from .parsers import ParserRegistry
 from .project import bootstrap_project, mcp_config_payload, projects_list, self_check
 
 
@@ -631,6 +635,18 @@ def make_handler(config: ConsoleConfig):
                     finally:
                         conn.close()
                     return
+                if parsed.path == "/api/settings":
+                    q = _query(self)
+                    conn = _open_db(resolve_brain_db(config, q["db_path"]))
+                    try:
+                        settings = get_project_settings(conn, q["project"])
+                        self._json({
+                            "status": "ok", "settings": settings,
+                            "parser_capabilities": ParserRegistry(lsp_command=settings["lsp_command"]).capabilities(),
+                        })
+                    finally:
+                        conn.close()
+                    return
                 if parsed.path == "/api/mcp-config":
                     q = _query(self)
                     db_path = resolve_brain_db(config, q["db_path"])
@@ -717,6 +733,17 @@ def make_handler(config: ConsoleConfig):
                         if not row or not row["root_path"]:
                             raise ValueError("project has no repository path to refresh")
                         self._json(ingest_repo(conn, Path(row["root_path"]), project=payload["project"], force=bool(payload.get("force", False))))
+                    finally:
+                        conn.close()
+                    return
+                if self.path == "/api/settings":
+                    conn = _open_db(resolve_brain_db(config, payload["db_path"]))
+                    try:
+                        settings = update_project_settings(conn, payload["project"], payload.get("settings", {}))
+                        self._json({
+                            "status": "ok", "settings": settings,
+                            "parser_capabilities": ParserRegistry(lsp_command=settings["lsp_command"]).capabilities(),
+                        })
                     finally:
                         conn.close()
                     return

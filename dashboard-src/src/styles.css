@@ -626,21 +626,138 @@ button:disabled {
 
 .graphSettings {
   grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  min-height: 40px;
-  padding: 6px 10px;
+  display: grid;
+  grid-template-columns: minmax(300px, 0.8fr) minmax(620px, 2fr);
+  align-items: stretch;
+  gap: 10px;
+  padding: 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.025);
 }
 
+.settingsGroup {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 6px;
+  background: rgba(3, 10, 18, 0.28);
+}
+
+.settingsGroup > strong {
+  flex: 0 0 auto;
+  color: #e6f1fb;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.graphDisplaySettings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-content: center;
+}
+
+.graphDisplaySettings > strong,
+.graphDisplaySettings > label:nth-child(2) {
+  grid-column: 1 / -1;
+}
+
 .graphSettings label {
   display: inline-flex;
+  align-items: center;
   grid-template-columns: none;
   gap: 8px;
   white-space: nowrap;
+}
+
+.graphSettings label > span,
+.graphSettings label > em {
+  color: #9fb0c3;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.graphSettings select,
+.graphSettings input[type="number"],
+.graphSettings input[type="text"] {
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: #eaf4ff;
+  background: #09131f;
+}
+
+.graphSettings select {
+  max-width: 190px;
+  padding: 0 28px 0 9px;
+}
+
+.numberUnit {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.numberUnit input {
+  width: 68px;
+  padding: 0 7px;
+}
+
+.numberUnit span {
+  color: #7f93a7;
+  font-size: 11px;
+}
+
+.indexPolicySettings {
+  flex-wrap: wrap;
+}
+
+.indexPolicySettings .lspCommand {
+  flex: 1 1 320px;
+}
+
+.indexPolicySettings .lspCommand input {
+  min-width: 200px;
+  flex: 1;
+}
+
+.graphSettings em.available {
+  color: #86efac;
+}
+
+.graphSettings em.optional {
+  color: #fbbf24;
+}
+
+.savePolicyButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(94, 234, 212, 0.38);
+  border-radius: 6px;
+  color: #cffff8;
+  background: rgba(20, 184, 166, 0.13);
+  cursor: pointer;
+}
+
+.savePolicyButton:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.blockedPolicyWarning {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: #f9d98c;
+  font-size: 11px;
 }
 
 .graphSettings input[type="range"] {
@@ -650,6 +767,28 @@ button:disabled {
 
 .graphSettings input[type="checkbox"] {
   accent-color: #5eead4;
+}
+
+@media (max-width: 1200px) {
+  .graphSettings {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .settingsGroup {
+    align-items: stretch;
+  }
+
+  .indexPolicySettings > label,
+  .indexPolicySettings > .savePolicyButton {
+    flex: 1 1 100%;
+    justify-content: space-between;
+  }
+
+  .graphSettings select {
+    max-width: 210px;
+  }
 }
 
 .toggleLabel {

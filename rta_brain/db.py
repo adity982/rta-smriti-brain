@@ -4,7 +4,9 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .embeddings import cosine_similarity, create_provider
 from .ingest import build_file_record, chunk_text, extract_terms, read_text, sha256_text, walk_repo
+from .parsers import ParserRegistry
 
 
 VALID_PRAMANA = {"pratyaksha", "sabda", "anumana", "smriti", "kalpana"}
@@ -12,6 +14,14 @@ MAX_THREAD_BYTES = 10 * 1024 * 1024
 MAX_THREAD_PROMOTIONS = 100
 MAX_SEARCH_LIMIT = 50
 MAX_GRAPH_LIMIT = 500
+DEFAULT_PROJECT_SETTINGS = {
+    "max_file_bytes": 512_000,
+    "parser_adapter": "regex",
+    "lsp_command": "",
+    "embedding_provider": "none",
+    "embedding_model": "all-MiniLM-L6-v2",
+    "hybrid_weight": 0.45,
+}
 QUERY_STOP_WORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "in", "is", "it",
     "of", "on", "or", "that", "the", "this", "to", "what", "when", "where", "which", "with",
@@ -126,6 +136,35 @@ def init_schema(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS project_settings (
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            key TEXT NOT NULL,
+            value_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(project_id, key)
+        );
+
+        CREATE TABLE IF NOT EXISTS file_hash_cache (
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            mtime_ns INTEGER NOT NULL,
+            sha256 TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(project_id, path)
+        );
+
+        CREATE TABLE IF NOT EXISTS chunk_embeddings (
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            vector_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(project_id, chunk_id, provider, model)
+        );
+
         CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
             memory_id UNINDEXED,
             project_id UNINDEXED,
@@ -149,6 +188,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_edges_project_source_id ON edges(project_id, source_id, id);
         CREATE INDEX IF NOT EXISTS idx_edges_project_memory_id ON edges(project_id, memory_id, id);
         CREATE INDEX IF NOT EXISTS idx_sources_project_kind_title ON sources(project_id, kind, title);
+        CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_project_provider ON chunk_embeddings(project_id, provider, model);
         """
     )
     conn.commit()
@@ -173,6 +213,87 @@ def ensure_project(conn: sqlite3.Connection, name: str, root_path: str | None = 
 def init_project(conn: sqlite3.Connection, name: str, root_path: str) -> dict:
     project_id = ensure_project(conn, name, root_path)
     return {"status": "ok", "project": {"id": project_id, "name": name, "root_path": root_path}}
+
+
+def _validate_project_settings(settings: dict) -> dict:
+    unknown = set(settings) - set(DEFAULT_PROJECT_SETTINGS)
+    if unknown:
+        raise ValueError(f"unknown project setting(s): {', '.join(sorted(unknown))}")
+    validated = {}
+    if "max_file_bytes" in settings:
+        value = int(settings["max_file_bytes"])
+        if not 4_096 <= value <= 16_000_000:
+            raise ValueError("max_file_bytes must be between 4,096 and 16,000,000")
+        validated["max_file_bytes"] = value
+    if "parser_adapter" in settings:
+        value = str(settings["parser_adapter"]).strip().lower()
+        if value not in {"regex", "tree-sitter", "lsp"}:
+            raise ValueError("parser_adapter must be regex, tree-sitter, or lsp")
+        validated["parser_adapter"] = value
+    if "lsp_command" in settings:
+        validated["lsp_command"] = str(settings["lsp_command"]).strip()[:2_000]
+    if "embedding_provider" in settings:
+        value = str(settings["embedding_provider"]).strip().lower()
+        if value not in {"none", "hash", "sentence-transformers"}:
+            raise ValueError("embedding_provider must be none, hash, or sentence-transformers")
+        validated["embedding_provider"] = value
+    if "embedding_model" in settings:
+        value = str(settings["embedding_model"]).strip()
+        if not value or len(value) > 300:
+            raise ValueError("embedding_model must contain between 1 and 300 characters")
+        validated["embedding_model"] = value
+    if "hybrid_weight" in settings:
+        value = float(settings["hybrid_weight"])
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("hybrid_weight must be between 0 and 1")
+        validated["hybrid_weight"] = value
+    return validated
+
+
+def get_project_settings(conn: sqlite3.Connection, project: str = "default") -> dict:
+    init_schema(conn)
+    project_id = ensure_project(conn, project)
+    settings = dict(DEFAULT_PROJECT_SETTINGS)
+    for row in conn.execute("SELECT key, value_json FROM project_settings WHERE project_id = ?", (project_id,)):
+        try:
+            settings[row["key"]] = json.loads(row["value_json"])
+        except json.JSONDecodeError:
+            continue
+    return settings
+
+
+def update_project_settings(
+    conn: sqlite3.Connection,
+    project: str,
+    settings: dict,
+    root_path: str | None = None,
+) -> dict:
+    init_schema(conn)
+    project_id = ensure_project(conn, project, root_path)
+    validated = _validate_project_settings(settings)
+    timestamp = now_iso()
+    for key, value in validated.items():
+        conn.execute(
+            "INSERT INTO project_settings(project_id, key, value_json, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(project_id, key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
+            (project_id, key, json.dumps(value), timestamp),
+        )
+    if validated:
+        conn.execute("DELETE FROM repo_manifests WHERE project_id = ?", (project_id,))
+    conn.commit()
+    return get_project_settings(conn, project)
+
+
+def get_hash_cache_stats(conn: sqlite3.Connection, project: str = "default") -> dict:
+    init_schema(conn)
+    row = conn.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()
+    if not row:
+        return {"status": "ok", "project": project, "entries": 0, "updated_at": None}
+    stats = conn.execute(
+        "SELECT COUNT(*) AS entries, MAX(updated_at) AS updated_at FROM file_hash_cache WHERE project_id = ?",
+        (int(row["id"]),),
+    ).fetchone()
+    return {"status": "ok", "project": project, "entries": int(stats["entries"]), "updated_at": stats["updated_at"]}
 
 
 def canonical(value: str) -> str:
@@ -416,9 +537,9 @@ def upsert_source(conn: sqlite3.Connection, project_id: int, kind: str, path: st
     return int(cur.lastrowid)
 
 
-def _repo_stat_manifest(root: Path) -> tuple[str, list[tuple[Path, object]], list[dict[str, str]]]:
+def _repo_stat_manifest(root: Path, max_file_bytes: int = 512_000) -> tuple[str, list[tuple[Path, object]], list[dict[str, str]]]:
     rejected: list[dict[str, str]] = []
-    path_stats = [(path, path.stat()) for path in walk_repo(root, rejected=rejected)]
+    path_stats = [(path, path.stat()) for path in walk_repo(root, rejected=rejected, max_file_bytes=max_file_bytes)]
     manifest_lines = [
         f"{path.relative_to(root).as_posix()}\0{stat.st_size}\0{stat.st_mtime_ns}"
         for path, stat in path_stats
@@ -427,19 +548,64 @@ def _repo_stat_manifest(root: Path) -> tuple[str, list[tuple[Path, object]], lis
     return sha256_text("\n".join(manifest_lines)), path_stats, rejected
 
 
+def _configured_manifest_digest(file_digest: str, settings: dict, parser_registry: ParserRegistry) -> str:
+    parser_adapter = str(settings["parser_adapter"])
+    parser_capability = parser_registry.capabilities().get(parser_adapter, {"available": False})
+    provider_name = str(settings["embedding_provider"])
+    embedding_model = {
+        "none": "none",
+        "hash": "rta-feature-hash-v1",
+    }.get(provider_name, str(settings["embedding_model"]))
+    return sha256_text(json.dumps({
+        "files": file_digest,
+        "max_file_bytes": int(settings["max_file_bytes"]),
+        "parser_adapter": parser_adapter,
+        "parser_available": parser_capability["available"],
+        "lsp_command": settings["lsp_command"],
+        "embedding_provider": provider_name,
+        "embedding_model": embedding_model,
+    }, sort_keys=True))
+
+
 def ingest_repo(conn: sqlite3.Connection, root: Path, project: str = "default", force: bool = False) -> dict:
     init_schema(conn)
     root = root.resolve()
     if not root.exists() or not root.is_dir():
         raise ValueError(f"repo path does not exist or is not a directory: {root}")
     project_id = ensure_project(conn, project, str(root))
-    manifest_digest, path_stats, rejected = _repo_stat_manifest(root)
+    settings = get_project_settings(conn, project)
+    max_file_bytes = int(settings["max_file_bytes"])
+    parser_adapter = str(settings["parser_adapter"])
+    embedding_provider_name = str(settings["embedding_provider"])
+    embedding_model = str(settings["embedding_model"])
+    provider = create_provider(embedding_provider_name, embedding_model)
+    parser_registry = ParserRegistry(load_entry_points=False, lsp_command=str(settings["lsp_command"]))
+    manifest_digest, path_stats, rejected = _repo_stat_manifest(root, max_file_bytes=max_file_bytes)
+    manifest_digest = _configured_manifest_digest(manifest_digest, settings, parser_registry)
+    blocked_files = sum(item["reason"].startswith("oversized:") for item in rejected)
     prior_manifest = conn.execute("SELECT digest, file_count FROM repo_manifests WHERE project_id = ?", (project_id,)).fetchone()
-    if not force and prior_manifest and prior_manifest["digest"] == manifest_digest and int(prior_manifest["file_count"]) == len(path_stats):
+    embedding_index_ready = True
+    if provider is not None:
+        expected = int(conn.execute(
+            "SELECT COUNT(*) AS count FROM chunks c JOIN sources s ON s.id = c.source_id "
+            "WHERE s.project_id = ? AND s.kind = 'file'", (project_id,),
+        ).fetchone()["count"])
+        actual = int(conn.execute(
+            "SELECT COUNT(*) AS count FROM chunk_embeddings WHERE project_id = ? AND provider = ? AND model = ?",
+            (project_id, provider.name, provider.model),
+        ).fetchone()["count"])
+        embedding_index_ready = expected == actual
+    if (
+        not force and embedding_index_ready and prior_manifest
+        and prior_manifest["digest"] == manifest_digest and int(prior_manifest["file_count"]) == len(path_stats)
+    ):
         return {
             "status": "ok", "project": project, "root": str(root), "indexed_files": len(path_stats),
             "updated_files": 0, "unchanged_files": len(path_stats), "removed_files": 0,
-            "skipped_files": len(rejected), "symbols": 0, "edges": 0, "chunks": 0, "manifest_unchanged": True,
+            "skipped_files": len(rejected), "blocked_files": blocked_files, "max_file_bytes": max_file_bytes,
+            "symbols": 0, "edges": 0, "chunks": 0, "embedded_chunks": 0,
+            "parser_adapter": parser_adapter, "embedding_provider": embedding_provider_name,
+            "parser_warnings": [], "manifest_unchanged": True,
         }
     existing = {str(row["path"]): dict(row) for row in conn.execute(
         "SELECT id, path, title, hash, metadata_json, updated_at FROM sources WHERE project_id = ? AND kind = 'file'",
@@ -454,6 +620,8 @@ def ingest_repo(conn: sqlite3.Connection, root: Path, project: str = "default", 
     symbols = 0
     edges = 0
     chunks = 0
+    embedded_chunks = 0
+    parser_warnings = []
     for path, stat in path_stats:
         path_key = str(path)
         seen_paths.add(path_key)
@@ -464,11 +632,18 @@ def ingest_repo(conn: sqlite3.Connection, root: Path, project: str = "default", 
                 prior_metadata = json.loads(row["metadata_json"] or "{}")
             except json.JSONDecodeError:
                 prior_metadata = {}
-            if prior_metadata.get("mtime_ns") == stat.st_mtime_ns and prior_metadata.get("size") == stat.st_size:
+            embedding_ready = provider is None or not bool(conn.execute(
+                "SELECT 1 FROM chunks c LEFT JOIN chunk_embeddings ce ON ce.chunk_id = c.id "
+                "AND ce.project_id = ? AND ce.provider = ? AND ce.model = ? "
+                "WHERE c.source_id = ? AND ce.chunk_id IS NULL LIMIT 1",
+                (project_id, provider.name if provider else "", provider.model if provider else "", int(row["id"])),
+            ).fetchone())
+            parser_ready = prior_metadata.get("parser", "regex") == parser_adapter
+            if not force and prior_metadata.get("mtime_ns") == stat.st_mtime_ns and prior_metadata.get("size") == stat.st_size and parser_ready and embedding_ready:
                 indexed_files += 1
                 unchanged_files += 1
                 continue
-            if "mtime_ns" not in prior_metadata:
+            if not force and "mtime_ns" not in prior_metadata:
                 try:
                     indexed_at = datetime.fromisoformat(row["updated_at"]).timestamp()
                 except (TypeError, ValueError):
@@ -477,15 +652,18 @@ def ingest_repo(conn: sqlite3.Connection, root: Path, project: str = "default", 
                     indexed_files += 1
                     unchanged_files += 1
                     continue
-            text = read_text(path)
-            if text is not None and sha256_text(text) == row["hash"]:
+            text = read_text(path, max_bytes=max_file_bytes)
+            if not force and text is not None and sha256_text(text) == row["hash"] and parser_ready and embedding_ready:
                 if "mtime_ns" in prior_metadata:
                     metadata = {**prior_metadata, "mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
                     conn.execute("UPDATE sources SET metadata_json = ?, updated_at = ? WHERE id = ?", (json.dumps(metadata), now_iso(), int(row["id"])))
                 indexed_files += 1
                 unchanged_files += 1
                 continue
-        record = build_file_record(root, path)
+        record = build_file_record(
+            root, path, max_bytes=max_file_bytes, parser_name=parser_adapter,
+            lsp_command=str(settings["lsp_command"]), parser_registry=parser_registry,
+        )
         if record is None:
             skipped_files += 1
             continue
@@ -498,9 +676,14 @@ def ingest_repo(conn: sqlite3.Connection, root: Path, project: str = "default", 
             str(record.path),
             record.relative_path,
             record.sha256,
-            {"relative_path": record.relative_path, "mtime_ns": stat.st_mtime_ns, "size": stat.st_size},
+            {
+                "relative_path": record.relative_path, "mtime_ns": stat.st_mtime_ns, "size": stat.st_size,
+                "parser": record.parser, "parser_warnings": list(record.parser_warnings),
+            },
         )
+        parser_warnings.extend(f"{record.relative_path}: {warning}" for warning in record.parser_warnings)
         file_entity = ensure_entity(conn, project_id, "file", record.relative_path)
+        vectors = provider.embed(record.chunks) if provider is not None else []
         for ordinal, chunk in enumerate(record.chunks):
             cur = conn.execute(
                 "INSERT INTO chunks(source_id, ordinal, text, hash) VALUES (?, ?, ?, ?)",
@@ -511,6 +694,14 @@ def ingest_repo(conn: sqlite3.Connection, root: Path, project: str = "default", 
                 "INSERT INTO chunk_fts(chunk_id, source_id, project_id, path, text) VALUES (?, ?, ?, ?, ?)",
                 (chunk_id, source_id, project_id, record.relative_path, chunk),
             )
+            if provider is not None:
+                vector = vectors[ordinal]
+                conn.execute(
+                    "INSERT INTO chunk_embeddings(project_id, chunk_id, provider, model, vector_json, content_hash, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (project_id, chunk_id, provider.name, provider.model, json.dumps(vector), sha256_text(chunk), now_iso()),
+                )
+                embedded_chunks += 1
             chunks += 1
         for symbol in record.symbols:
             sym_entity = ensure_entity(conn, project_id, "symbol", symbol)
@@ -523,6 +714,12 @@ def ingest_repo(conn: sqlite3.Connection, root: Path, project: str = "default", 
                 edges += 1
         indexed_files += 1
         updated_files += 1
+        conn.execute(
+            "INSERT INTO file_hash_cache(project_id, path, size, mtime_ns, sha256, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(project_id, path) DO UPDATE SET size = excluded.size, mtime_ns = excluded.mtime_ns, "
+            "sha256 = excluded.sha256, updated_at = excluded.updated_at",
+            (project_id, path_key, stat.st_size, stat.st_mtime_ns, record.sha256, now_iso()),
+        )
     for path_key, row in existing.items():
         if path_key in seen_paths:
             continue
@@ -530,6 +727,7 @@ def ingest_repo(conn: sqlite3.Connection, root: Path, project: str = "default", 
         conn.execute("DELETE FROM chunk_fts WHERE source_id = ?", (source_id,))
         conn.execute("DELETE FROM edges WHERE project_id = ? AND source_id = ?", (project_id, source_id))
         conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+        conn.execute("DELETE FROM file_hash_cache WHERE project_id = ? AND path = ?", (project_id, path_key))
         removed_files += 1
     if updated_files or removed_files:
         conn.execute(
@@ -547,7 +745,10 @@ def ingest_repo(conn: sqlite3.Connection, root: Path, project: str = "default", 
     return {
         "status": "ok", "project": project, "root": str(root), "indexed_files": indexed_files,
         "updated_files": updated_files, "unchanged_files": unchanged_files, "removed_files": removed_files,
-        "skipped_files": skipped_files, "symbols": symbols, "edges": edges, "chunks": chunks, "manifest_unchanged": False,
+        "skipped_files": skipped_files, "blocked_files": blocked_files, "max_file_bytes": max_file_bytes,
+        "symbols": symbols, "edges": edges, "chunks": chunks, "embedded_chunks": embedded_chunks,
+        "parser_adapter": parser_adapter, "embedding_provider": embedding_provider_name,
+        "parser_warnings": parser_warnings[:100], "manifest_unchanged": False,
     }
 
 
@@ -567,7 +768,13 @@ def query_to_fts(query: str) -> str:
     return " OR ".join(selected[:8])
 
 
-def search(conn: sqlite3.Connection, query: str, project: str | None = None, limit: int = 8) -> dict:
+def search(
+    conn: sqlite3.Connection,
+    query: str,
+    project: str | None = None,
+    limit: int = 8,
+    hybrid: bool | None = None,
+) -> dict:
     init_schema(conn)
     query = str(query)[:10_000]
     limit = max(1, min(MAX_SEARCH_LIMIT, int(limit)))
@@ -576,8 +783,14 @@ def search(conn: sqlite3.Connection, query: str, project: str | None = None, lim
     if project:
         row = conn.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()
         if not row:
-            return {"status": "ok", "query": query, "memories": [], "chunks": []}
+            return {
+                "status": "ok", "query": query, "memories": [], "chunks": [],
+                "retrieval": {"mode": "fts", "provider": "none"},
+            }
         project_id = int(row["id"])
+    settings = get_project_settings(conn, project) if project else dict(DEFAULT_PROJECT_SETTINGS)
+    provider_name = str(settings["embedding_provider"])
+    use_hybrid = (provider_name != "none") if hybrid is None else bool(hybrid and provider_name != "none")
     project_count = int(conn.execute("SELECT COUNT(*) AS count FROM projects").fetchone()["count"])
     candidate_limit = limit if project_count <= 1 else min(5000, max(512, limit * 64))
 
@@ -655,13 +868,56 @@ def search(conn: sqlite3.Connection, query: str, project: str | None = None, lim
                 item["path"] = candidate["path"]
                 item["rank"] = candidate["rank"]
                 chunks.append(item)
+    retrieval = {"mode": "fts", "provider": "none"}
+    if use_hybrid and project_id is not None:
+        provider = create_provider(provider_name, str(settings["embedding_model"]))
+        query_vector = provider.embed([query])[0]
+        semantic_rows = conn.execute(
+            """
+            SELECT ce.chunk_id, ce.vector_json, c.text, s.hash AS source_hash, s.title AS path, p.name AS project
+            FROM chunk_embeddings ce
+            JOIN chunks c ON c.id = ce.chunk_id
+            JOIN sources s ON s.id = c.source_id
+            JOIN projects p ON p.id = ce.project_id
+            WHERE ce.project_id = ? AND ce.provider = ? AND ce.model = ?
+            LIMIT 5000
+            """,
+            (project_id, provider.name, provider.model),
+        ).fetchall()
+        lexical_order = {int(item["id"]): index for index, item in enumerate(chunks)}
+        merged = {int(item["id"]): item for item in chunks}
+        semantic_scores = {}
+        for row in semantic_rows:
+            try:
+                vector = json.loads(row["vector_json"])
+            except json.JSONDecodeError:
+                continue
+            chunk_id = int(row["chunk_id"])
+            semantic_scores[chunk_id] = max(0.0, cosine_similarity(query_vector, vector))
+            if chunk_id not in merged:
+                merged[chunk_id] = {
+                    "id": chunk_id, "project": row["project"], "text": str(row["text"])[:500],
+                    "source_hash": row["source_hash"], "path": row["path"], "rank": None,
+                }
+        semantic_weight = float(settings["hybrid_weight"])
+        for chunk_id, item in merged.items():
+            lexical_score = 1.0 / (1.0 + lexical_order[chunk_id]) if chunk_id in lexical_order else 0.0
+            semantic_score = semantic_scores.get(chunk_id, 0.0)
+            item["lexical_score"] = round(lexical_score, 6)
+            item["semantic_score"] = round(semantic_score, 6)
+            item["hybrid_score"] = round((1.0 - semantic_weight) * lexical_score + semantic_weight * semantic_score, 6)
+        chunks = sorted(merged.values(), key=lambda item: (-item["hybrid_score"], str(item["path"])))[:limit]
+        retrieval = {
+            "mode": "hybrid", "provider": provider.name, "model": provider.model,
+            "semantic_weight": semantic_weight, "candidates": len(merged),
+        }
     selected = {"memories": [item["id"] for item in memories], "chunks": [item["id"] for item in chunks]}
     conn.execute(
         "INSERT INTO recall_logs(project_id, query, selected_json, created_at) VALUES (?, ?, ?, ?)",
         (project_id, query, json.dumps(selected), now_iso()),
     )
     conn.commit()
-    return {"status": "ok", "query": query, "memories": memories, "chunks": chunks}
+    return {"status": "ok", "query": query, "memories": memories, "chunks": chunks, "retrieval": retrieval}
 
 
 def _memory_norm(text: str) -> str:
@@ -858,7 +1114,12 @@ def stale_check(conn: sqlite3.Connection, project: str = "default", deep: bool =
     init_schema(conn)
     row = conn.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()
     if not row:
-        return {"status": "ok", "project": project, "mode": "sha256" if deep else "stat-manifest", "state": "unknown", "fresh": 0, "changed": 0, "missing": 0, "added": 0, "details": []}
+        return {
+            "status": "ok", "project": project, "mode": "sha256" if deep else "stat-manifest",
+            "state": "unknown", "fresh": 0, "changed": 0, "missing": 0, "added": 0,
+            "hash_cache_hits": 0, "hash_cache_misses": 0, "details": [],
+        }
+    settings = get_project_settings(conn, project)
     details = []
     counts = {"fresh": 0, "changed": 0, "missing": 0, "added": 0, "uninspectable": 0}
     indexed_titles = set()
@@ -868,7 +1129,12 @@ def stale_check(conn: sqlite3.Connection, project: str = "default", deep: bool =
     rejected: list[dict[str, str]] = []
     manifest_digest = None
     if root_path and root_path.exists():
-        manifest_digest, path_stats, rejected = _repo_stat_manifest(root_path)
+        manifest_digest, path_stats, rejected = _repo_stat_manifest(root_path, max_file_bytes=int(settings["max_file_bytes"]))
+        manifest_digest = _configured_manifest_digest(
+            manifest_digest,
+            settings,
+            ParserRegistry(load_entry_points=False, lsp_command=str(settings["lsp_command"])),
+        )
         current_by_path = {str(path): stat for path, stat in path_stats}
         if not deep:
             manifest = conn.execute("SELECT digest, file_count FROM repo_manifests WHERE project_id = ?", (int(row["id"]),)).fetchone()
@@ -891,8 +1157,11 @@ def stale_check(conn: sqlite3.Connection, project: str = "default", deep: bool =
                     "status": "ok", "project": project, "mode": "stat-manifest",
                     "state": "stale" if rejected else "fresh",
                     "fresh": len(path_stats), "changed": 0, "missing": 0, "added": 0,
-                    "uninspectable": len(rejected), "details": rejected_details,
+                    "uninspectable": len(rejected), "hash_cache_hits": 0, "hash_cache_misses": 0,
+                    "details": rejected_details,
                 }
+    hash_cache_hits = 0
+    hash_cache_misses = 0
     for source in conn.execute("SELECT id, path, title, hash, metadata_json, updated_at FROM sources WHERE project_id = ? AND kind = 'file'", (int(row["id"]),)):
         path = Path(source["path"])
         indexed_titles.add(str(source["title"]).replace("\\", "/"))
@@ -900,10 +1169,24 @@ def stale_check(conn: sqlite3.Connection, project: str = "default", deep: bool =
         if stat is None:
             status = "missing"
         elif deep:
-            try:
-                current_hash = sha256_text(path.read_text(encoding="utf-8", errors="ignore"))
-            except OSError:
-                current_hash = ""
+            cached = conn.execute(
+                "SELECT sha256 FROM file_hash_cache WHERE project_id = ? AND path = ? AND size = ? AND mtime_ns = ?",
+                (int(row["id"]), str(path), stat.st_size, stat.st_mtime_ns),
+            ).fetchone()
+            if cached:
+                current_hash = cached["sha256"]
+                hash_cache_hits += 1
+            else:
+                text = read_text(path, max_bytes=int(settings["max_file_bytes"]))
+                current_hash = sha256_text(text) if text is not None else ""
+                hash_cache_misses += 1
+                if current_hash:
+                    conn.execute(
+                        "INSERT INTO file_hash_cache(project_id, path, size, mtime_ns, sha256, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(project_id, path) DO UPDATE SET size = excluded.size, mtime_ns = excluded.mtime_ns, "
+                        "sha256 = excluded.sha256, updated_at = excluded.updated_at",
+                        (int(row["id"]), str(path), stat.st_size, stat.st_mtime_ns, current_hash, now_iso()),
+                    )
             status = "fresh" if current_hash == source["hash"] else "changed"
         else:
             try:
@@ -942,7 +1225,12 @@ def stale_check(conn: sqlite3.Connection, project: str = "default", deep: bool =
     total = counts["fresh"] + counts["changed"] + counts["missing"]
     anomalies = counts["changed"] + counts["missing"] + counts["added"] + counts["uninspectable"]
     state = "stale" if anomalies else ("unknown" if total == 0 else "fresh")
-    return {"status": "ok", "project": project, "mode": "sha256" if deep else "stat-manifest", "state": state, **counts, "details": details}
+    if deep:
+        conn.commit()
+    return {
+        "status": "ok", "project": project, "mode": "sha256" if deep else "stat-manifest", "state": state,
+        **counts, "hash_cache_hits": hash_cache_hits, "hash_cache_misses": hash_cache_misses, "details": details,
+    }
 
 
 def doctor(conn: sqlite3.Connection) -> dict:

@@ -6,8 +6,12 @@ from pathlib import Path
 from . import __version__
 from .context import build_context_pack
 from .console import publish_readiness, run_dashboard
-from .db import connect, doctor, graph, ingest_repo, ingest_thread, init_project, reflect, remember, search, stale_check
+from .db import (
+    connect, doctor, get_project_settings, graph, ingest_repo, ingest_thread, init_project, reflect,
+    remember, search, stale_check, update_project_settings,
+)
 from .project import bootstrap_project, install_local, mcp_config_payload, projects_list, self_check
+from .watch import watch_repository
 
 
 def default_db_path() -> Path:
@@ -56,7 +60,23 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(ingest)
     ingest.add_argument("path")
     ingest.add_argument("--project", default="default")
-    ingest.add_argument("--force", action="store_true", help="Hash every indexed file even when the repository manifest is unchanged")
+    ingest.add_argument("--force", action="store_true", help="Re-read and re-index every eligible file even when metadata is unchanged")
+
+    watch = sub.add_parser("watch-repo", help="Continuously refresh a repository using the incremental index")
+    add_common_options(watch)
+    watch.add_argument("path")
+    watch.add_argument("--project", default="default")
+    watch.add_argument("--interval", type=float, default=2.0, help="Polling interval in seconds")
+
+    settings = sub.add_parser("settings", help="Read or update a project's indexing and retrieval policy")
+    add_common_options(settings)
+    settings.add_argument("--project", default="default")
+    settings.add_argument("--max-file-mb", type=float)
+    settings.add_argument("--parser-adapter", choices=("regex", "tree-sitter", "lsp"))
+    settings.add_argument("--lsp-command")
+    settings.add_argument("--embedding-provider", choices=("none", "hash", "sentence-transformers"))
+    settings.add_argument("--embedding-model")
+    settings.add_argument("--hybrid-weight", type=float)
 
     thread = sub.add_parser("ingest-thread", help="Index a long thread, transcript, JSONL session, or handoff file")
     add_common_options(thread)
@@ -168,6 +188,22 @@ def main(argv=None) -> int:
                 )
             elif args.command == "ingest-repo":
                 payload = ingest_repo(conn, Path(args.path), project=args.project, force=args.force)
+            elif args.command == "watch-repo":
+                payload = watch_repository(conn, Path(args.path), project=args.project, interval_seconds=args.interval)
+            elif args.command == "settings":
+                changes = {}
+                if args.max_file_mb is not None:
+                    changes["max_file_bytes"] = round(args.max_file_mb * 1_000_000)
+                for argument, key in (
+                    (args.parser_adapter, "parser_adapter"),
+                    (args.lsp_command, "lsp_command"),
+                    (args.embedding_provider, "embedding_provider"),
+                    (args.embedding_model, "embedding_model"),
+                    (args.hybrid_weight, "hybrid_weight"),
+                ):
+                    if argument is not None:
+                        changes[key] = argument
+                payload = update_project_settings(conn, args.project, changes) if changes else get_project_settings(conn, args.project)
             elif args.command == "ingest-thread":
                 payload = ingest_thread(conn, Path(args.path), project=args.project, title=args.title)
             elif args.command == "search":

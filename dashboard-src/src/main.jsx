@@ -384,6 +384,9 @@ function App() {
   const [showLabels, setShowLabels] = useState(false);
   const [showEdges, setShowEdges] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [projectSettings, setProjectSettings] = useState(null);
+  const [parserCapabilities, setParserCapabilities] = useState({});
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [receipts, setReceipts] = useState([]);
 
   const selectedParams = useMemo(() => {
@@ -431,15 +434,18 @@ function App() {
     const requestId = projectRequestRef.current + 1;
     projectRequestRef.current = requestId;
     const params = { db_path: project.db_path, project: project.project };
-    const [memoryPayload, graphPayload, stalePayload] = await Promise.all([
+    const [memoryPayload, graphPayload, stalePayload, settingsPayload] = await Promise.all([
       api(`/api/memories?${qs({ ...params, limit: 40 })}`),
       api(`/api/graph?${qs({ ...params, limit: 120 })}`),
       api(`/api/stale-check?${qs(params)}`),
+      api(`/api/settings?${qs(params)}`),
     ]);
     if (requestId !== projectRequestRef.current) return;
     setMemories(memoryPayload.memories || []);
     setGraphData(graphPayload || { nodes: [], edges: [] });
     setFreshness(stalePayload);
+    setProjectSettings(settingsPayload.settings);
+    setParserCapabilities(settingsPayload.parser_capabilities || {});
     setSelectedNode(null);
   }
 
@@ -591,11 +597,34 @@ function App() {
     try {
       const payload = await api("/api/ingest-repo", { method: "POST", body: JSON.stringify(selectedParams) });
       await Promise.all([loadProjectDetails(selectedProject), loadHealth()]);
-      setMessage(`${selectedProject.project}: ${payload.updated_files} updated, ${payload.removed_files} removed, ${payload.unchanged_files} unchanged.`);
+      const warnings = [
+        payload.blocked_files ? `${payload.blocked_files} blocked` : "",
+        payload.parser_warnings?.length ? `${payload.parser_warnings.length} parser fallback warnings` : "",
+      ].filter(Boolean).join(", ");
+      setMessage(`${selectedProject.project}: ${payload.updated_files} updated, ${payload.removed_files} removed, ${payload.unchanged_files} unchanged${warnings ? `, ${warnings}` : ""}.`);
     } catch (error) {
       setMessage(`Index refresh failed: ${error.message}`);
     } finally {
       setIsRefreshingIndex(false);
+    }
+  }
+
+  async function saveProjectSettings() {
+    if (!selectedParams || !projectSettings || isSavingSettings) return;
+    setIsSavingSettings(true);
+    setMessage(`Saving ${selectedProject.project} indexing policy...`);
+    try {
+      const payload = await api("/api/settings", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, settings: projectSettings }),
+      });
+      setProjectSettings(payload.settings);
+      setParserCapabilities(payload.parser_capabilities || {});
+      setMessage("Indexing policy saved. Refresh the index to apply it to existing files.");
+    } catch (error) {
+      setMessage(`Settings could not be saved: ${error.message}`);
+    } finally {
+      setIsSavingSettings(false);
     }
   }
 
@@ -665,7 +694,7 @@ function App() {
           </div>
           <div>
             <strong>Rta-Smriti Brain</strong>
-            <span>v0.3 Operator Console</span>
+            <span>v0.4 Alpha Operator Console</span>
           </div>
         </div>
         <div className="topStatus">
@@ -818,7 +847,19 @@ function App() {
                 </div>
               )}
               {settingsOpen && (
-                <GraphSettings depth={graphDepth} setDepth={setGraphDepth} showLabels={showLabels} setShowLabels={setShowLabels} showEdges={showEdges} setShowEdges={setShowEdges} />
+                <GraphSettings
+                  depth={graphDepth}
+                  setDepth={setGraphDepth}
+                  showLabels={showLabels}
+                  setShowLabels={setShowLabels}
+                  showEdges={showEdges}
+                  setShowEdges={setShowEdges}
+                  projectSettings={projectSettings}
+                  setProjectSettings={setProjectSettings}
+                  parserCapabilities={parserCapabilities}
+                  onSave={saveProjectSettings}
+                  isSaving={isSavingSettings}
+                />
               )}
             </div>
 
@@ -918,16 +959,69 @@ function App() {
   );
 }
 
-function GraphSettings({ depth, setDepth, showLabels, setShowLabels, showEdges, setShowEdges }) {
+function GraphSettings({
+  depth, setDepth, showLabels, setShowLabels, showEdges, setShowEdges,
+  projectSettings, setProjectSettings, parserCapabilities, onSave, isSaving,
+}) {
+  const settings = projectSettings || {};
+  const updateSetting = (key, value) => setProjectSettings((current) => ({ ...(current || {}), [key]: value }));
+  const parserStatus = parserCapabilities[settings.parser_adapter];
   return (
     <div className="graphSettings">
-      <label>
-        <span>Connection depth</span>
-        <input type="range" min="1" max="4" value={depth} onChange={(event) => setDepth(Number(event.target.value))} />
-        <strong>{depth}</strong>
-      </label>
-      <label className="toggleLabel"><input type="checkbox" checked={showLabels} onChange={(event) => setShowLabels(event.target.checked)} /> Persistent labels</label>
-      <label className="toggleLabel"><input type="checkbox" checked={showEdges} onChange={(event) => setShowEdges(event.target.checked)} /> Connections</label>
+      <div className="settingsGroup graphDisplaySettings">
+        <strong>Graph display</strong>
+        <label>
+          <span>Connection depth</span>
+          <input type="range" min="1" max="4" value={depth} onChange={(event) => setDepth(Number(event.target.value))} />
+          <strong>{depth}</strong>
+        </label>
+        <label className="toggleLabel"><input type="checkbox" checked={showLabels} onChange={(event) => setShowLabels(event.target.checked)} /> Persistent labels</label>
+        <label className="toggleLabel"><input type="checkbox" checked={showEdges} onChange={(event) => setShowEdges(event.target.checked)} /> Connections</label>
+      </div>
+      <div className="settingsGroup indexPolicySettings">
+        <strong>Project indexing policy</strong>
+        <label>
+          <span>Maximum source file size</span>
+          <div className="numberUnit">
+            <input
+              type="number"
+              min="0.01"
+              max="16"
+              step="0.1"
+              value={settings.max_file_bytes ? Number(settings.max_file_bytes / 1_000_000).toFixed(2) : ""}
+              onChange={(event) => updateSetting("max_file_bytes", Math.round(Number(event.target.value) * 1_000_000))}
+            />
+            <span>MB</span>
+          </div>
+        </label>
+        <label>
+          <span>Parser adapter</span>
+          <select value={settings.parser_adapter || "regex"} onChange={(event) => updateSetting("parser_adapter", event.target.value)}>
+            <option value="regex">Regex (built in)</option>
+            <option value="tree-sitter">Tree-sitter (optional)</option>
+            <option value="lsp">LSP command (optional)</option>
+          </select>
+          {parserStatus && <em className={parserStatus.available ? "available" : "optional"}>{parserStatus.available ? "Ready" : "Optional dependency"}</em>}
+        </label>
+        {settings.parser_adapter === "lsp" && (
+          <label className="lspCommand">
+            <span>LSP adapter command</span>
+            <input value={settings.lsp_command || ""} onChange={(event) => updateSetting("lsp_command", event.target.value)} placeholder="Command that accepts and returns JSON" />
+          </label>
+        )}
+        <label>
+          <span>Hybrid retrieval</span>
+          <select value={settings.embedding_provider || "none"} onChange={(event) => updateSetting("embedding_provider", event.target.value)}>
+            <option value="none">Off (FTS only)</option>
+            <option value="hash">Local feature hash</option>
+            <option value="sentence-transformers">Sentence Transformers (optional)</option>
+          </select>
+        </label>
+        <button className="savePolicyButton" onClick={onSave} disabled={!projectSettings || isSaving}>
+          <ShieldCheck size={15} /> {isSaving ? "Saving..." : "Save Policy"}
+        </button>
+        <p className="blockedPolicyWarning"><ShieldCheck size={14} /> Blocked files stay excluded and freshness remains fail-closed until this policy changes.</p>
+      </div>
     </div>
   );
 }

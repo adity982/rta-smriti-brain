@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rta-smriti-brain"
-version = "0.3.0"
+version = "0.4.0a1"
 description = "Local-first project memory, repo graph, context-pack, and MCP brain for AI coding agents."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,6 +26,14 @@ classifiers = [
   "Topic :: Text Processing :: Indexing"
 ]
 dependencies = []
+
+[project.optional-dependencies]
+tree-sitter = ["tree-sitter-language-pack>=1.13.3,<2"]
+embeddings = ["sentence-transformers>=5.6.1,<6"]
+all-local = [
+  "tree-sitter-language-pack>=1.13.3,<2",
+  "sentence-transformers>=5.6.1,<6"
+]
 
 [project.urls]
 Homepage = "https://sulabhdubey.github.io/rta-smriti-brain/"

@@ -2,7 +2,16 @@
 
 All notable changes are documented here. The project follows semantic versioning while APIs remain alpha.
 
-## [0.3.0-alpha] - Unreleased
+## [0.4.0-alpha] - Unreleased
+
+- Added a foreground incremental repository watcher and persistent stat-keyed SHA-256 cache.
+- Added optional hybrid FTS and local-vector retrieval with dependency-free hash embeddings and a lazy Sentence Transformers adapter.
+- Added a parser registry with deterministic regex, optional Tree-sitter, explicit LSP command, and Python entry-point adapters.
+- Added per-project ingestion policies for parser choice, retrieval provider, semantic weight, and source-file size caps up to 16 MB.
+- Added authenticated loopback settings APIs and dashboard controls with explicit blocked-file and optional-dependency warnings.
+- Kept the defaults dependency-free, deterministic, FTS-only, and fail-closed.
+
+## [0.3.0-alpha] - 2026-08-15
 
 - Added multi-project React operator console and radial semantic graph.
 - Added file explorer, Canvas, typed Bases, context-pack receipts, memory ledger, freshness, and bootstrap flow.

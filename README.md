@@ -4,7 +4,7 @@
 
 **A local project brain for AI coding agents.**
 
-[Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second product demo](launch-assets/product-hunt/rta-smriti-launch-demo.mp4) · [Usage guide](docs/USAGE_GUIDE.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
+[Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second product demo](launch-assets/product-hunt/rta-smriti-launch-demo.mp4) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
 
 Rta-Smriti Brain turns a project repository, long agent threads, durable decisions, and evidence into a small local memory graph that Codex, Claude Code, Cursor, or any MCP-capable agent can reuse before doing work.
 
@@ -22,6 +22,9 @@ Rta-Smriti gives each project a memory that stays on your machine.
 - Builds a focused **context pack** for the next agent task.
 - Runs a local operator console with graph, canvas, typed bases, context-pack receipts, memory ledger, freshness checks, and bootstrap flow.
 - Exposes a dependency-light stdio MCP server for agent integrations.
+- Watches active repositories with a foreground incremental indexer and reuses a persistent SHA-256 cache for deep freshness checks.
+- Supports optional local hybrid retrieval through a built-in deterministic hash provider or an installed Sentence Transformers model.
+- Supports built-in regex parsing plus optional Tree-sitter and explicit LSP adapter commands.
 - Keeps data local by default: no API keys, no telemetry, no cloud database.
 
 ## Why It Is Different
@@ -99,6 +102,7 @@ The dashboard runs on `127.0.0.1` and includes:
 - **Context-Pack Studio**: choose any supported or custom target agent, type a task, and generate a focused pack; pack text and receipt metadata remain in the current browser session only
 - **Evidence inspector**: open the optional detail panel for the selected node, must-know memories, and measured fresh/changed/missing/added/blocked source counts
 - **Incremental refresh**: update the selected repo index from the freshness control; unchanged projects use a fast stat manifest
+- **Indexing policy**: configure the fail-closed source-size cap, parser adapter, and optional local hybrid retrieval per project
 - **References and backlinks**: inspect why a node is connected and follow its visible relationships
 - **Memory ledger**: inspect stored memories and run reflection
 - **Launch readiness**: repo files and publish checks
@@ -141,6 +145,8 @@ rta-brain.cmd --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sq
 init              Initialize a project brain
 remember          Store a durable memory
 ingest-repo       Index a repository or folder
+watch-repo        Continuously refresh a repository using incremental indexing
+settings          Read or update a project's indexing and retrieval policy
 ingest-thread     Index a long thread, transcript, or handoff file
 search            Search memories and indexed files
 graph             Read the local entity graph
@@ -234,6 +240,10 @@ Verified:
 - MCP stdio server
 - React dashboard
 - local publish-readiness checks
+- incremental foreground repository watcher and SHA-256 cache
+- optional local hybrid retrieval
+- parser adapter registry with regex, Tree-sitter, LSP, and entry-point extension paths
+- configurable fail-closed large-file policy
 
 Intentional design constraints:
 
@@ -244,12 +254,30 @@ Intentional design constraints:
 
 Current alpha limitations:
 
-- Repository changes are not watched continuously by a background daemon yet.
-- Optional local embeddings and hybrid retrieval are planned, but not implemented yet.
-- Symbol extraction is lightweight and deterministic, not compiler-perfect.
-- Deep SHA-256 freshness can take several minutes on repositories with tens of thousands of files. Routine context packs use the latest completed index snapshot; explicit live checks remain available.
+- `watch-repo` runs in the foreground. Rta-Smriti does not install an operating-system service or background daemon.
+- Hybrid retrieval is optional and off by default. The built-in hash provider is dependency-free; Sentence Transformers requires a separately installed local package and model.
+- Regex remains the deterministic default parser. Tree-sitter requires `tree-sitter-language-pack`; LSP integration requires an explicitly configured local adapter command. Parser failures fall back to regex and are reported.
+- The first deep SHA-256 pass can still take several minutes on repositories with tens of thousands of files. Later checks reuse hashes when file size and modification time are unchanged.
+- The per-file ingestion cap is configurable up to 16 MB. Files above the selected cap remain blocked and keep freshness fail-closed.
 
 See [ROADMAP.md](ROADMAP.md) for planned improvements. Local-first operation and inspectable evidence remain non-negotiable.
+
+### Optional Indexing Policy
+
+```powershell
+# Enable dependency-free local hybrid retrieval and raise the source cap to 1 MB.
+rta-brain.cmd --db .\.rta-smriti\brain.sqlite --json settings --project demo --embedding-provider hash --max-file-mb 1
+
+# Keep an active project incrementally refreshed until Ctrl+C.
+rta-brain.cmd --db .\.rta-smriti\brain.sqlite watch-repo . --project demo --interval 2
+
+# Use optional Tree-sitter parsing after installing tree-sitter-language-pack.
+python -m pip install -e ".[tree-sitter]"
+rta-brain.cmd --db .\.rta-smriti\brain.sqlite --json settings --project demo --parser-adapter tree-sitter
+
+# Or install both optional local backends.
+python -m pip install -e ".[all-local]"
+```
 
 ## Development
 

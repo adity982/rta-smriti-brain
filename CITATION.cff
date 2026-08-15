@@ -5,7 +5,7 @@ type: software
 authors:
   - family-names: Dubey
     given-names: Sulabh
-version: 0.3.0-alpha
+version: 0.4.0-alpha
 license: MIT
 abstract: "Local-first project memory, repository graph, context packs, and MCP tools for AI coding agents."
 repository-code: "https://github.com/sulabhdubey/rta-smriti-brain"

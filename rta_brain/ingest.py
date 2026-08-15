@@ -99,6 +99,8 @@ class FileRecord:
     symbols: list[str]
     imports: list[str]
     chunks: list[str]
+    parser: str = "regex"
+    parser_warnings: tuple[str, ...] = ()
 
 
 def sha256_text(text: str) -> str:
@@ -109,7 +111,7 @@ def is_text_file(path: Path) -> bool:
     return path.suffix.lower() in TEXT_SUFFIXES
 
 
-def walk_repo(root: Path, rejected: list[dict[str, str]] | None = None):
+def walk_repo(root: Path, rejected: list[dict[str, str]] | None = None, max_file_bytes: int = MAX_FILE_BYTES):
     root = root.resolve()
 
     def reject(path: Path, reason: str) -> None:
@@ -158,7 +160,7 @@ def walk_repo(root: Path, rejected: list[dict[str, str]] | None = None):
             if stat.st_nlink > 1:
                 reject(path, "hard-link-file")
                 continue
-            if stat.st_size > MAX_FILE_BYTES:
+            if stat.st_size > max_file_bytes:
                 reject(path, f"oversized:{stat.st_size}")
                 continue
             yielded += 1
@@ -224,16 +226,29 @@ def chunk_text(text: str, max_chars: int = 1800) -> list[str]:
     return chunks[:80]
 
 
-def build_file_record(root: Path, path: Path) -> FileRecord | None:
-    text = read_text(path)
+def build_file_record(
+    root: Path,
+    path: Path,
+    max_bytes: int = MAX_FILE_BYTES,
+    parser_name: str = "regex",
+    lsp_command: str = "",
+    parser_registry=None,
+) -> FileRecord | None:
+    text = read_text(path, max_bytes=max_bytes)
     if text is None:
         return None
+    from .parsers import ParserRegistry
+
+    registry = parser_registry or ParserRegistry(lsp_command=lsp_command)
+    parsed = registry.parse(path, text, parser_name=parser_name)
     return FileRecord(
         path=path.resolve(),
         relative_path=path.resolve().relative_to(root.resolve()).as_posix(),
         text=text,
         sha256=sha256_text(text),
-        symbols=extract_symbols(text),
-        imports=extract_imports(text),
+        symbols=parsed.symbols,
+        imports=parsed.imports,
         chunks=chunk_text(text),
+        parser=parsed.parser,
+        parser_warnings=tuple(parsed.warnings),
     )
