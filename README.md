@@ -235,17 +235,21 @@ Verified:
 - React dashboard
 - local publish-readiness checks
 
-Known boundaries:
+Intentional design constraints:
 
-- No cloud sync
-- No hosted account system
-- No background daemon yet
-- No embeddings by default yet
-- Reflection is deterministic and conservative, not a full semantic judge
-- Symbol extraction is lightweight and deterministic, not compiler-perfect
-- Eligible source files above the 512 KB per-file cap are reported as `Blocked` and keep freshness fail-closed until the operator changes the source or ingestion policy
-- Deep SHA-256 freshness can take several minutes on repositories with tens of thousands of files; routine context packs use the latest completed index snapshot and explicit live checks remain available
-- The dashboard is intentionally loopback-only; remote/LAN hosting is not supported
+- Project brains stay in local SQLite files. There is no cloud sync or hosted account system.
+- The dashboard is loopback-only. Remote and LAN hosting are deliberately rejected.
+- Retrieval and reflection are inspectable and deterministic by default. Embeddings are not required or silently enabled, and reflection is conservative rather than a full semantic judge.
+- Eligible source files above the 512 KB per-file cap are reported as `Blocked`. Freshness remains fail-closed until the operator changes the source or ingestion policy.
+
+Current alpha limitations:
+
+- Repository changes are not watched continuously by a background daemon yet.
+- Optional local embeddings and hybrid retrieval are planned, but not implemented yet.
+- Symbol extraction is lightweight and deterministic, not compiler-perfect.
+- Deep SHA-256 freshness can take several minutes on repositories with tens of thousands of files. Routine context packs use the latest completed index snapshot; explicit live checks remain available.
+
+See [ROADMAP.md](ROADMAP.md) for planned improvements. Local-first operation and inspectable evidence remain non-negotiable.
 
 ## Development
 
