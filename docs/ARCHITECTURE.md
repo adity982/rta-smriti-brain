@@ -27,7 +27,7 @@ SQLite project brain
 
 ## Storage
 
-Each brain is one SQLite database. Project settings, canonical root binding, manifests, file hashes, chunks, FTS records, optional embedding vectors, memories, claim provenance, structured checkpoints, entities, edges, evidence, and recall receipts remain local.
+Each brain is one SQLite database. Connections use WAL journaling, normal synchronous durability, foreign keys, and a bounded busy timeout so concurrent agents can read while crash-safe writes remain transactional. Project settings, portable repository identity, canonical root binding, manifests, file hashes, chunks, FTS records, optional embedding vectors, memories, claim provenance, versioned checkpoints, entities, edges, evidence, and recall receipts remain local.
 
 ## Ingestion
 
@@ -39,13 +39,14 @@ Freshness output is anomaly-first: changed, missing, added, and blocked files ar
 
 ## Project Identity
 
-A named project is bound to one resolved canonical root. Ingestion refuses a different root unless the operator explicitly uses the root-rebind control. The console also compares brains in its configured directory and warns when the same project name is bound to multiple roots. Git state is read through a trusted Git installation and reports repository root, branch, HEAD, and dirty-file count.
+A named project is bound to a portable repository identity plus one resolved canonical root. Git repositories use stable repository history identity; non-Git folders receive a local marker under the ignored `.rta-smriti` directory. A moved checkout relocates automatically only when its identity matches and the old root is gone. A live alternate root still requires explicit rebind, and a different identity is always rejected. Routine context generation reads Git HEAD and refs natively; the dashboard alone runs the heavier dirty-worktree scan.
 
 ## Parser Boundary
 
 `ParserRegistry` ships with:
 
-- deterministic regex parsing, always available and the default
+- automatic parsing, using Tree-sitter when installed and supported, then deterministic regex fallback
+- deterministic regex parsing, always available
 - an optional `tree-sitter-language-pack` adapter
 - an explicit local command adapter for LSP-derived symbols and imports
 - Python entry points in the `rta_smriti.parsers` group
@@ -55,6 +56,16 @@ Unavailable or failed optional parsers fall back to regex and emit warnings in t
 ## Retrieval
 
 FTS5 BM25 remains available on every project. The recommended bootstrap path enables hybrid ranking that combines lexical rank with local cosine similarity through the dependency-free feature-hash provider. Operators can select lexical-only retrieval or a Sentence Transformers adapter, which loads only when separately installed and selected.
+
+Context packs enforce a caller-selected token budget. Checkpoints and high-ranked `pratyaksha` evidence are considered first; lower-priority memories and chunks are omitted when needed, and the pack states when pruning occurred. Optional `tiktoken` provides model tokenization while the dependency-free path uses a conservative deterministic estimate.
+
+## Agent Concurrency
+
+The stdio MCP server moves blocking SQLite, hashing, parsing, and embedding work to worker threads with bounded concurrency. Mutation visibility is ordered, memory batches are atomic, and checkpoints use optimistic versions under a SQLite write transaction so stale agents cannot silently overwrite newer continuation state.
+
+## Distribution
+
+`pyproject.toml` console scripts are the primary source installation path. A versioned PyInstaller specification and three-operating-system GitHub workflow build standalone Windows, macOS, and Linux artifacts without making PyInstaller a runtime dependency.
 
 ## Trust Boundary
 

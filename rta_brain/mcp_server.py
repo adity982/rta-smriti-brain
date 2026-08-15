@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -6,7 +7,10 @@ from typing import Any
 
 from . import __version__
 from .context import build_context_pack, build_continuation_prompt
-from .db import connect, doctor, graph, ingest_repo, ingest_thread, reflect, remember, save_checkpoint, search, stale_check
+from .db import (
+    connect, doctor, graph, ingest_repo, ingest_thread, reflect, remember, remember_many,
+    save_checkpoint, search, stale_check,
+)
 
 
 def tool_schema(name: str, description: str, properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
@@ -34,12 +38,27 @@ TOOLS = [
         ["query"],
     ),
     tool_schema(
+        "brain_remember_batch",
+        "Atomically store multiple durable, provenance-bearing memories.",
+        {
+            "project": {"type": "string"},
+            "items": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 500,
+                "items": {"type": "object"},
+            },
+        },
+        ["items"],
+    ),
+    tool_schema(
         "brain_context_pack",
         "Build a compact task context pack with pramana tags and stale status.",
         {
             "task": {"type": "string", "description": "Task or question to prepare context for."},
             "project": {"type": "string", "description": "Project memory bank name."},
             "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 8},
+            "max_tokens": {"type": "integer", "minimum": 256, "maximum": 100000, "default": 4000},
         },
         ["task"],
     ),
@@ -119,6 +138,7 @@ TOOLS = [
             "remaining_gaps": {"type": "string"},
             "next_action": {"type": "string"},
             "prohibited_repetition": {"type": "string"},
+            "expected_version": {"type": "integer", "minimum": 0},
         },
         ["objective"],
     ),
@@ -161,12 +181,23 @@ class RtaBrainMcpServer:
     def call_tool(self, name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
         args = arguments or {}
         conn = connect(self.db_path)
+        try:
+            return self._call_tool_with_connection(conn, name, args)
+        finally:
+            conn.close()
+
+    def _call_tool_with_connection(
+        self, conn, name: str, args: dict[str, Any]
+    ) -> dict[str, Any]:
         project = args.get("project") or self.default_project
         if name == "brain_search":
             payload = search(conn, str(args["query"]), project=project, limit=int(args.get("limit", 8)))
             return text_result(json_text(payload), payload)
         if name == "brain_context_pack":
-            text = build_context_pack(conn, str(args["task"]), project=project, limit=int(args.get("limit", 8)))
+            text = build_context_pack(
+                conn, str(args["task"]), project=project, limit=int(args.get("limit", 8)),
+                max_tokens=int(args.get("max_tokens", 4_000)),
+            )
             return text_result(text)
         if name == "brain_remember":
             payload = remember(
@@ -179,6 +210,9 @@ class RtaBrainMcpServer:
                 priority=int(args.get("priority", 5)),
                 provenance=args.get("provenance"),
             )
+            return text_result(json_text(payload), payload)
+        if name == "brain_remember_batch":
+            payload = remember_many(conn, args["items"], project=project)
             return text_result(json_text(payload), payload)
         if name == "brain_ingest_repo":
             payload = ingest_repo(conn, Path(str(args["path"])), project=project, force=bool(args.get("force", False)))
@@ -207,6 +241,7 @@ class RtaBrainMcpServer:
                 remaining_gaps=str(args.get("remaining_gaps", "")),
                 next_action=str(args.get("next_action", "")),
                 prohibited_repetition=str(args.get("prohibited_repetition", "")),
+                expected_version=args.get("expected_version"),
             )
             return text_result(json_text(payload), payload)
         if name == "brain_continuation_prompt":
@@ -262,6 +297,12 @@ class RtaBrainMcpServer:
         except Exception as exc:
             return self.error(request_id, -32000, str(exc), {"type": exc.__class__.__name__})
 
+    async def handle_async(self, request: dict[str, Any]) -> dict[str, Any] | None:
+        """Keep stdio responsive while SQLite, parsing, hashing, or embedding work runs."""
+        if isinstance(request, dict) and request.get("method") == "tools/call":
+            return await asyncio.to_thread(self.handle, request)
+        return self.handle(request)
+
     @staticmethod
     def error(request_id: Any, code: int, message: str, data: Any | None = None) -> dict[str, Any]:
         payload = {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
@@ -270,30 +311,78 @@ class RtaBrainMcpServer:
         return payload
 
 
-def serve_stdio(db_path: Path, default_project: str) -> int:
+async def serve_stdio_async(db_path: Path, default_project: str) -> int:
     server = RtaBrainMcpServer(db_path=db_path, default_project=default_project)
     stream = sys.stdin.buffer
+    write_lock = asyncio.Lock()
+    order_condition = asyncio.Condition()
+    next_output = 0
+    sequence_counter = 0
+    capacity = asyncio.Semaphore(4)
+    pending: set[asyncio.Task] = set()
+    latest_mutation: asyncio.Task | None = None
+
+    async def emit(sequence: int, response: dict[str, Any] | None) -> None:
+        nonlocal next_output
+        async with order_condition:
+            await order_condition.wait_for(lambda: sequence == next_output)
+            if response is not None:
+                async with write_lock:
+                    print(json.dumps(response, separators=(",", ":")), flush=True)
+            next_output += 1
+            order_condition.notify_all()
+
+    async def process(
+        sequence: int,
+        request: dict[str, Any],
+        dependency: asyncio.Task | None = None,
+    ) -> None:
+        if dependency is not None:
+            await dependency
+        async with capacity:
+            response = await server.handle_async(request)
+        await emit(sequence, response)
+
     while True:
-        line = stream.readline(MAX_MCP_FRAME_BYTES + 1)
+        line = await asyncio.to_thread(stream.readline, MAX_MCP_FRAME_BYTES + 1)
         if not line:
             break
         if len(line) > MAX_MCP_FRAME_BYTES:
+            sequence = sequence_counter
+            sequence_counter += 1
             while line and not line.endswith(b"\n"):
-                line = stream.readline(MAX_MCP_FRAME_BYTES + 1)
+                line = await asyncio.to_thread(stream.readline, MAX_MCP_FRAME_BYTES + 1)
             response = RtaBrainMcpServer.error(None, -32600, f"request frame exceeds {MAX_MCP_FRAME_BYTES} bytes")
-            print(json.dumps(response, separators=(",", ":")), flush=True)
+            await emit(sequence, response)
             continue
         if not line.strip():
             continue
+        sequence = sequence_counter
+        sequence_counter += 1
         try:
             request = json.loads(line)
         except json.JSONDecodeError as exc:
             response = RtaBrainMcpServer.error(None, -32700, f"parse error: {exc}")
+            await emit(sequence, response)
         else:
-            response = server.handle(request)
-        if response is not None:
-            print(json.dumps(response, separators=(",", ":")), flush=True)
+            dependency = latest_mutation
+            task = asyncio.create_task(process(sequence, request, dependency))
+            params = request.get("params") if isinstance(request, dict) else None
+            tool_name = params.get("name") if isinstance(params, dict) else None
+            if tool_name in {
+                "brain_remember", "brain_remember_batch", "brain_ingest_repo", "brain_ingest_thread",
+                "brain_checkpoint", "brain_reflect",
+            }:
+                latest_mutation = task
+            pending.add(task)
+            task.add_done_callback(pending.discard)
+    if pending:
+        await asyncio.gather(*pending)
     return 0
+
+
+def serve_stdio(db_path: Path, default_project: str) -> int:
+    return asyncio.run(serve_stdio_async(db_path, default_project))
 
 
 def build_parser() -> argparse.ArgumentParser:

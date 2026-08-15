@@ -6,7 +6,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from .db import doctor, ensure_project, ingest_repo, init_project, stale_check, update_project_settings
+from .db import connect, doctor, ensure_project, ingest_repo, init_project, stale_check, update_project_settings
 
 
 def _slug(value: str) -> str:
@@ -30,6 +30,8 @@ def runtime_shell() -> str:
 
 
 def _launch_parts(tool_root: Path, script_name: str, module_name: str) -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [str(Path(sys.executable)), *(["mcp-server"] if module_name == "rta_brain.mcp_server" else [])]
     script = tool_root / script_name
     if script.is_file():
         return [str(Path(sys.executable)), str(script)]
@@ -200,8 +202,7 @@ def bootstrap_project(
     db_path.parent.mkdir(parents=True, exist_ok=True)
     wrote_agent_file = False
     agent_index_path = None
-    project_conn = sqlite3.connect(str(db_path))
-    project_conn.row_factory = sqlite3.Row
+    project_conn = connect(db_path)
     try:
         init_payload = init_project(project_conn, project, str(repo_path))
         settings_payload = (
@@ -244,7 +245,7 @@ def projects_list(conn: sqlite3.Connection) -> dict:
         dict(row)
         for row in conn.execute(
             """
-            SELECT p.id, p.name, p.root_path, p.created_at,
+            SELECT p.id, p.name, p.root_path, p.repository_identity, p.created_at,
                    COUNT(DISTINCT s.id) AS sources,
                    COUNT(DISTINCT m.id) AS memories
             FROM projects p

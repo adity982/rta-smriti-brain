@@ -204,6 +204,25 @@ class RtaBrainConsoleTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 run_dashboard(ROOT, brain_dir, host="0.0.0.0", open_browser=False)
 
+    def test_dashboard_reports_the_actual_server_port_when_zero_is_requested(self):
+        class FakeServer:
+            server_address = ("127.0.0.1", 43123)
+
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def serve_forever(self):
+                pass
+
+            def server_close(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "rta_brain.console.BoundedThreadingHTTPServer", FakeServer
+        ), patch("rta_brain.console._find_port", return_value=0), patch("builtins.print"):
+            payload = run_dashboard(ROOT, Path(tmp), port=0, open_browser=False)
+        self.assertIn("http://127.0.0.1:43123/", payload["url"])
+
     def test_repo_ingestion_rejects_hard_linked_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"

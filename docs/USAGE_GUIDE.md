@@ -24,23 +24,21 @@ From a cloned Rta-Smriti repository, run the command for your operating system.
 Windows PowerShell:
 
 ```powershell
-$RtaBin = "$env:LOCALAPPDATA\Rta-Smriti\bin"
-python .\rta-brain.py --json install-local --target $RtaBin
-$RtaBrain = Join-Path $RtaBin "rta-brain.cmd"
+python -m venv .venv
+& .\.venv\Scripts\python.exe -m pip install .
+$RtaBrain = Join-Path $PWD ".venv\Scripts\rta-brain.exe"
 & $RtaBrain --json doctor
 ```
 
-Use `& $RtaBrain` for the examples in this guide. It works immediately and does
-not assume the wrapper directory is already on `PATH`. Set `$RtaBrain` again
-after opening a new PowerShell session, or add the printed install directory to
-your user `PATH` and restart the terminal.
+Use `& $RtaBrain` for the examples in this guide. Pip generates the launcher
+from package metadata, so no source wrapper or global `PATH` is required.
 
 macOS or Linux:
 
 ```bash
-RTA_BIN="$HOME/.local/bin"
-python3 ./rta-brain.py --json install-local --target "$RTA_BIN"
-RtaBrain="$RTA_BIN/rta-brain"
+python3 -m venv .venv
+./.venv/bin/python -m pip install .
+RtaBrain="$PWD/.venv/bin/rta-brain"
 "$RtaBrain" --json doctor
 ```
 
@@ -111,11 +109,11 @@ Look for:
 ## Generate Context Before A Task
 
 ```powershell
-& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" context-pack "describe the task here" --project project-name
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" context-pack "describe the task here" --project project-name --max-tokens 4000
 ```
 
 ```bash
-"$RtaBrain" --db "$BrainDir/project-name.sqlite" context-pack "describe the task here" --project project-name
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" context-pack "describe the task here" --project project-name --max-tokens 4000
 ```
 
 Paste the output into the agent chat, then ask the agent to do the task.
@@ -192,11 +190,11 @@ Filters the graph by node type.
 
 **Settings**
 
-Controls the active project's indexing policy. You can raise or lower the fail-closed source-file cap, keep the built-in regex parser, select an installed Tree-sitter adapter, configure an explicit local LSP bridge, or change hybrid retrieval. New dashboard and CLI bootstraps recommend the dependency-free hash provider; external providers are never installed automatically.
+Controls the active project's indexing policy. Auto parsing uses an installed Tree-sitter grammar when supported and safely falls back to built-in regex. You can also select regex explicitly, configure an LSP bridge, change hybrid retrieval, or adjust the fail-closed source cap. External providers are never installed automatically.
 
 **Context-Pack Studio**
 
-The main daily workflow. Choose `Universal / Any Agent`, Codex, Claude Code, Cursor, GitHub Copilot, Gemini CLI, Windsurf, Cline, Aider, OpenCode, Continue, or enter a custom agent name. Type the task, click `Generate Context Pack`, then copy the pack into the agent chat. Each generation creates privacy-safe receipt metadata; the full pack stays available only in the current browser session.
+The main daily workflow. Choose `Universal / Any Agent`, a named agent, or a custom agent. Select a 2K, 4K, 8K, or 16K context budget, type the task, click `Generate Context Pack`, then copy the pack into the agent chat. Direct evidence is considered before lower-trust historical memory, and omitted material is declared. Each generation creates privacy-safe receipt metadata; the full pack stays available only in the current browser session.
 
 **Evidence Inspector**
 
@@ -212,7 +210,7 @@ Shows remembered decisions, their verification provenance when recorded, and let
 
 **Continue Work**
 
-Stores objective, verified evidence, remaining gaps, next action, and prohibited repetition as structured SQLite fields. The newest checkpoint leads future context packs and the one-click new-task prompt.
+Stores objective, verified evidence, remaining gaps, next action, and prohibited repetition as structured SQLite fields. The newest checkpoint leads future context packs and the one-click new-task prompt. Every save carries an optimistic version, so a stale agent is warned instead of overwriting newer state.
 
 **Launch Readiness**
 
@@ -337,7 +335,7 @@ This watcher stays in the foreground and stops cleanly with `Ctrl+C`; it does no
 
 ## Configure Retrieval And Parsing
 
-The recommended bootstrap defaults are deterministic regex parsing, FTS5 plus dependency-free hash hybrid retrieval, and a 512 KB source cap. A raw `init` remains lexical-only until configured. Read the active policy:
+The recommended bootstrap defaults are automatic Tree-sitter-with-regex-fallback parsing, FTS5 plus dependency-free hash hybrid retrieval, and a 512 KB source cap. A raw `init` remains lexical-only until configured. Read the active policy:
 
 ```powershell
 & $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json settings --project project-name

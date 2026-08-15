@@ -7,6 +7,7 @@ from pathlib import Path
 
 IGNORED_DIRS = {
     ".git",
+    ".rta-smriti",
     ".hg",
     ".svn",
     ".venv",

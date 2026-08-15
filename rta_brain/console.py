@@ -99,6 +99,7 @@ def scan_brain_databases(brain_dir: Path) -> list[dict]:
                         "db_file": db_path.name,
                         "project": project["name"],
                         "root_path": project.get("root_path"),
+                        "repository_identity": project.get("repository_identity"),
                         "canonical_root": canonical_root(project["root_path"]) if project.get("root_path") else None,
                         "git": git,
                         "created_at": project.get("created_at"),
@@ -200,7 +201,7 @@ def _relative_source_path(value: str) -> str:
     normalized = str(value or "").replace("\\", "/").strip("/")
     parts = [part for part in normalized.split("/") if part and part != "."]
     if any(part == ".." for part in parts):
-        raise ValueError("file tree path cannot traverse outside the project")
+        raise ValueError("file tree requires a relative path that cannot traverse outside the project")
     return "/".join(parts)
 
 
@@ -709,6 +710,7 @@ def make_handler(config: ConsoleConfig):
                                     payload["task"],
                                     project=payload["project"],
                                     limit=int(payload.get("limit", 8)),
+                                    max_tokens=int(payload.get("max_tokens", 4_000)),
                                 ),
                             }
                         )
@@ -752,6 +754,7 @@ def make_handler(config: ConsoleConfig):
                                 remaining_gaps=payload.get("remaining_gaps", ""),
                                 next_action=payload.get("next_action", ""),
                                 prohibited_repetition=payload.get("prohibited_repetition", ""),
+                                expected_version=payload.get("expected_version"),
                             )
                         )
                     finally:
@@ -870,6 +873,7 @@ def run_dashboard(
         default_project=default_project,
     )
     server = BoundedThreadingHTTPServer((host, selected_port), make_handler(config))
+    selected_port = int(server.server_address[1])
     base_url = f"http://{host}:{selected_port}/"
     url = f"{base_url}#token={config.capability_token}"
     if open_browser:

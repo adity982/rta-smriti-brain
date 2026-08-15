@@ -79,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(settings)
     settings.add_argument("--project", default="default")
     settings.add_argument("--max-file-mb", type=float)
-    settings.add_argument("--parser-adapter", choices=("regex", "tree-sitter", "lsp"))
+    settings.add_argument("--parser-adapter", choices=("auto", "regex", "tree-sitter", "lsp"))
     settings.add_argument("--lsp-command")
     settings.add_argument("--embedding-provider", choices=("none", "hash", "sentence-transformers"))
     settings.add_argument("--embedding-model")
@@ -107,6 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     pack.add_argument("task")
     pack.add_argument("--project", default="default")
     pack.add_argument("--limit", type=int, default=8)
+    pack.add_argument("--max-tokens", type=int, default=4000)
 
     stale = sub.add_parser("stale-check", help="Check whether indexed files changed")
     add_common_options(stale)
@@ -123,6 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
     checkpoint.add_argument("--remaining-gaps", default="")
     checkpoint.add_argument("--next-action", default="")
     checkpoint.add_argument("--prohibited-repetition", default="")
+    checkpoint.add_argument("--expected-version", type=int)
 
     continuation = sub.add_parser("continue-prompt", help="Build a compact prompt for a new agent task")
     add_common_options(continuation)
@@ -244,7 +246,9 @@ def main(argv=None) -> int:
             elif args.command == "graph":
                 payload = graph(conn, project=args.project, limit=args.limit)
             elif args.command == "context-pack":
-                payload = build_context_pack(conn, args.task, project=args.project, limit=args.limit)
+                payload = build_context_pack(
+                    conn, args.task, project=args.project, limit=args.limit, max_tokens=args.max_tokens
+                )
             elif args.command == "stale-check":
                 payload = stale_check(
                     conn,
@@ -262,6 +266,7 @@ def main(argv=None) -> int:
                     remaining_gaps=args.remaining_gaps,
                     next_action=args.next_action,
                     prohibited_repetition=args.prohibited_repetition,
+                    expected_version=args.expected_version,
                 )
             elif args.command == "continue-prompt":
                 payload = build_continuation_prompt(conn, project=args.project)

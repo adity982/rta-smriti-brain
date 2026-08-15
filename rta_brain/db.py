@@ -7,7 +7,7 @@ from pathlib import Path
 from .embeddings import cosine_similarity, create_provider
 from .ingest import build_file_record, chunk_text, extract_terms, read_text, sha256_text, walk_repo
 from .parsers import ParserRegistry
-from .repository import canonical_root, same_root
+from .repository import canonical_root, repository_identity, same_root
 
 
 VALID_PRAMANA = {"pratyaksha", "sabda", "anumana", "smriti", "kalpana"}
@@ -17,7 +17,7 @@ MAX_SEARCH_LIMIT = 50
 MAX_GRAPH_LIMIT = 500
 DEFAULT_PROJECT_SETTINGS = {
     "max_file_bytes": 512_000,
-    "parser_adapter": "regex",
+    "parser_adapter": "auto",
     "lsp_command": "",
     "embedding_provider": "none",
     "embedding_model": "all-MiniLM-L6-v2",
@@ -40,6 +40,9 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
@@ -50,6 +53,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
             root_path TEXT,
+            repository_identity TEXT,
             created_at TEXT NOT NULL
         );
 
@@ -107,6 +111,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
             remaining_gaps TEXT NOT NULL DEFAULT '',
             next_action TEXT NOT NULL DEFAULT '',
             prohibited_repetition TEXT NOT NULL DEFAULT '',
+            version INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -215,6 +220,12 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_checkpoints_project_updated ON checkpoints(project_id, updated_at DESC, id DESC);
         """
     )
+    project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
+    if "repository_identity" not in project_columns:
+        conn.execute("ALTER TABLE projects ADD COLUMN repository_identity TEXT")
+    checkpoint_columns = {row["name"] for row in conn.execute("PRAGMA table_info(checkpoints)")}
+    if "version" not in checkpoint_columns:
+        conn.execute("ALTER TABLE checkpoints ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
     conn.execute(
         """
         INSERT OR IGNORE INTO memory_provenance(memory_id, timestamp, verification_status, metadata_json)
@@ -231,29 +242,52 @@ def ensure_project(
     allow_root_rebind: bool = False,
 ) -> int:
     init_schema(conn)
-    row = conn.execute("SELECT id, root_path FROM projects WHERE name = ?", (name,)).fetchone()
+    row = conn.execute(
+        "SELECT id, root_path, repository_identity FROM projects WHERE name = ?", (name,)
+    ).fetchone()
     if row:
         if root_path:
             requested = canonical_root(root_path)
+            requested_identity = repository_identity(Path(requested)) if Path(requested).is_dir() else None
             stored = row["root_path"]
+            stored_identity = row["repository_identity"]
+            if stored_identity and requested_identity and stored_identity != requested_identity:
+                raise ValueError(
+                    f"canonical root mismatch; repository identity mismatch for project '{name}': the requested checkout "
+                    "does not match the brain's bound repository"
+                )
             if stored and not same_root(stored, requested):
-                if not allow_root_rebind:
+                old_root_exists = Path(stored).exists()
+                if old_root_exists and not allow_root_rebind:
                     raise ValueError(
                         f"canonical root mismatch for project '{name}': brain is bound to '{stored}', "
                         f"but '{requested}' was requested; use an explicit root rebind only after verifying the checkout"
                     )
-                conn.execute("UPDATE projects SET root_path = ? WHERE id = ?", (requested, row["id"]))
+                conn.execute(
+                    "UPDATE projects SET root_path = ?, repository_identity = ? WHERE id = ?",
+                    (requested, requested_identity, row["id"]),
+                )
                 conn.execute("DELETE FROM repo_manifests WHERE project_id = ?", (row["id"],))
                 conn.execute("DELETE FROM file_hash_cache WHERE project_id = ?", (row["id"],))
                 conn.commit()
             elif not stored:
-                conn.execute("UPDATE projects SET root_path = ? WHERE id = ?", (requested, row["id"]))
+                conn.execute(
+                    "UPDATE projects SET root_path = ?, repository_identity = ? WHERE id = ?",
+                    (requested, requested_identity, row["id"]),
+                )
+                conn.commit()
+            elif not stored_identity:
+                conn.execute(
+                    "UPDATE projects SET repository_identity = ? WHERE id = ?",
+                    (requested_identity, row["id"]),
+                )
                 conn.commit()
         return int(row["id"])
     canonical = canonical_root(root_path) if root_path else None
+    identity = repository_identity(Path(canonical)) if canonical and Path(canonical).is_dir() else None
     cur = conn.execute(
-        "INSERT INTO projects(name, root_path, created_at) VALUES (?, ?, ?)",
-        (name, canonical, now_iso()),
+        "INSERT INTO projects(name, root_path, repository_identity, created_at) VALUES (?, ?, ?, ?)",
+        (name, canonical, identity, now_iso()),
     )
     conn.commit()
     return int(cur.lastrowid)
@@ -261,7 +295,18 @@ def ensure_project(
 
 def init_project(conn: sqlite3.Connection, name: str, root_path: str, allow_root_rebind: bool = False) -> dict:
     project_id = ensure_project(conn, name, root_path, allow_root_rebind=allow_root_rebind)
-    return {"status": "ok", "project": {"id": project_id, "name": name, "root_path": canonical_root(root_path)}}
+    row = conn.execute(
+        "SELECT root_path, repository_identity FROM projects WHERE id = ?", (project_id,)
+    ).fetchone()
+    return {
+        "status": "ok",
+        "project": {
+            "id": project_id,
+            "name": name,
+            "root_path": row["root_path"],
+            "repository_identity": row["repository_identity"],
+        },
+    }
 
 
 def _validate_project_settings(settings: dict) -> dict:
@@ -276,8 +321,8 @@ def _validate_project_settings(settings: dict) -> dict:
         validated["max_file_bytes"] = value
     if "parser_adapter" in settings:
         value = str(settings["parser_adapter"]).strip().lower()
-        if value not in {"regex", "tree-sitter", "lsp"}:
-            raise ValueError("parser_adapter must be regex, tree-sitter, or lsp")
+        if value not in {"auto", "regex", "tree-sitter", "lsp"}:
+            raise ValueError("parser_adapter must be auto, regex, tree-sitter, or lsp")
         validated["parser_adapter"] = value
     if "lsp_command" in settings:
         validated["lsp_command"] = str(settings["lsp_command"]).strip()[:2_000]
@@ -441,8 +486,12 @@ def remember(
     priority: int = 5,
     metadata: dict | None = None,
     provenance: dict | None = None,
+    _project_id: int | None = None,
+    _commit: bool = True,
+    _initialize: bool = True,
 ) -> dict:
-    init_schema(conn)
+    if _initialize:
+        init_schema(conn)
     text = str(text).strip()
     if not text:
         raise ValueError("memory text must not be empty")
@@ -452,7 +501,7 @@ def remember(
         raise ValueError(f"invalid pramana '{pramana}', expected one of {sorted(VALID_PRAMANA)}")
     confidence = max(0.0, min(1.0, float(confidence)))
     priority = max(1, min(10, int(priority)))
-    project_id = ensure_project(conn, project)
+    project_id = _project_id if _project_id is not None else ensure_project(conn, project)
     provenance_input = dict(provenance or {})
     if provenance_input.get("source_path") and not provenance_input.get("source_hash"):
         project_row = conn.execute("SELECT root_path FROM projects WHERE id = ?", (project_id,)).fetchone()
@@ -502,7 +551,8 @@ def remember(
     for term in extract_terms(text):
         term_entity = ensure_entity(conn, project_id, "concept", term)
         add_edge(conn, project_id, memory_entity, "mentions", term_entity, memory_id=memory_id, confidence=0.7)
-    conn.commit()
+    if _commit:
+        conn.commit()
     return {
         "status": "ok",
         "memory": {
@@ -518,6 +568,47 @@ def remember(
     }
 
 
+def remember_many(conn: sqlite3.Connection, items: list[dict], project: str = "default") -> dict:
+    """Store a provenance-bearing memory batch atomically."""
+    init_schema(conn)
+    if not isinstance(items, list) or not items:
+        raise ValueError("memory batch must contain at least one item")
+    if len(items) > 500:
+        raise ValueError("memory batch exceeds the 500 item limit")
+    project_id = ensure_project(conn, project)
+    memories = []
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError("each memory batch item must be an object")
+            unknown = set(item) - {
+                "text", "memory_type", "type", "pramana", "confidence", "priority", "metadata", "provenance"
+            }
+            if unknown:
+                raise ValueError(f"unknown memory batch field(s): {', '.join(sorted(unknown))}")
+            result = remember(
+                conn,
+                text=item.get("text", ""),
+                project=project,
+                memory_type=item.get("memory_type", item.get("type", "fact")),
+                pramana=item.get("pramana", "smriti"),
+                confidence=item.get("confidence", 0.75),
+                priority=item.get("priority", 5),
+                metadata=item.get("metadata"),
+                provenance=item.get("provenance"),
+                _project_id=project_id,
+                _commit=False,
+                _initialize=False,
+            )
+            memories.append(result["memory"])
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {"status": "ok", "project": project, "stored": len(memories), "memories": memories}
+
+
 def save_checkpoint(
     conn: sqlite3.Connection,
     project: str,
@@ -526,6 +617,7 @@ def save_checkpoint(
     remaining_gaps: str = "",
     next_action: str = "",
     prohibited_repetition: str = "",
+    expected_version: int | None = None,
 ) -> dict:
     init_schema(conn)
     values = {
@@ -541,21 +633,43 @@ def save_checkpoint(
         if len(value) > 20_000:
             raise ValueError(f"checkpoint {key} exceeds the 20,000 character limit")
     project_id = ensure_project(conn, project)
-    timestamp = now_iso()
-    cursor = conn.execute(
-        """
-        INSERT INTO checkpoints(
-            project_id, objective, verified_evidence, remaining_gaps, next_action,
-            prohibited_repetition, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            project_id, values["objective"], values["verified_evidence"], values["remaining_gaps"],
-            values["next_action"], values["prohibited_repetition"], timestamp, timestamp,
-        ),
-    )
-    conn.commit()
-    return {"status": "ok", "project": project, "checkpoint": {"id": int(cursor.lastrowid), **values, "created_at": timestamp, "updated_at": timestamp}}
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute(
+            "SELECT version FROM checkpoints WHERE project_id = ? ORDER BY version DESC, id DESC LIMIT 1",
+            (project_id,),
+        ).fetchone()
+        current_version = int(current["version"]) if current else 0
+        if expected_version is not None and int(expected_version) != current_version:
+            raise ValueError(
+                f"checkpoint version conflict: expected {int(expected_version)}, current version is {current_version}"
+            )
+        version = current_version + 1
+        timestamp = now_iso()
+        cursor = conn.execute(
+            """
+            INSERT INTO checkpoints(
+                project_id, objective, verified_evidence, remaining_gaps, next_action,
+                prohibited_repetition, version, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                project_id, values["objective"], values["verified_evidence"], values["remaining_gaps"],
+                values["next_action"], values["prohibited_repetition"], version, timestamp, timestamp,
+            ),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {
+        "status": "ok",
+        "project": project,
+        "checkpoint": {
+            "id": int(cursor.lastrowid), **values, "version": version,
+            "created_at": timestamp, "updated_at": timestamp,
+        },
+    }
 
 
 def latest_checkpoint(conn: sqlite3.Connection, project: str = "default") -> dict | None:
@@ -563,7 +677,7 @@ def latest_checkpoint(conn: sqlite3.Connection, project: str = "default") -> dic
     row = conn.execute(
         """
         SELECT c.id, c.objective, c.verified_evidence, c.remaining_gaps, c.next_action,
-               c.prohibited_repetition, c.created_at, c.updated_at
+               c.prohibited_repetition, c.version, c.created_at, c.updated_at
         FROM checkpoints c
         JOIN projects p ON p.id = c.project_id
         WHERE p.name = ?
@@ -837,7 +951,10 @@ def ingest_repo(
                 "WHERE c.source_id = ? AND ce.chunk_id IS NULL LIMIT 1",
                 (project_id, provider.name if provider else "", provider.model if provider else "", int(row["id"])),
             ).fetchone())
-            parser_ready = prior_metadata.get("parser", "regex") == parser_adapter
+            indexed_parser = prior_metadata.get("parser", "regex")
+            parser_ready = indexed_parser == parser_adapter or (
+                parser_adapter == "auto" and str(indexed_parser).startswith("auto:")
+            )
             if not force and prior_metadata.get("mtime_ns") == stat.st_mtime_ns and prior_metadata.get("size") == stat.st_size and parser_ready and embedding_ready:
                 indexed_files += 1
                 unchanged_files += 1

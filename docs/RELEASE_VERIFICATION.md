@@ -24,6 +24,9 @@ npm run build:launch
 python -m unittest discover -s tests -v
 python -m compileall -q rta_brain tests scripts
 python scripts/build_installed_smoke.py
+python -m pip install ".[binary]"
+python scripts/build_binary.py
+python scripts/smoke_binary.py
 python scripts/privacy_scan.py
 python rta-brain.py publish-readiness --json
 git diff --check
@@ -47,14 +50,16 @@ update. The same workflow runs on Windows, Ubuntu, and macOS in
 
 | Gate | Result |
 | --- | --- |
-| Python regression suite | 52 passed, 1 privilege-gated skip (53 total) |
+| Python regression suite | 66 passed, 1 privilege-gated skip (67 total) |
 | Python bytecode compilation | Passed |
 | Operator console production build | Passed |
 | Launch-site production build | Passed |
 | Root npm dependency audit | 0 vulnerabilities |
 | Editable Python package dry-run | Resolved `rta-smriti-brain-0.4.0a1` |
 | Installed wheel first-run smoke | 15 checks passed |
-| Publication privacy scan | Passed across 113 public candidates |
+| Standalone Windows binary | Built from the versioned spec; CLI, SQLite/FTS, MCP dispatch, ephemeral-port launch, and packaged dashboard HTTP 200 passed |
+| Operator browser workflow | File preview, task handoff, context pack, receipts, settings, checkpoint, Canvas, and Bases passed at desktop and 390 px; 0 console errors |
+| Publication privacy scan | Passed across 118 public candidates |
 | Built-in publish-readiness command | Structural gates passed; clean-tree gate confirmed after commit |
 | Git whitespace validation | Passed |
 
@@ -68,8 +73,9 @@ suite, bytecode compilation, package-resolution check, clean-wheel install and
 first-run smoke, and built-in publish-readiness check.
 
 Gitleaks is an optional release-environment check and is not claimed in this
-snapshot because it was unavailable in the verification shell. The bundled
-privacy scanner remains a required gate and passed.
+snapshot. A fresh command-availability check on 2026-08-16 returned
+`GITLEAKS_UNAVAILABLE`. The bundled privacy scanner remains a required gate and
+passed; this page does not imply that the two tools are equivalent.
 
 ## Privacy Boundary
 

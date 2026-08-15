@@ -69,6 +69,7 @@ class TreeSitterParser:
         language = {
             ".py": "python", ".js": "javascript", ".jsx": "javascript",
             ".ts": "typescript", ".tsx": "tsx",
+            ".go": "go", ".rs": "rust", ".java": "java",
         }.get(path.suffix.lower())
         if not language:
             raise RuntimeError(f"Tree-sitter language is not configured for {path.suffix or 'this file'}")
@@ -142,12 +143,30 @@ class ParserRegistry:
             self.register(point.load()())
 
     def capabilities(self) -> dict[str, dict]:
-        return {
+        capabilities = {
             name: {"available": bool(getattr(parser, "available", True)), "source": parser.__class__.__name__}
             for name, parser in sorted(self._parsers.items())
         }
+        capabilities["auto"] = {
+            "available": True,
+            "source": "TreeSitterThenRegex",
+            "tree_sitter_available": capabilities.get("tree-sitter", {}).get("available", False),
+        }
+        return capabilities
 
     def parse(self, path: Path, text: str, parser_name: str = "regex") -> ParseResult:
+        if parser_name == "auto":
+            tree_sitter = self._parsers["tree-sitter"]
+            if bool(getattr(tree_sitter, "available", False)):
+                try:
+                    result = tree_sitter.parse(path, text)
+                    result.parser = "auto:tree-sitter"
+                    return result
+                except (RuntimeError, ValueError, json.JSONDecodeError, subprocess.SubprocessError):
+                    pass
+            result = self._parsers["regex"].parse(path, text)
+            result.parser = "auto:regex"
+            return result
         parser = self._parsers.get(parser_name)
         if parser is None:
             raise ValueError(f"unknown parser adapter: {parser_name}")

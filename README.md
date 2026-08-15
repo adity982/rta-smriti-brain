@@ -23,8 +23,10 @@ Rta-Smriti gives each project a memory that stays on your machine.
 - Attaches source path, hash, verification command, timestamp, and verification status to remembered claims.
 - Ingests long threads or handoff notes as explicitly unverified prior memory so useful context survives compaction without self-assigning trust.
 - Builds a focused **context pack** for the next agent task.
+- Enforces a hard context token budget and keeps direct evidence ahead of low-trust historical memory.
 - Runs a local operator console with graph, canvas, typed bases, context-pack receipts, memory ledger, freshness checks, and bootstrap flow.
 - Exposes a dependency-light stdio MCP server for agent integrations.
+- Runs independent MCP tool calls concurrently while preserving ordered mutation visibility.
 - Watches active repositories with a foreground incremental indexer and reuses a persistent SHA-256 cache for deep freshness checks.
 - Supports optional local hybrid retrieval through a built-in deterministic hash provider or an installed Sentence Transformers model.
 - Supports built-in regex parsing plus optional Tree-sitter and explicit LSP adapter commands.
@@ -71,17 +73,15 @@ macOS, and Linux. Node.js is only needed to modify the dashboard source.
 git clone https://github.com/sulabhdubey/rta-smriti-brain.git
 cd .\rta-smriti-brain
 python --version
-python .\rta-brain.py --json doctor
-
-$RtaBin = "$env:LOCALAPPDATA\Rta-Smriti\bin"
-python .\rta-brain.py --json install-local --target $RtaBin
-$RtaBrain = Join-Path $RtaBin "rta-brain.cmd"
+python -m venv .venv
+& .\.venv\Scripts\python.exe -m pip install .
+$RtaBrain = Join-Path $PWD ".venv\Scripts\rta-brain.exe"
 & $RtaBrain --json doctor
 ```
 
 Keep `$RtaBrain` in the current PowerShell session and use `& $RtaBrain` in
-the commands below. This works immediately without changing `PATH`. The install
-command also prints the exact wrapper path and an optional `PATH` note.
+the commands below. The launcher is generated from `project.scripts` by pip;
+it does not depend on the source wrapper files.
 
 ### macOS Or Linux (Bash/Zsh)
 
@@ -89,18 +89,15 @@ command also prints the exact wrapper path and an optional `PATH` note.
 git clone https://github.com/sulabhdubey/rta-smriti-brain.git
 cd rta-smriti-brain
 python3 --version
-python3 ./rta-brain.py --json doctor
-
-RTA_BIN="$HOME/.local/bin"
-python3 ./rta-brain.py --json install-local --target "$RTA_BIN"
-RtaBrain="$RTA_BIN/rta-brain"
+python3 -m venv .venv
+./.venv/bin/python -m pip install .
+RtaBrain="$PWD/.venv/bin/rta-brain"
 "$RtaBrain" --json doctor
 ```
 
 Keep `RtaBrain` in the current shell and use `"$RtaBrain"` in Bash or Zsh.
-The generated POSIX launchers are executable and do not require the repository
-to remain your working directory. See the [installation guide](docs/INSTALLATION.md)
-for PATH setup, troubleshooting, and uninstall instructions.
+See the [installation guide](docs/INSTALLATION.md) for native binary artifacts,
+optional extras, troubleshooting, and uninstall instructions.
 
 ## Quick Start
 
@@ -147,7 +144,7 @@ The dashboard runs on `127.0.0.1` and includes:
 - **Typed bases**: scan memories, symbols, imports, and launch checks as dense, filterable tables
 - **Search nodes**: filter graph nodes by file, symbol, memory, or artifact text
 - **Types**: show/hide file, memory, docs, config, test, data, and artifact nodes
-- **Context-Pack Studio**: choose any supported or custom target agent, type a task, and generate a focused pack; pack text and receipt metadata remain in the current browser session only
+- **Context-Pack Studio**: choose any supported or custom target agent, select a 2K/4K/8K/16K token budget, type a task, and generate a focused pack; pack text and receipt metadata remain in the current browser session only
 - **Evidence inspector**: open the optional detail panel for the selected node, must-know memories, and measured fresh/changed/missing/added/blocked source counts
 - **Incremental refresh**: update the selected repo index from the freshness control; unchanged projects use a fast stat manifest
 - **Indexing policy**: configure the fail-closed source-size cap, parser adapter, and optional local hybrid retrieval per project
@@ -231,6 +228,7 @@ Tools exposed:
 - `brain_search`
 - `brain_context_pack`
 - `brain_remember`
+- `brain_remember_batch`
 - `brain_ingest_repo`
 - `brain_ingest_thread`
 - `brain_repo_map`
@@ -302,7 +300,7 @@ Current alpha limitations:
 
 - `watch-repo` runs in the foreground. Rta-Smriti does not install an operating-system service or background daemon.
 - Hybrid retrieval is dependency-free in the recommended bootstrap flow through the built-in hash provider. Sentence Transformers remains optional and requires a separately installed local package and model.
-- Regex remains the deterministic default parser. Tree-sitter requires `tree-sitter-language-pack`; LSP integration requires an explicitly configured local adapter command. Parser failures fall back to regex and are reported.
+- Auto parsing is the default: installed Tree-sitter grammars are used for supported languages, with deterministic regex fallback. LSP integration requires an explicitly configured local adapter command.
 - The first deep SHA-256 pass can still take several minutes on repositories with tens of thousands of files. Later checks reuse hashes when file size and modification time are unchanged.
 - The per-file ingestion cap is configurable up to 16 MB. Files above the selected cap remain blocked and keep freshness fail-closed.
 
@@ -317,9 +315,9 @@ See [ROADMAP.md](ROADMAP.md) for planned improvements. Local-first operation and
 # Keep an active project incrementally refreshed until Ctrl+C.
 & $RtaBrain --db .\.rta-smriti\brain.sqlite watch-repo . --project demo --interval 2
 
-# Use optional Tree-sitter parsing after installing tree-sitter-language-pack.
+# Auto mode will use optional Tree-sitter after the package is installed.
 python -m pip install -e ".[tree-sitter]"
-& $RtaBrain --db .\.rta-smriti\brain.sqlite --json settings --project demo --parser-adapter tree-sitter
+& $RtaBrain --db .\.rta-smriti\brain.sqlite --json settings --project demo --parser-adapter auto
 
 # Or install both optional local backends.
 python -m pip install -e ".[all-local]"
@@ -339,6 +337,8 @@ Routine context packs use the latest completed index snapshot so even very large
 npm install
 npm run build
 python scripts/build_installed_smoke.py
+python -m pip install ".[binary]"
+python scripts/build_binary.py
 python -m unittest discover -s tests -v
 python -m compileall -q rta_brain tests
 pip install -e . --dry-run --no-deps

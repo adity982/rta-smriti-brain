@@ -367,6 +367,7 @@ function App() {
   const [projects, setProjects] = useState([]);
   const [selectedProject, setSelectedProject] = useState(null);
   const [task, setTask] = useState(DEFAULT_TASK);
+  const [contextBudget, setContextBudget] = useState(4000);
   const [packText, setPackText] = useState("");
   const [memories, setMemories] = useState([]);
   const [graphData, setGraphData] = useState({ nodes: [], edges: [] });
@@ -553,7 +554,7 @@ function App() {
       setMessage("Generating context pack...");
       const payload = await api("/api/context-pack", {
         method: "POST",
-        body: JSON.stringify({ ...selectedParams, task: task.trim(), limit: 8 }),
+        body: JSON.stringify({ ...selectedParams, task: task.trim(), limit: 8, max_tokens: contextBudget }),
       });
       const rawText = typeof payload.pack === "string" ? payload.pack : JSON.stringify(payload.pack, null, 2);
       const text = targetAgent === "universal" ? rawText : `Target agent: ${targetAgentLabel}\n\n${rawText}`;
@@ -564,6 +565,7 @@ function App() {
         project: selectedProject.project,
         task: task.trim(),
         agent: targetAgentLabel,
+        tokenBudget: contextBudget,
         nodes: buildGraph(selectedProject, graphData, memories, text, graphOptions).nodes.length,
         bytes: new Blob([text]).size,
         pack: text,
@@ -657,11 +659,16 @@ function App() {
     try {
       const payload = await api("/api/checkpoint", {
         method: "POST",
-        body: JSON.stringify({ ...selectedParams, ...values }),
+        body: JSON.stringify({ ...selectedParams, ...values, expected_version: checkpoint?.version ?? 0 }),
       });
       setCheckpoint(payload.checkpoint);
       setMessage("Structured checkpoint saved for the next task.");
     } catch (error) {
+      if (error.message.includes("checkpoint version conflict")) {
+        await loadProject(selectedProject);
+        setMessage("A newer checkpoint was saved by another agent. The latest version has been loaded; review and save again.");
+        return;
+      }
       setMessage(`Checkpoint could not be saved: ${error.message}`);
     } finally {
       setIsSavingCheckpoint(false);
@@ -730,7 +737,7 @@ function App() {
     : selectedProject?.db_path;
   const cliCommand = health?.cli_command || "rta-brain";
   const command = selectedProject
-    ? `${cliCommand} --db ${shellPathArg(commandDbPath, shellKind)} context-pack ${shellQuote(task || "<task>", shellKind)} --project ${shellQuote(selectedProject.project, shellKind)}`
+    ? `${cliCommand} --db ${shellPathArg(commandDbPath, shellKind)} context-pack ${shellQuote(task || "<task>", shellKind)} --project ${shellQuote(selectedProject.project, shellKind)} --max-tokens ${contextBudget}`
     : "Select a project";
 
   return (
@@ -957,6 +964,8 @@ function App() {
             setTargetAgent={setTargetAgent}
             customAgent={customAgent}
             setCustomAgent={setCustomAgent}
+            contextBudget={contextBudget}
+            setContextBudget={setContextBudget}
           />
         </main>
 
@@ -1077,7 +1086,8 @@ function GraphSettings({
         </label>
         <label>
           <span>Parser adapter</span>
-          <select value={settings.parser_adapter || "regex"} onChange={(event) => updateSetting("parser_adapter", event.target.value)}>
+          <select value={settings.parser_adapter || "auto"} onChange={(event) => updateSetting("parser_adapter", event.target.value)}>
+            <option value="auto">Auto (Tree-sitter with safe fallback)</option>
             <option value="regex">Regex (built in)</option>
             <option value="tree-sitter">Tree-sitter (optional)</option>
             <option value="lsp">LSP command (optional)</option>
@@ -1591,7 +1601,7 @@ function BasesView({ memories, graph, publish, onSelect, initialTable = "memory"
   );
 }
 
-function TaskComposer({ task, setTask, project, freshness, command, packText, onGenerate, onCopy, onReceipts, onCopyContinuation, receiptCount, isGenerating, targetAgent, setTargetAgent, customAgent, setCustomAgent }) {
+function TaskComposer({ task, setTask, project, freshness, command, packText, onGenerate, onCopy, onReceipts, onCopyContinuation, receiptCount, isGenerating, targetAgent, setTargetAgent, customAgent, setCustomAgent, contextBudget, setContextBudget }) {
   return (
     <section className="taskComposer">
       <div className="composerTitle">
@@ -1618,6 +1628,15 @@ function TaskComposer({ task, setTask, project, freshness, command, packText, on
               <input value={customAgent} onChange={(event) => setCustomAgent(event.target.value)} placeholder="Your agent or workflow" />
             </label>
           )}
+          <label>
+            <span>Context Budget</span>
+            <select value={contextBudget} onChange={(event) => setContextBudget(Number(event.target.value))}>
+              <option value={2000}>Compact / 2K tokens</option>
+              <option value={4000}>Balanced / 4K tokens</option>
+              <option value={8000}>Deep / 8K tokens</option>
+              <option value={16000}>Extended / 16K tokens</option>
+            </select>
+          </label>
           <label>
             <span>Objective</span>
             <textarea rows="3" value={task} onChange={(event) => setTask(event.target.value)} />
@@ -1813,11 +1832,12 @@ function CheckpointPanel({ checkpoint, project, onSave, onCopy, isSaving }) {
     <div className="drawerContent checkpointPanel">
       <div className="sectionHeader">
         <h2>Continue Work</h2>
-        {checkpoint?.updated_at && <time>{new Date(checkpoint.updated_at).toLocaleString()}</time>}
+        {checkpoint?.updated_at && <time>v{checkpoint.version} / {new Date(checkpoint.updated_at).toLocaleString()}</time>}
       </div>
       <div className={project?.root_conflict ? "checkpointIdentity conflict" : "checkpointIdentity"}>
         <strong>{project?.project || "Select a project"}</strong>
         <span title={project?.root_path}>{displayPath(project?.root_path)}</span>
+        {project?.repository_identity && <small title={project.repository_identity}>Identity: {project.repository_identity.slice(0, 18)}...</small>}
         {git.is_git_repo && <small>{git.branch} @ {git.head || "unborn"} / {git.dirty_files} dirty</small>}
       </div>
       <label><span>Objective</span><textarea rows="2" value={values.objective} onChange={(event) => update("objective", event.target.value)} /></label>
@@ -1876,7 +1896,7 @@ function ReceiptsPanel({ receipts, onCopy, onClear }) {
           <article key={receipt.id}>
             <div><strong>{receipt.project}</strong><time>{new Date(receipt.createdAt).toLocaleString()}</time></div>
             <p>{receipt.task}</p>
-            <span>{receipt.agent || "Universal"} | {receipt.nodes} nodes | {(receipt.bytes / 1024).toFixed(1)} KB</span>
+            <span>{receipt.agent || "Universal"} | {receipt.tokenBudget || 4000} token budget | {receipt.nodes} nodes | {(receipt.bytes / 1024).toFixed(1)} KB</span>
             {receipt.pack ? <button onClick={() => onCopy(receipt.pack, "Saved context pack copied.")}><Clipboard size={14} /> Copy</button> : <span className="receiptPrivate">Metadata only</span>}
           </article>
         ))}
