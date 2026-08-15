@@ -163,6 +163,7 @@ class RtaBrainNextReleaseTests(unittest.TestCase):
 
     def test_dashboard_exposes_indexing_controls_and_blocked_warning(self):
         source = (ROOT / "dashboard-src" / "src" / "main.jsx").read_text(encoding="utf-8")
+        styles = (ROOT / "dashboard-src" / "src" / "styles.css").read_text(encoding="utf-8")
         console = (ROOT / "rta_brain" / "console.py").read_text(encoding="utf-8")
         self.assertIn("Maximum source file size", source)
         self.assertIn("Hybrid retrieval", source)
@@ -170,6 +171,11 @@ class RtaBrainNextReleaseTests(unittest.TestCase):
         self.assertIn("Blocked files stay excluded", source)
         self.assertIn("Canonical-root conflict", source)
         self.assertIn("Copy New Task Prompt", source)
+        self.assertIn("Prompt Copied", source)
+        self.assertIn("Command Copied", source)
+        self.assertIn('document.execCommand("copy")', source)
+        self.assertIn("color-scheme: dark", styles)
+        self.assertIn("select option", styles)
         self.assertIn("Save Checkpoint", source)
         self.assertIn("Local Hybrid (Recommended)", source)
         self.assertIn('"/api/settings"', console)

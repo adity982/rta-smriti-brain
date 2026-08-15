@@ -584,23 +584,44 @@ function App() {
   }
 
   async function copyText(text, success = "Copied.") {
+    const value = String(text || "");
+    if (!value.trim()) {
+      setMessage("Nothing is available to copy yet.");
+      return false;
+    }
     try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        const element = document.createElement("textarea");
-        element.value = text;
-        element.setAttribute("readonly", "");
-        element.style.position = "fixed";
-        element.style.opacity = "0";
-        document.body.appendChild(element);
-        element.select();
-        document.execCommand("copy");
+      let copied = false;
+      if (navigator.clipboard?.writeText && window.isSecureContext) {
+        try {
+          await navigator.clipboard.writeText(value);
+          copied = true;
+        } catch {
+          copied = false;
+        }
+      }
+      const element = document.createElement("textarea");
+      element.value = value;
+      element.setAttribute("readonly", "");
+      element.style.position = "fixed";
+      element.style.inset = "0 auto auto -9999px";
+      element.style.opacity = "0";
+      document.body.appendChild(element);
+      element.focus();
+      element.select();
+      element.setSelectionRange(0, element.value.length);
+      try {
+        copied = document.execCommand("copy") || copied;
+      } finally {
         document.body.removeChild(element);
       }
+      if (!copied) {
+        throw new Error("clipboard permission was denied");
+      }
       setMessage(success);
+      return true;
     } catch (error) {
       setMessage(`Copy failed: ${error.message}`);
+      return false;
     }
   }
 
@@ -676,12 +697,16 @@ function App() {
   }
 
   async function copyContinuationPrompt() {
-    if (!selectedParams) return setMessage("Select a project first.");
+    if (!selectedParams) {
+      setMessage("Select a project first.");
+      return false;
+    }
     try {
       const payload = await api(`/api/continuation-prompt?${qs(selectedParams)}`);
-      await copyText(payload.prompt, "New task prompt copied.");
+      return await copyText(payload.prompt, "New task prompt copied.");
     } catch (error) {
       setMessage(`Continuation prompt failed: ${error.message}`);
+      return false;
     }
   }
 
@@ -1602,6 +1627,20 @@ function BasesView({ memories, graph, publish, onSelect, initialTable = "memory"
 }
 
 function TaskComposer({ task, setTask, project, freshness, command, packText, onGenerate, onCopy, onReceipts, onCopyContinuation, receiptCount, isGenerating, targetAgent, setTargetAgent, customAgent, setCustomAgent, contextBudget, setContextBudget }) {
+  const [copyAction, setCopyAction] = useState("");
+  const copyTimer = useRef(null);
+
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
+
+  async function runCopyAction(kind, action) {
+    if (copyAction.endsWith("-working")) return;
+    window.clearTimeout(copyTimer.current);
+    setCopyAction(`${kind}-working`);
+    const copied = await action();
+    setCopyAction(`${kind}-${copied ? "copied" : "failed"}`);
+    copyTimer.current = window.setTimeout(() => setCopyAction(""), 2200);
+  }
+
   return (
     <section className="taskComposer">
       <div className="composerTitle">
@@ -1609,9 +1648,15 @@ function TaskComposer({ task, setTask, project, freshness, command, packText, on
           <Sparkles size={16} /> Context-Pack Studio
         </span>
         <div className="composerActions">
-          <button onClick={onReceipts}><Eye size={15} /> {receiptCount} receipts</button>
-          <button onClick={onCopyContinuation}><Route size={15} /> New Task Prompt</button>
-          <button onClick={onCopy}><Clipboard size={15} /> {packText ? "Copy Pack" : "Copy Command"}</button>
+          <button type="button" onClick={onReceipts}><Eye size={15} /> {receiptCount} receipts</button>
+          <button type="button" onClick={() => runCopyAction("prompt", onCopyContinuation)} disabled={copyAction.endsWith("-working")}>
+            {copyAction === "prompt-copied" ? <CheckCircle2 size={15} /> : <Route size={15} />}
+            {copyAction === "prompt-working" ? "Preparing..." : copyAction === "prompt-copied" ? "Prompt Copied" : copyAction === "prompt-failed" ? "Copy Failed" : "New Task Prompt"}
+          </button>
+          <button type="button" onClick={() => runCopyAction("command", onCopy)} disabled={copyAction.endsWith("-working")}>
+            {copyAction === "command-copied" ? <CheckCircle2 size={15} /> : <Clipboard size={15} />}
+            {copyAction === "command-working" ? "Copying..." : copyAction === "command-copied" ? (packText ? "Pack Copied" : "Command Copied") : copyAction === "command-failed" ? "Copy Failed" : (packText ? "Copy Pack" : "Copy Command")}
+          </button>
         </div>
       </div>
       <div className="composerGrid">

@@ -40,6 +40,16 @@ button {
   color: inherit;
 }
 
+select {
+  color-scheme: dark;
+}
+
+select option,
+select optgroup {
+  color: #eef7ff;
+  background: #0b1420;
+}
+
 .app {
   display: grid;
   grid-template-rows: 58px minmax(0, 1fr) 34px;
