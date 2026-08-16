@@ -36,6 +36,12 @@ This alpha turns repository memory from a manual snapshot into an operator-contr
 - Operator memory feedback and conservative decay restricted to eligible old, unverified inference and hypothesis records
 - Read-only-by-default, project-bound MCP capabilities with explicit write/ingestion flags, allowed thread roots, bounded frames/tasks, and downgraded agent provenance
 - Descriptor-bound thread, bundle, snapshot, and repository reads; private SQLite modes and trusted-schema disablement
+- Rendered Chromium operator acceptance configured for Windows, macOS, and Linux CI
+- Isolated install, forced-upgrade/reinstall, and uninstall lifecycle proof
+- Sanitized 100, 1,000, and 10,000-file indexing and retrieval resource evidence
+- Destination-wide axe WCAG checks, accessible Intelligence and Bases tabs, explicit active-state
+  semantics, live status announcements, modal focus containment/restoration, normal-mode contrast,
+  reduced motion, forced-colors structure, and a zero-overlap mobile Canvas
 
 ## Fixed On Main
 
@@ -48,6 +54,12 @@ This alpha turns repository memory from a manual snapshot into an operator-contr
 - Bootstrap now writes agent bridge files before the final index pass, so a newly created brain starts fresh instead of immediately reporting those generated files as added.
 - Unsigned selective-bundle imports now downgrade memories and quarantine checkpoints and policies instead of inheriting authority.
 - The release privacy gate now suppresses only exact hashed detector-definition lines; unrelated private paths in those modules fail the scan.
+- Generated PowerShell and POSIX commands now keep substitutions, variables, backticks, quotes,
+  apostrophes, and embedded newlines literal instead of allowing a project path to alter the command.
+- Disposable operator QA uses a random per-launch capability token and proves that the retired fixed
+  token is rejected.
+- Post-bootstrap project selection now binds the exact project/database tuple, rejects ambiguous
+  same-name roots, and clears a previous selection when the identity verification refresh fails.
 
 ## Defaults And Boundaries
 

@@ -23,10 +23,14 @@ Run these commands from the repository root:
 ```powershell
 npm run build
 npm run build:launch
+npm run test:unit
+npx playwright install chromium
+npm run test:operator
+python scripts/performance_probe.py --profiles 100 1000 --assert-bounds
 python -m unittest discover -s tests -v
+python -m pytest -q
 python -m compileall -q rta_brain tests scripts
-python -m build --wheel
-python scripts/installed_distribution_smoke.py --wheel <wheel-path>
+python scripts/build_installed_smoke.py
 python -m pip install ".[binary]"
 python scripts/build_binary.py
 python scripts/smoke_binary.py
@@ -55,22 +59,26 @@ run green after the owner-approved push.
 
 | Gate | Result |
 | --- | --- |
-| Pytest regression suite | 167 passed, 4 platform/privilege skips, 513 subtests passed |
-| Unittest discovery | 171 tests passed, 4 platform/privilege skips |
+| Pytest regression suite | 169 passed, 4 platform/privilege skips, 513 subtests passed |
+| Unittest discovery | 173 tests passed, 4 platform/privilege skips |
 | Python bytecode compilation | Passed |
 | Operator console production build | Passed |
 | Launch-site production build | Passed |
 | Root npm dependency audit | 0 vulnerabilities |
 | Python project dependency audit | No known vulnerabilities reported by `pip-audit` |
 | Editable Python package dry-run | Resolved `rta-smriti-brain-0.4.0a1` |
-| Installed wheel first-run smoke | 20 checks passed, including bootstrap, retrieval, wrappers, MCP, managed watcher lifecycle, and console lifecycle from an unrelated working directory |
-| Standalone Windows binary | Built from the versioned spec; CLI, SQLite/FTS, MCP dispatch, packaged dashboard assets, and managed background sync passed |
-| Windows executable SHA-256 | `57b0221c032a5e4b4110aeb2405b45ef8ad7a7cc2bd60f142a605dde2cd342ad` |
-| Universal wheel SHA-256 | `cbbdf07561977228ef864650ed554a7cd2129130af0e79e35a3f1170f6cf7f40` |
-| Operator browser workflow | Six local projects loaded; Graph, Files, Canvas, Bases, references, task handoff, copy actions, agent selection, context packs, release checks, bootstrap, settings, and watcher controls passed at desktop and 390 px; 0 console warnings or errors |
-| Publication privacy scan | Passed across 147 public candidates |
+| Installed package lifecycle | Clean wheel install and 20-check first-run smoke passed; forced upgrade/reinstall and uninstall were then verified from an unrelated working directory |
+| Standalone Windows binary | Built from the versioned spec; CLI, SQLite/FTS, MCP dispatch, packaged dashboard assets, public benchmark, managed background sync, and managed console lifecycle passed |
+| Windows executable SHA-256 | `a246d081d76b654395cecdd9d6f20ca683fc74bd5ffa6b9699716434e9acc7c1` |
+| Universal wheel SHA-256 | `e487fe47f044c2d113a91012eeba32701ff854ac08a5a98d5a3d149b5ad16dc2` |
+| Automated rendered operator acceptance | Playwright exercised every primary destination, destination-wide axe checks, onboarding/selection, root-conflict and empty-project recovery, Graph, Files, Canvas, task handoff, clipboard failure, watcher controls, governance receipts, Intelligence, workspaces, vault, hooks, persistence, keyboard focus, reduced motion, forced-colors structure, and 720/390 px layouts. A second failure-injection scenario proves that failed post-bootstrap identity verification clears the previous project; 2 scenarios passed with no unexpected page or console errors |
+| Manual operator browser workflow | Six local projects loaded; Graph, Files, Canvas, Bases, references, task handoff, agent selection, context packs, release checks, bootstrap, settings, and watcher controls passed at desktop and 390 px |
+| Accessibility repair | Intelligence and Bases tabs expose tab semantics and roving keyboard focus; Bases exposes table, row-group, row, header, and cell relationships; exactly one route is current; toolbar toggles expose state; graph search and workspace fields have names; status changes are live; modal focus is trapped/restored; keyboard Canvas inspection focuses and reveals the mobile inspector; normal-mode WCAG scans passed every destination; mobile Canvas cards had zero overlaps |
+| Performance and resource probe | Sanitized synthetic baselines passed at 100, 1,000, and 10,000 files; the committed JSON reports indexing, deep freshness, search/context-pack p95, SQLite size, and traced peak memory without hostnames or absolute paths |
+| Publication privacy scan | Passed across 160 public candidates |
 | Public benchmark | Six synthetic documents and queries; lexical and dependency-free hash-hybrid regression gates passed; this is not superiority evidence |
-| Codex Security final diff scan | Complete, 35/35 review items, 0 findings (`ff1bbe20-368c-47b4-97ea-02924d455211`) |
+| Codex Security remediation scan | A frozen pre-fix snapshot reviewed 18 changed runtime artifacts across eight threat surfaces and reproduced one low-severity stale-selection issue (`bf16b280-16e1-4d67-8d2a-08e7f83fab4e`). The issue is fixed and covered by a failing-then-passing rendered test. This scan is remediation evidence, not the final clean-tree gate |
+| Codex Security final source/runtime scan | Must run against the frozen candidate commit with zero open findings before owner approval |
 | Built-in publish-readiness command | Structural gates passed; the clean-tree gate is re-evaluated on the frozen candidate commit before owner approval |
 | Git whitespace validation | Passed |
 

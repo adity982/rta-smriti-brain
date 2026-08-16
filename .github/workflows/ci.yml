@@ -39,16 +39,29 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm audit --audit-level=high
+      - run: npm run test:unit
       - run: npm run build
       - run: npm run build:launch
+      - name: Install Chromium with Linux runtime dependencies
+        if: matrix.python == '3.11' && runner.os == 'Linux'
+        run: npx playwright install --with-deps chromium
+      - name: Install Chromium
+        if: matrix.python == '3.11' && runner.os != 'Linux'
+        run: npx playwright install chromium
       - run: python -m pip install -e ".[tree-sitter,tokenization,watcher]"
       - run: python scripts/privacy_scan.py
       - run: python -m unittest discover -s tests -v
       - run: python -m compileall -q rta_brain tests scripts
       - run: python -m pip install -e . --dry-run --no-deps
       - run: python scripts/build_installed_smoke.py
+      - name: Run rendered operator acceptance
+        if: matrix.python == '3.11'
+        run: npm run test:operator
       - name: Run packaged public benchmark
         run: python -m rta_brain.cli benchmark --json > public-benchmark-result.json
+      - name: Run bounded synthetic performance probe
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.11'
+        run: python scripts/performance_probe.py --profiles 100 1000 --assert-bounds
       - run: python rta-brain.py publish-readiness --json
       - name: Install standalone binary builder
         if: matrix.python == '3.11'

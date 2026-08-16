@@ -11,10 +11,24 @@ import shutil
 import subprocess
 import sys
 import tomllib
+import zipfile
+from html.parser import HTMLParser
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class _StaticAssetParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.assets: set[str] = set()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        reference = attributes.get("src") if tag == "script" else attributes.get("href") if tag == "link" else None
+        if reference and reference.lstrip("/").startswith("assets/"):
+            self.assets.add(reference.lstrip("/"))
 
 
 def file_sha256(path: Path) -> str:
@@ -53,6 +67,32 @@ def run(command: list[str], cwd: Path = ROOT) -> subprocess.CompletedProcess[str
     return subprocess.run(command, cwd=cwd, check=True, text=True, capture_output=True, timeout=300)
 
 
+def clean_wheel_build() -> None:
+    build_dir = (ROOT / "build").resolve()
+    if build_dir.parent != ROOT.resolve() or build_dir.name != "build" or build_dir.is_symlink():
+        raise RuntimeError(f"refusing to clean unexpected wheel build path: {build_dir}")
+    if build_dir.exists():
+        shutil.rmtree(build_dir)
+
+
+def referenced_static_assets() -> set[str]:
+    parser = _StaticAssetParser()
+    parser.feed((ROOT / "rta_brain" / "static" / "index.html").read_text(encoding="utf-8"))
+    return {f"rta_brain/static/{asset}" for asset in parser.assets}
+
+
+def assert_wheel_static_assets(wheel: Path) -> None:
+    expected = referenced_static_assets()
+    if not expected:
+        raise RuntimeError("dashboard index does not reference any production assets")
+    with zipfile.ZipFile(wheel) as archive:
+        packaged = {name for name in archive.namelist() if name.startswith("rta_brain/static/assets/")}
+    if packaged != expected:
+        missing = sorted(expected - packaged)
+        stale = sorted(packaged - expected)
+        raise RuntimeError(f"wheel dashboard assets do not match index.html; missing={missing}, stale={stale}")
+
+
 def stage_artifacts(output: Path, include_wheel: bool) -> dict:
     output = output.resolve()
     if output.exists():
@@ -76,7 +116,12 @@ def stage_artifacts(output: Path, include_wheel: bool) -> dict:
         raise RuntimeError(f"packaged binary reports an unexpected version: {version_output}")
 
     if include_wheel:
+        clean_wheel_build()
         run([sys.executable, "-m", "pip", "wheel", "--no-deps", "--wheel-dir", str(output), "."])
+        wheels = list(output.glob("*.whl"))
+        if len(wheels) != 1:
+            raise RuntimeError(f"expected exactly one wheel, found {len(wheels)}")
+        assert_wheel_static_assets(wheels[0])
 
     artifacts = sorted(path for path in output.iterdir() if path.is_file())
     manifest = output / "SHA256SUMS.txt"

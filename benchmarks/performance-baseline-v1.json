@@ -1,0 +1,80 @@
+{
+  "environment": {
+    "architecture": "amd64",
+    "os": "windows",
+    "python": "3.13.7"
+  },
+  "fixture": "synthetic-python-repository",
+  "profiles": [
+    {
+      "context_pack_latency_ms": {
+        "cold": 92.668,
+        "median": 6.985,
+        "p95": 7.569,
+        "samples": 15
+      },
+      "database_bytes": 638976,
+      "deep_freshness_seconds": 0.012,
+      "files": 100,
+      "index_seconds": 2.068,
+      "index_seconds_per_1000_files": 20.676,
+      "indexed_edges": 100,
+      "indexed_symbols": 100,
+      "largest_context_pack_bytes": 2375,
+      "peak_python_allocation_bytes": 885774,
+      "search_latency_ms": {
+        "cold": 4.908,
+        "median": 4.78,
+        "p95": 5.035,
+        "samples": 30
+      }
+    },
+    {
+      "context_pack_latency_ms": {
+        "cold": 52.312,
+        "median": 49.333,
+        "p95": 51.877,
+        "samples": 15
+      },
+      "database_bytes": 4153344,
+      "deep_freshness_seconds": 0.118,
+      "files": 1000,
+      "index_seconds": 19.405,
+      "index_seconds_per_1000_files": 19.405,
+      "indexed_edges": 1000,
+      "indexed_symbols": 1000,
+      "largest_context_pack_bytes": 2377,
+      "peak_python_allocation_bytes": 1872343,
+      "search_latency_ms": {
+        "cold": 48.476,
+        "median": 47.519,
+        "p95": 49.496,
+        "samples": 30
+      }
+    },
+    {
+      "context_pack_latency_ms": {
+        "cold": 240.186,
+        "median": 240.687,
+        "p95": 243.236,
+        "samples": 15
+      },
+      "database_bytes": 39305216,
+      "deep_freshness_seconds": 1.158,
+      "files": 10000,
+      "index_seconds": 198.619,
+      "index_seconds_per_1000_files": 19.862,
+      "indexed_edges": 10000,
+      "indexed_symbols": 10000,
+      "largest_context_pack_bytes": 2378,
+      "peak_python_allocation_bytes": 20627455,
+      "search_latency_ms": {
+        "cold": 238.264,
+        "median": 236.256,
+        "p95": 238.927,
+        "samples": 30
+      }
+    }
+  ],
+  "schema_version": 1
+}

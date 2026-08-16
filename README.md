@@ -398,15 +398,24 @@ Routine context packs use the latest completed index snapshot so even very large
 
 ```powershell
 npm install
+npm run test:unit
 npm run build
 python scripts/build_installed_smoke.py
+npx playwright install chromium
+npm run test:operator
+python scripts/performance_probe.py --profiles 100 1000 --assert-bounds
 python -m pip install ".[binary]"
 python scripts/build_binary.py
 python -m unittest discover -s tests -v
-python -m compileall -q rta_brain tests
+python -m compileall -q rta_brain tests scripts
 pip install -e . --dry-run --no-deps
 python rta-brain.py publish-readiness --json
 ```
+
+The rendered acceptance suite uses a disposable Git repository and brain, never a developer's
+existing projects. GitHub CI runs it on Windows, macOS, and Linux for Python 3.11. See
+[Operator QA](docs/OPERATOR_QA.md), [Performance Evidence](docs/PERFORMANCE.md), and the
+[Release Completion Audit](docs/RELEASE_COMPLETION_AUDIT.md).
 
 ## Positioning
 

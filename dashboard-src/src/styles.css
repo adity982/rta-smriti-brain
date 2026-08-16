@@ -466,7 +466,7 @@ button:disabled {
 
 .navGroupLabel {
   padding: 7px 9px 5px;
-  color: #667b91;
+  color: #71869a;
   font-size: 10px;
   font-weight: 850;
   text-transform: uppercase;
@@ -2572,10 +2572,10 @@ textarea:focus {
   color: #b8c9db;
   background: transparent;
   text-align: left;
-  cursor: pointer;
+  cursor: default;
 }
 
-.baseRow:hover {
+.baseRow:not(.head):hover {
   background: rgba(56, 189, 248, 0.055);
 }
 
@@ -2597,6 +2597,13 @@ textarea:focus {
   font-weight: 850;
   text-transform: uppercase;
   cursor: default;
+}
+
+.baseRow [role="cell"] > button {
+  min-height: 30px;
+  padding: 4px 10px;
+  border-color: rgba(56, 189, 248, 0.3);
+  background: rgba(14, 165, 233, 0.08);
 }
 
 .readinessGrid {
@@ -3778,5 +3785,42 @@ textarea:focus {
     width: 100%;
     max-width: 100%;
     min-height: 420px;
+  }
+
+  .canvasBoard {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .canvasField {
+    position: relative;
+    inset: auto;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: start;
+    gap: 8px;
+    min-height: 0;
+    padding: 10px 10px 48px;
+    overflow-y: auto;
+  }
+
+  .canvasThread {
+    display: none;
+  }
+
+  .canvasCard {
+    position: relative;
+    left: auto !important;
+    top: auto !important;
+    width: 100%;
+    min-width: 0;
+    min-height: 52px;
+    transform: none !important;
+    touch-action: manipulation;
+    cursor: pointer;
+  }
+
+  .canvasTraceStatus {
+    position: absolute;
   }
 }

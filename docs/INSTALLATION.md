@@ -149,7 +149,15 @@ not required by an installed wheel.
 
 ## Uninstall
 
-Delete the cloned repository and its `.venv` after confirming you no longer need
-the installed command. Brain databases are stored separately and are never
-removed automatically; delete your chosen brain directory only when you intend
-to erase its memories.
+First stop the managed processes while the command is still installed:
+
+```bash
+rta-brain console login-disable --brain-dir <brain-directory>
+rta-brain console stop --brain-dir <brain-directory>
+rta-brain --db <brain-database> watcher stop --project <project-name>
+```
+
+Repeat the watcher command for each active project, then uninstall the package
+or delete the cloned repository and its `.venv`. Brain databases are stored
+separately and are never removed automatically; delete your chosen brain
+directory only when you intentionally want to erase its memories.

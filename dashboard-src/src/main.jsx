@@ -45,6 +45,8 @@ import {
   ThumbsUp,
   Zap,
 } from "lucide-react";
+import { chooseProject, isExactProjectIdentity } from "./project-selection.js";
+import { shellPathArg, shellQuote } from "./shell-command.js";
 import "./styles.css";
 
 const DEFAULT_TASK = "Prepare this project for a focused coding task";
@@ -133,24 +135,6 @@ function displayPath(value) {
     .replace(/^[A-Za-z]:[\\/]Users[\\/][^\\/]+/i, "%USERPROFILE%")
     .replace(/^\/(?:Users|home)\/[^/]+/i, "$HOME")
     .replace(/^[/\\]{2}[^/\\]+[/\\][^/\\]+/, "<network-share>");
-}
-
-function shellQuote(value, shellKind) {
-  const text = String(value ?? "");
-  if (shellKind === "powershell") return `'${text.replaceAll("'", "''")}'`;
-  return `'${text.replaceAll("'", `'"'"'`)}'`;
-}
-
-function shellPathArg(value, shellKind) {
-  const text = String(value || "");
-  if (shellKind === "powershell") {
-    const portable = text.replace(/^[A-Za-z]:[\\/]Users[\\/][^\\/]+/i, "$env:USERPROFILE");
-    if (portable.startsWith("$env:USERPROFILE")) return `"${portable.replaceAll('"', '`"')}"`;
-    return shellQuote(portable, shellKind);
-  }
-  const portable = text.replace(/^\/(?:Users|home)\/[^/]+/i, "$HOME");
-  if (portable.startsWith("$HOME")) return `"${portable.replaceAll('"', '\\"')}"`;
-  return shellQuote(portable, shellKind);
 }
 
 function readApiToken() {
@@ -409,6 +393,7 @@ function App() {
   const projectRequestRef = useRef(0);
   const fileRequestRef = useRef(0);
   const governanceRequestRef = useRef(0);
+  const inspectorRef = useRef(null);
   const [publish, setPublish] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [message, setMessage] = useState("");
@@ -478,7 +463,7 @@ function App() {
     ? customAgent.trim() || "Custom Agent"
     : targetAgents.find((agent) => agent.value === targetAgent)?.label || "Universal / Any Agent";
 
-  async function loadHealth() {
+  async function loadHealth(preferredProject = null) {
     setIsLoading(true);
     try {
       const payload = await api("/api/health");
@@ -486,8 +471,16 @@ function App() {
       setHealth(payload);
       setProjects(payload.projects || []);
       setPublish(payload.publish);
-      setSelectedProject((current) => current || payload.projects?.find((project) => project.status === "ok") || payload.projects?.[0] || null);
+      const available = payload.projects || [];
+      const preferredDecision = chooseProject(available, null, preferredProject);
+      setSelectedProject((current) => chooseProject(available, current, preferredProject).selected);
+      if (preferredDecision.reason === "preferred_identity_missing") {
+        setMessage(`The new brain could not be matched to its exact database identity. Selection was cleared to protect the canonical root.`);
+      } else if (preferredDecision.reason === "preferred_name_ambiguous") {
+        setMessage(`More than one brain has that name. Select the exact database before continuing.`);
+      }
     } catch (error) {
+      if (isExactProjectIdentity(preferredProject)) setSelectedProject(null);
       setLoadError(error.message);
       setMessage(`Dashboard refresh failed: ${error.message}`);
     } finally {
@@ -1016,6 +1009,8 @@ function App() {
   function showDrawer(name) {
     setActiveDrawer(name);
     setInspectorOpen(true);
+    setNavContext(name);
+    setSettingsOpen(false);
   }
 
   function showPublishReadiness() {
@@ -1037,6 +1032,18 @@ function App() {
     setReferenceHistory([]);
     setSelectedNode(node);
     if (drawer) showDrawer(drawer);
+  }
+
+  function inspectCanvasNodeFromKeyboard(node) {
+    selectPrimaryNode(node, "evidence");
+    window.requestAnimationFrame(() => {
+      const inspector = inspectorRef.current;
+      if (!inspector) return;
+      inspector.focus({ preventScroll: true });
+      if (window.matchMedia("(max-width: 1180px)").matches) {
+        inspector.scrollIntoView({ block: "start" });
+      }
+    });
   }
 
   function openReference(reference) {
@@ -1190,29 +1197,29 @@ function App() {
           <nav className="sideNavigation" aria-label="Operator console navigation">
             <div className="navGroup">
               <span className="navGroupLabel">Overview</span>
-              <button title="Explore project relationships" className={navContext === "graph" ? "active" : ""} onClick={() => showWorkspace("graph")}><GitBranch size={17} /><span>Graph</span></button>
-              <button title="Arrange a temporary working set" className={navContext === "canvas" ? "active" : ""} onClick={() => showWorkspace("canvas")}><MapIcon size={17} /><span>Canvas</span></button>
-              <button title="Scan structured project records" className={navContext === "bases" ? "active" : ""} onClick={() => showBase("memory", "", "bases")}><Table2 size={17} /><span>Bases</span></button>
+              <button title="Explore project relationships" aria-current={navContext === "graph" ? "page" : undefined} className={navContext === "graph" ? "active" : ""} onClick={() => showWorkspace("graph")}><GitBranch size={17} /><span>Graph</span></button>
+              <button title="Arrange a temporary working set" aria-current={navContext === "canvas" ? "page" : undefined} className={navContext === "canvas" ? "active" : ""} onClick={() => showWorkspace("canvas")}><MapIcon size={17} /><span>Canvas</span></button>
+              <button title="Scan structured project records" aria-current={navContext === "bases" ? "page" : undefined} className={navContext === "bases" ? "active" : ""} onClick={() => showBase("memory", "", "bases")}><Table2 size={17} /><span>Bases</span></button>
             </div>
             <div className="navGroup">
               <span className="navGroupLabel">Project</span>
-              <button title="Browse and preview indexed source" className={navContext === "files" ? "active" : ""} onClick={showFiles}><Files size={17} /><span>Files</span></button>
-              <button title="Scan indexed code symbols" className={navContext === "symbols" ? "active" : ""} onClick={() => showBase("files", "symbol", "symbols")}><Code2 size={17} /><span>Symbols</span></button>
-              <button title="Scan indexed dependencies" className={navContext === "imports" ? "active" : ""} onClick={() => showBase("files", "import", "imports")}><GitBranch size={17} /><span>Imports</span></button>
-              <button title="Review durable project knowledge" className={navContext === "memories" ? "active" : ""} onClick={() => showBase("memory", "", "memories")}><MemoryStick size={17} /><span>Memories</span></button>
-              <button title="Inspect evidence and freshness" className={navContext === "evidence" ? "active" : ""} onClick={() => { focusSemanticHub("evidence"); showDrawer("evidence"); }}><ShieldCheck size={17} /><span>Evidence</span></button>
+              <button title="Browse and preview indexed source" aria-current={navContext === "files" ? "page" : undefined} className={navContext === "files" ? "active" : ""} onClick={showFiles}><Files size={17} /><span>Files</span></button>
+              <button title="Scan indexed code symbols" aria-current={navContext === "symbols" ? "page" : undefined} className={navContext === "symbols" ? "active" : ""} onClick={() => showBase("files", "symbol", "symbols")}><Code2 size={17} /><span>Symbols</span></button>
+              <button title="Scan indexed dependencies" aria-current={navContext === "imports" ? "page" : undefined} className={navContext === "imports" ? "active" : ""} onClick={() => showBase("files", "import", "imports")}><GitBranch size={17} /><span>Imports</span></button>
+              <button title="Review durable project knowledge" aria-current={navContext === "memories" ? "page" : undefined} className={navContext === "memories" ? "active" : ""} onClick={() => showBase("memory", "", "memories")}><MemoryStick size={17} /><span>Memories</span></button>
+              <button title="Inspect evidence and freshness" aria-current={navContext === "evidence" ? "page" : undefined} className={navContext === "evidence" ? "active" : ""} onClick={() => { focusSemanticHub("evidence"); showDrawer("evidence"); }}><ShieldCheck size={17} /><span>Evidence</span></button>
             </div>
             <div className="navGroup">
               <span className="navGroupLabel">Tools</span>
-              <button className={searchOpen ? "active" : ""} onClick={() => { setViewMode("graph"); setNavContext("search"); setSearchOpen(true); }}><Search size={17} /><span>Search</span></button>
-              <button className={inspectorOpen && activeDrawer === "governance" ? "active" : ""} onClick={showGovernance}><ShieldAlert size={17} /><span>Action Gate</span><em>{governance.policies.length}</em></button>
-              <button className={inspectorOpen && activeDrawer === "intelligence" ? "active" : ""} onClick={showIntelligence}><Gauge size={17} /><span>Intelligence</span></button>
-              <button className={inspectorOpen && activeDrawer === "memory" ? "active" : ""} onClick={() => showDrawer("memory")}><Database size={17} /><span>Memory Ledger</span></button>
-              <button className={inspectorOpen && activeDrawer === "checkpoint" ? "active" : ""} onClick={() => showDrawer("checkpoint")}><Route size={17} /><span>Continue Work</span></button>
-              <button className={inspectorOpen && activeDrawer === "receipts" ? "active" : ""} onClick={() => showDrawer("receipts")}><Sparkles size={17} /><span>Context Packs</span><em>{receipts.length}</em></button>
+              <button aria-current={searchOpen && navContext === "search" ? "page" : undefined} className={searchOpen && navContext === "search" ? "active" : ""} onClick={() => { setViewMode("graph"); setNavContext("search"); setSearchOpen(true); }}><Search size={17} /><span>Search</span></button>
+              <button aria-current={navContext === "governance" ? "page" : undefined} className={navContext === "governance" ? "active" : ""} onClick={showGovernance}><ShieldAlert size={17} /><span>Action Gate</span><em>{governance.policies.length}</em></button>
+              <button aria-current={navContext === "intelligence" ? "page" : undefined} className={navContext === "intelligence" ? "active" : ""} onClick={showIntelligence}><Gauge size={17} /><span>Intelligence</span></button>
+              <button aria-current={navContext === "memory" ? "page" : undefined} className={navContext === "memory" ? "active" : ""} onClick={() => showDrawer("memory")}><Database size={17} /><span>Memory Ledger</span></button>
+              <button aria-current={navContext === "checkpoint" ? "page" : undefined} className={navContext === "checkpoint" ? "active" : ""} onClick={() => showDrawer("checkpoint")}><Route size={17} /><span>Continue Work</span></button>
+              <button aria-current={navContext === "receipts" ? "page" : undefined} className={navContext === "receipts" ? "active" : ""} onClick={() => showDrawer("receipts")}><Sparkles size={17} /><span>Context Packs</span><em>{receipts.length}</em></button>
               <button onClick={() => setCommandOpen(true)}><Command size={17} /><span>Command Palette</span></button>
-              <button title="Check this Rta-Smriti checkout for GitHub release requirements" className={inspectorOpen && activeDrawer === "publish" ? "active" : ""} onClick={showPublishReadiness}><Rocket size={17} /><span>Rta-Smriti Release</span><em>{publishReady}/{publishTotal}</em></button>
-              <button className={settingsOpen ? "active" : ""} onClick={() => { showWorkspace("graph"); setSettingsOpen(true); }}><SlidersHorizontal size={17} /><span>Settings</span></button>
+              <button title="Check this Rta-Smriti checkout for GitHub release requirements" aria-current={navContext === "publish" ? "page" : undefined} className={navContext === "publish" ? "active" : ""} onClick={showPublishReadiness}><Rocket size={17} /><span>Rta-Smriti Release</span><em>{publishReady}/{publishTotal}</em></button>
+              <button aria-current={navContext === "settings" ? "page" : undefined} className={navContext === "settings" ? "active" : ""} onClick={() => { showWorkspace("graph"); setSettingsOpen(true); setNavContext("settings"); }}><SlidersHorizontal size={17} /><span>Settings</span></button>
             </div>
           </nav>
           <div className="railFooter">
@@ -1228,22 +1235,22 @@ function App() {
         <main className={stageExpanded ? "brainStage expanded" : "brainStage"}>
           <div className="stageToolbar">
             <div className="viewSwitch" aria-label="Workspace view">
-              <button className={viewMode === "graph" ? "active" : ""} onClick={() => showWorkspace("graph")}><GitBranch size={15} /> Graph</button>
-              <button className={viewMode === "canvas" ? "active" : ""} onClick={() => showWorkspace("canvas")}><MapIcon size={15} /> Canvas</button>
-              <button className={viewMode === "bases" ? "active" : ""} onClick={() => showBase("memory", "", "bases")}><Table2 size={15} /> Bases</button>
+              <button aria-pressed={viewMode === "graph"} className={viewMode === "graph" ? "active" : ""} onClick={() => showWorkspace("graph")}><GitBranch size={15} /> Graph</button>
+              <button aria-pressed={viewMode === "canvas"} className={viewMode === "canvas" ? "active" : ""} onClick={() => showWorkspace("canvas")}><MapIcon size={15} /> Canvas</button>
+              <button aria-pressed={viewMode === "bases"} className={viewMode === "bases" ? "active" : ""} onClick={() => showBase("memory", "", "bases")}><Table2 size={15} /> Bases</button>
             </div>
             <div className="modeGroup" aria-label="Graph scope">
               {graphModes.map((mode) => (
                 <button key={mode} aria-pressed={graphMode === mode} className={graphMode === mode ? "active" : ""} onClick={() => setGraphMode(mode)}>{mode}</button>
               ))}
             </div>
-            <button className={searchOpen ? "toolButton active" : "toolButton"} onClick={() => setSearchOpen((value) => !value)} aria-label="Search" title="Search">
+            <button className={searchOpen ? "toolButton active" : "toolButton"} onClick={() => setSearchOpen((value) => !value)} aria-label="Search" aria-pressed={searchOpen} title="Search">
               <Search size={16} /> <span className="toolText">Search</span>
             </button>
-            <button className={typesOpen ? "toolButton active" : "toolButton"} onClick={() => setTypesOpen((value) => !value)} aria-label="Types" title="Types">
+            <button className={typesOpen ? "toolButton active" : "toolButton"} onClick={() => setTypesOpen((value) => !value)} aria-label="Types" aria-pressed={typesOpen} title="Types">
               <Layers3 size={16} /> <span className="toolText">Types</span>
             </button>
-            <button className={settingsOpen ? "toolButton active" : "toolButton"} onClick={() => setSettingsOpen((value) => !value)} aria-label="Settings" title="Graph settings">
+            <button className={settingsOpen ? "toolButton active" : "toolButton"} onClick={() => setSettingsOpen((value) => { const next = !value; setNavContext(next ? "settings" : viewMode); return next; })} aria-label="Settings" aria-pressed={settingsOpen} title="Graph settings">
               <SlidersHorizontal size={16} /> <span className="toolText">Settings</span>
             </button>
             <button className="toolButton iconOnly" onClick={() => exportView(`${selectedProject?.project || "rta-smriti"}-${viewMode}.json`, { project: selectedProject?.project, task, view: viewMode, graph: visibleGraph })} aria-label="Export current view" title="Export current view">
@@ -1266,13 +1273,13 @@ function App() {
 
           <div className={searchOpen || typesOpen || settingsOpen ? "graphFilters" : "graphFilters collapsed"}>
               {searchOpen && (
-                <label className="nodeSearch">
+                <label className="nodeSearch" id="graph-search-controls">
                   <Search size={15} />
-                  <input value={nodeQuery} onChange={(event) => setNodeQuery(event.target.value)} placeholder="Search files, symbols, memories..." autoFocus />
+                  <input value={nodeQuery} onChange={(event) => setNodeQuery(event.target.value)} placeholder="Search files, symbols, memories..." aria-label="Search graph nodes" autoFocus />
                 </label>
               )}
               {typesOpen && (
-                <div className="typeFilters" aria-label="Graph type filters">
+                <div className="typeFilters" id="graph-type-controls" aria-label="Graph type filters">
                   {allGraphTypes.map((type) => (
                     <button key={type} aria-pressed={activeTypes.includes(type)} className={activeTypes.includes(type) ? "active" : ""} onClick={() => toggleType(type)}>
                       <i style={{ background: graphPalette[type] }} /> {type}
@@ -1282,6 +1289,7 @@ function App() {
               )}
               {settingsOpen && (
                 <GraphSettings
+                  id="graph-settings-controls"
                   depth={graphDepth}
                   setDepth={setGraphDepth}
                   showLabels={showLabels}
@@ -1316,7 +1324,7 @@ function App() {
               onUse={addFileToTask}
             />
           )}
-          {viewMode === "canvas" && <CanvasBoard project={selectedProject} graph={visibleGraph} onSelect={(node) => selectPrimaryNode(node, "evidence")} onExport={exportView} />}
+          {viewMode === "canvas" && <CanvasBoard project={selectedProject} graph={visibleGraph} onSelect={(node) => selectPrimaryNode(node, "evidence")} onKeyboardInspect={inspectCanvasNodeFromKeyboard} onExport={exportView} />}
           {viewMode === "bases" && <BasesView memories={memories} graph={computedGraph} publish={publish} onSelect={(node) => selectPrimaryNode(node, "evidence")} initialTable={baseScope.table} kindFilter={baseScope.kind} />}
 
           <TaskComposer
@@ -1341,30 +1349,30 @@ function App() {
           />
         </main>
 
-        <aside className={inspectorOpen ? "inspector" : "inspector hidden"}>
+        <aside ref={inspectorRef} tabIndex={-1} aria-label="Project detail inspector" className={inspectorOpen ? "inspector" : "inspector hidden"}>
           <div className="inspectorTabs">
-            <button className={activeDrawer === "evidence" ? "active" : ""} onClick={() => showDrawer("evidence")}>
+            <button aria-pressed={activeDrawer === "evidence"} className={activeDrawer === "evidence" ? "active" : ""} onClick={() => showDrawer("evidence")}>
               <PanelRightOpen size={15} /> Evidence
             </button>
-            <button className={activeDrawer === "references" ? "active" : ""} onClick={() => showDrawer("references")}>
+            <button aria-pressed={activeDrawer === "references"} className={activeDrawer === "references" ? "active" : ""} onClick={() => showDrawer("references")}>
               <GitBranch size={15} /> Refs
             </button>
-            <button className={activeDrawer === "governance" ? "active" : ""} onClick={showGovernance}>
+            <button aria-pressed={activeDrawer === "governance"} className={activeDrawer === "governance" ? "active" : ""} onClick={showGovernance}>
               <ShieldAlert size={15} /> Gate
             </button>
-            <button className={activeDrawer === "intelligence" ? "active" : ""} onClick={showIntelligence}>
+            <button aria-pressed={activeDrawer === "intelligence"} className={activeDrawer === "intelligence" ? "active" : ""} onClick={showIntelligence}>
               <Gauge size={15} /> Intel
             </button>
-            <button className={activeDrawer === "memory" ? "active" : ""} onClick={() => showDrawer("memory")}>
+            <button aria-pressed={activeDrawer === "memory"} className={activeDrawer === "memory" ? "active" : ""} onClick={() => showDrawer("memory")}>
               <MemoryStick size={15} /> Memory
             </button>
-            <button className={activeDrawer === "checkpoint" ? "active" : ""} onClick={() => showDrawer("checkpoint")}>
+            <button aria-pressed={activeDrawer === "checkpoint"} className={activeDrawer === "checkpoint" ? "active" : ""} onClick={() => showDrawer("checkpoint")}>
               <Route size={15} /> Continue
             </button>
-            <button className={activeDrawer === "receipts" ? "active" : ""} onClick={() => showDrawer("receipts")}>
+            <button aria-pressed={activeDrawer === "receipts"} className={activeDrawer === "receipts" ? "active" : ""} onClick={() => showDrawer("receipts")}>
               <Clipboard size={15} /> Packs
             </button>
-            <button className={activeDrawer === "publish" ? "active" : ""} onClick={showPublishReadiness}>
+            <button aria-pressed={activeDrawer === "publish"} className={activeDrawer === "publish" ? "active" : ""} onClick={showPublishReadiness}>
               <Rocket size={15} /> Release
             </button>
           </div>
@@ -1441,7 +1449,7 @@ function App() {
         <span>
           <CircleDot size={14} /> Graph DB: Local SQLite
         </span>
-        <span>
+        <span role="status" aria-live="polite" aria-atomic="true">
           <Activity size={14} /> {message || "Ready"}
         </span>
       </footer>
@@ -1461,6 +1469,7 @@ function App() {
 }
 
 function GraphSettings({
+  id,
   depth, setDepth, showLabels, setShowLabels, showEdges, setShowEdges,
   projectSettings, setProjectSettings, parserCapabilities, onSave, isSaving,
   watcher, onStartWatcher, onStopWatcher, isChangingWatcher,
@@ -1469,7 +1478,7 @@ function GraphSettings({
   const updateSetting = (key, value) => setProjectSettings((current) => ({ ...(current || {}), [key]: value }));
   const parserStatus = parserCapabilities[settings.parser_adapter];
   return (
-    <div className="graphSettings">
+    <div className="graphSettings" id={id}>
       <div className="settingsGroup graphDisplaySettings">
         <strong>Graph display</strong>
         <label>
@@ -1615,7 +1624,7 @@ function GraphCanvas({ graph, selectedNode, onSelect, query, showLabels, showEdg
 
   return (
     <section ref={canvasRef} className={`graphCanvas ${isPanning ? "panning" : ""}`} aria-label="Interactive project brain graph">
-      <svg className="graphSvg" viewBox={`${viewX} ${viewY} ${viewWidth} ${viewHeight}`} role="img" aria-label="Rta-Smriti graph">
+      <svg className="graphSvg" viewBox={`${viewX} ${viewY} ${viewWidth} ${viewHeight}`} role="group" aria-label="Rta-Smriti graph">
         <defs>
           <filter id="softGlow">
             <feGaussianBlur stdDeviation="5" result="blur" />
@@ -1961,7 +1970,7 @@ function FileExplorer({ tree, preview, loading, freshness, onOpen, onNavigate, o
   );
 }
 
-function CanvasBoard({ project, graph, onSelect, onExport }) {
+function CanvasBoard({ project, graph, onSelect, onKeyboardInspect, onExport }) {
   const storageKey = `${CANVAS_STORAGE_KEY}:${project?.project || "default"}`;
   const [positions, setPositions] = useState(() => readLocalJson(storageKey, {}));
   const [focusedNodeId, setFocusedNodeId] = useState("");
@@ -2003,6 +2012,7 @@ function CanvasBoard({ project, graph, onSelect, onExport }) {
   }
 
   function beginDrag(event, node, index) {
+    if (window.matchMedia("(max-width: 560px)").matches) return;
     const field = fieldRef.current;
     if (!field) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -2099,9 +2109,14 @@ function CanvasBoard({ project, graph, onSelect, onExport }) {
                 setFocusedNodeId((current) => current === node.id ? "" : node.id);
               }}
               onDoubleClick={() => onSelect(node)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                onKeyboardInspect(node);
+              }}
               aria-pressed={focusedNodeId === node.id}
               aria-label={`${node.label}, ${node.meta}, ${linkCount} direct links`}
-              title="Drag to arrange. Click to trace links. Double-click to inspect."
+              title="Drag to arrange. Click to trace links. Double-click or press Enter to inspect."
             >
               <span className="canvasPort incoming" aria-hidden="true" />
               <span className="canvasNodeIcon" aria-hidden="true"><NodeIcon size={14} /></span>
@@ -2125,6 +2140,11 @@ function CanvasBoard({ project, graph, onSelect, onExport }) {
 function BasesView({ memories, graph, publish, onSelect, initialTable = "memory", kindFilter = "" }) {
   const [table, setTable] = useState(initialTable);
   const [query, setQuery] = useState("");
+  const baseTabs = [
+    { id: "memory", label: "Memories" },
+    { id: "files", label: kindFilter === "symbol" ? "Symbols" : kindFilter === "import" ? "Imports" : "Sources" },
+    { id: "readiness", label: "Readiness" },
+  ];
   useEffect(() => {
     setTable(initialTable);
     setQuery("");
@@ -2132,19 +2152,44 @@ function BasesView({ memories, graph, publish, onSelect, initialTable = "memory"
   const normalized = query.toLowerCase();
   const memoryRows = memories.filter((item) => `${item.type} ${item.pramana} ${item.text}`.toLowerCase().includes(normalized));
   const fileRows = graph.nodes.filter((item) => (!kindFilter || item.meta === kindFilter) && `${item.label} ${item.meta}`.toLowerCase().includes(normalized));
+  function moveBaseTabFocus(event, index) {
+    const directions = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+    let nextIndex = index;
+    if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = baseTabs.length - 1;
+    else if (directions[event.key]) nextIndex = (index + directions[event.key] + baseTabs.length) % baseTabs.length;
+    else return;
+    event.preventDefault();
+    setTable(baseTabs[nextIndex].id);
+    event.currentTarget.parentElement?.querySelectorAll('[role="tab"]')[nextIndex]?.focus();
+  }
   return (
     <section className="basesView" aria-label="Typed project data tables">
       <div className="basesToolbar">
-        <div className="viewSwitch">
-          <button className={table === "memory" ? "active" : ""} onClick={() => setTable("memory")}>Memories</button>
-          <button className={table === "files" ? "active" : ""} onClick={() => setTable("files")}>{kindFilter === "symbol" ? "Symbols" : kindFilter === "import" ? "Imports" : "Sources"}</button>
-          <button className={table === "readiness" ? "active" : ""} onClick={() => setTable("readiness")}>Readiness</button>
+        <div className="viewSwitch" role="tablist" aria-label="Project data tables">
+          {baseTabs.map((entry, index) => (
+            <button key={entry.id} id={`base-tab-${entry.id}`} role="tab" aria-selected={table === entry.id} aria-controls={`base-panel-${entry.id}`} tabIndex={table === entry.id ? 0 : -1} className={table === entry.id ? "active" : ""} onClick={() => setTable(entry.id)} onKeyDown={(event) => moveBaseTabFocus(event, index)}>{entry.label}</button>
+          ))}
         </div>
-        <label className="nodeSearch"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter this base..." /></label>
+        <label className="nodeSearch"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter this base..." aria-label="Filter current project table" /></label>
       </div>
-      {table === "memory" && <div className="baseTable"><div className="baseRow head"><span>Type</span><span>Evidence</span><span>Confidence</span><span>Memory</span></div>{memoryRows.map((item) => <button className="baseRow" key={item.id}><span>{item.type}</span><span>{item.pramana}</span><span>{Math.round(item.confidence * 100)}%</span><span>{item.text}</span></button>)}</div>}
-      {table === "files" && <div className="baseTable"><div className="baseRow head"><span>Name</span><span>Kind</span><span>Layer</span><span>Action</span></div>{fileRows.map((item) => <button className="baseRow" key={item.id} onClick={() => onSelect(item)}><span>{item.label}</span><span>{item.type}</span><span>{item.meta}</span><span>Inspect</span></button>)}</div>}
-      {table === "readiness" && <div className="readinessGrid">{(publish?.checks || []).map((check) => <article key={check.name} className={check.ok ? "ready" : "open"}>{check.ok ? <CheckCircle2 size={18} /> : <CircleDot size={18} />}<strong>{check.name}</strong><span>{check.note || (check.ok ? "Ready" : "Open")}</span></article>)}</div>}
+      {table === "memory" && (
+        <div id="base-panel-memory" role="tabpanel" aria-labelledby="base-tab-memory">
+          <div className="baseTable" role="table" aria-label="Project memories">
+            <div role="rowgroup"><div className="baseRow head" role="row"><span role="columnheader">Type</span><span role="columnheader">Evidence</span><span role="columnheader">Confidence</span><span role="columnheader">Memory</span></div></div>
+            <div role="rowgroup">{memoryRows.map((item) => <div className="baseRow" role="row" key={item.id}><span role="cell">{item.type}</span><span role="cell">{item.pramana}</span><span role="cell">{Math.round(item.confidence * 100)}%</span><span role="cell">{item.text}</span></div>)}</div>
+          </div>
+        </div>
+      )}
+      {table === "files" && (
+        <div id="base-panel-files" role="tabpanel" aria-labelledby="base-tab-files">
+          <div className="baseTable" role="table" aria-label="Indexed project sources">
+            <div role="rowgroup"><div className="baseRow head" role="row"><span role="columnheader">Name</span><span role="columnheader">Kind</span><span role="columnheader">Layer</span><span role="columnheader">Action</span></div></div>
+            <div role="rowgroup">{fileRows.map((item) => <div className="baseRow" role="row" key={item.id}><span role="cell">{item.label}</span><span role="cell">{item.type}</span><span role="cell">{item.meta}</span><span role="cell"><button type="button" onClick={() => onSelect(item)} aria-label={`Inspect ${item.label}`}>Inspect</button></span></div>)}</div>
+          </div>
+        </div>
+      )}
+      {table === "readiness" && <div id="base-panel-readiness" role="tabpanel" aria-labelledby="base-tab-readiness" className="readinessGrid">{(publish?.checks || []).map((check) => <article key={check.name} className={check.ok ? "ready" : "open"}>{check.ok ? <CheckCircle2 size={18} /> : <CircleDot size={18} />}<strong>{check.name}</strong><span>{check.note || (check.ok ? "Ready" : "Open")}</span></article>)}</div>}
     </section>
   );
 }
@@ -2475,6 +2520,24 @@ function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, on
   const selectedMember = projects.find((item) => `${item.db_path}:${item.project}` === memberKey);
   const diagnostics = data.diagnostics;
   const graphResult = data.graph;
+  const tabs = [
+    { id: "retrieval", label: "Retrieval", icon: Gauge },
+    { id: "impact", label: "Impact", icon: Network },
+    { id: "workspaces", label: "Workspaces", icon: Boxes },
+    { id: "portability", label: "Vault", icon: HardDrive },
+  ];
+
+  function moveTabFocus(event, index) {
+    const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+    let nextIndex = index;
+    if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = tabs.length - 1;
+    else if (keys[event.key]) nextIndex = (index + keys[event.key] + tabs.length) % tabs.length;
+    else return;
+    event.preventDefault();
+    setTab(tabs[nextIndex].id);
+    event.currentTarget.parentElement?.querySelectorAll('[role="tab"]')[nextIndex]?.focus();
+  }
 
   async function searchSelectedWorkspace() {
     if (!project || !selectedWorkspace || !workspaceQuery.trim()) return;
@@ -2573,15 +2636,27 @@ function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, on
   return (
     <div className="drawerContent intelligencePanel">
       <div className="sectionHeader"><h2>Project Intelligence</h2><em>{project?.project || "No project"}</em></div>
-      <div className="intelligenceTabs" role="tablist">
-        <button className={tab === "retrieval" ? "active" : ""} onClick={() => setTab("retrieval")}><Gauge size={14} /> Retrieval</button>
-        <button className={tab === "impact" ? "active" : ""} onClick={() => setTab("impact")}><Network size={14} /> Impact</button>
-        <button className={tab === "workspaces" ? "active" : ""} onClick={() => setTab("workspaces")}><Boxes size={14} /> Workspaces</button>
-        <button className={tab === "portability" ? "active" : ""} onClick={() => setTab("portability")}><HardDrive size={14} /> Vault</button>
+      <div className="intelligenceTabs" role="tablist" aria-label="Project intelligence views">
+        {tabs.map(({ id, label, icon: TabIcon }, index) => (
+          <button
+            key={id}
+            id={`intelligence-tab-${id}`}
+            role="tab"
+            type="button"
+            aria-selected={tab === id}
+            aria-controls={`intelligence-panel-${id}`}
+            tabIndex={tab === id ? 0 : -1}
+            className={tab === id ? "active" : ""}
+            onClick={() => setTab(id)}
+            onKeyDown={(event) => moveTabFocus(event, index)}
+          >
+            <TabIcon size={14} /> {label}
+          </button>
+        ))}
       </div>
 
       {tab === "retrieval" && (
-        <section className="intelligenceSection">
+        <section id="intelligence-panel-retrieval" role="tabpanel" aria-labelledby="intelligence-tab-retrieval" className="intelligenceSection">
           <label><span>Question to explain</span><textarea rows={3} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
           <button className="primarySmall" onClick={() => onDiagnose(query)} disabled={busy || !query.trim()}><Search size={15} /> Explain retrieval</button>
           {diagnostics && (
@@ -2606,7 +2681,7 @@ function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, on
       )}
 
       {tab === "impact" && (
-        <section className="intelligenceSection">
+        <section id="intelligence-panel-impact" role="tabpanel" aria-labelledby="intelligence-tab-impact" className="intelligenceSection">
           <label><span>Symbol or file</span><input value={target} onChange={(event) => setTarget(event.target.value)} placeholder="helper or src/service.py" /></label>
           <label><span>Question</span><select value={queryType} onChange={(event) => setQueryType(event.target.value)}><option value="impact">Change impact</option><option value="dependents">What depends on this?</option><option value="dependencies">What does this depend on?</option><option value="evidence">Supporting evidence</option><option value="relevance">Related knowledge</option></select></label>
           <button className="primarySmall" onClick={() => onGraphQuery(target, queryType)} disabled={busy || !target.trim()}><Network size={15} /> Trace relationships</button>
@@ -2620,20 +2695,20 @@ function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, on
       )}
 
       {tab === "workspaces" && (
-        <section className="intelligenceSection">
+        <section id="intelligence-panel-workspaces" role="tabpanel" aria-labelledby="intelligence-tab-workspaces" className="intelligenceSection">
           <p className="drawerIntro">Group independently indexed brains for cross-repository recall without merging their roots or databases.</p>
           <div className="workspaceList">
             {data.workspaces?.map((workspace) => <button key={workspace.id} className={selectedWorkspace === workspace.name ? "active" : ""} onClick={() => setSelectedWorkspace(workspace.name)}><span>{workspace.name}</span><em>{workspace.project_count}</em></button>)}
             {!data.workspaces?.length && <p className="emptyState">No workspaces in this brain yet.</p>}
           </div>
           <div className="workspaceAction">
-            <input value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} placeholder="Workspace name" />
+            <input value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} placeholder="Workspace name" aria-label="New workspace name" />
             <button onClick={async () => { const result = await onCreateWorkspace({ name: workspaceName.trim() }); if (result) { setSelectedWorkspace(workspaceName.trim()); setWorkspaceName(""); } }} disabled={busy || !workspaceName.trim()}><Plus size={14} /> Create</button>
           </div>
           <label><span>Member brain</span><select value={memberKey} onChange={(event) => setMemberKey(event.target.value)}><option value="">Choose a project</option>{projects.map((item) => <option key={`${item.db_path}:${item.project}`} value={`${item.db_path}:${item.project}`}>{item.project}</option>)}</select></label>
           <button className="primarySmall" onClick={() => onAddMember({ name: selectedWorkspace, project: selectedMember.project, member_db_path: selectedMember.db_path, role: "member" })} disabled={busy || !selectedWorkspace || !selectedMember}><Plus size={15} /> Add to workspace</button>
           <div className="workspaceAction">
-            <input value={workspaceQuery} onChange={(event) => setWorkspaceQuery(event.target.value)} placeholder="Search every member brain" />
+            <input value={workspaceQuery} onChange={(event) => setWorkspaceQuery(event.target.value)} placeholder="Search every member brain" aria-label="Search workspace brains" />
             <button onClick={searchSelectedWorkspace} disabled={!selectedWorkspace || !workspaceQuery.trim()}><Search size={14} /> Search</button>
           </div>
           {workspaceStatus && <p className="workspaceStatus" aria-live="polite">{workspaceStatus}</p>}
@@ -2651,7 +2726,7 @@ function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, on
       )}
 
       {tab === "portability" && (
-        <section className="intelligenceSection portabilityPanel">
+        <section id="intelligence-panel-portability" role="tabpanel" aria-labelledby="intelligence-tab-portability" className="intelligenceSection portabilityPanel">
           <p className="drawerIntro">Move selected memory without source code, authenticate a private brain copy, or opt into local lifecycle controls.</p>
           <h3>Selective bundle</h3>
           <label><span>Bundle path</span><input value={bundlePath} onChange={(event) => { setBundlePath(event.target.value); setBundlePreview(null); }} /></label>
@@ -2997,7 +3072,7 @@ function BootstrapPanel({ onDone, shellKind }) {
         return;
       }
       setOutput(`Brain ready: ${payload.project}\nIndexed files: ${payload.bootstrap?.ingest?.indexed_files || 0}\nDatabase: ${displayPath(payload.db_path)}\n\n${stageText}${payload.bootstrap?.agent_index_file ? `\n\nAgent bridge: ${displayPath(payload.bootstrap.agent_index_file)}` : ""}`);
-      await onDone();
+      await onDone({ project: payload.project, db_path: payload.db_path });
     } catch (error) {
       setOutput(`Bootstrap failed: ${error.message}`);
     } finally {
@@ -3040,16 +3115,34 @@ function BootstrapPanel({ onDone, shellKind }) {
       <button className="primarySmall" onClick={bootstrap} disabled={isBootstrapping}>
         <Rocket size={16} /> {isBootstrapping ? "Starting..." : "Set Up & Start"}
       </button>
-      {output && <pre className="miniOutput">{output}</pre>}
+      {output && <pre className="miniOutput" role="status" aria-live="polite" aria-atomic="true">{output}</pre>}
     </div>
   );
 }
 
 function CommandPalette({ command, cliCommand, shellKind, brainDir, onClose, onCopy }) {
   const paletteRef = useRef(null);
+  const returnFocusRef = useRef(null);
   useEffect(() => {
+    returnFocusRef.current = document.activeElement;
     paletteRef.current?.querySelector("button")?.focus();
+    return () => returnFocusRef.current?.focus?.();
   }, []);
+
+  function keepFocusInside(event) {
+    if (event.key !== "Tab") return;
+    const controls = [...(paletteRef.current?.querySelectorAll("button:not(:disabled)") || [])];
+    if (!controls.length) return;
+    const first = controls[0];
+    const last = controls.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
   const defaultBrainDir = shellPathArg(
     brainDir || (shellKind === "powershell" ? "$env:USERPROFILE\\Documents\\Rta-Smriti\\brains" : "$HOME/.local/share/rta-smriti/brains"),
     shellKind,
@@ -3061,7 +3154,7 @@ function CommandPalette({ command, cliCommand, shellKind, brainDir, onClose, onC
   ];
   return (
     <div className="paletteBackdrop" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={onClose}>
-      <section ref={paletteRef} className="commandPalette" onMouseDown={(event) => event.stopPropagation()}>
+      <section ref={paletteRef} className="commandPalette" onMouseDown={(event) => event.stopPropagation()} onKeyDown={keepFocusInside}>
         <div className="paletteHeader">
           <span>
             <Command size={17} /> Command Palette

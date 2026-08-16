@@ -1,0 +1,45 @@
+# Unified Release Completion Audit
+
+This audit maps the unified release objective to current evidence. A passing test is credited only
+for the behavior it directly exercises.
+
+| Requirement Area | State | Authoritative Evidence |
+| --- | --- | --- |
+| Managed console lifecycle and recovery | Locally proven | `tests/test_managed_console.py`, installed distribution smoke |
+| Optional login startup | Locally proven | `tests/test_autostart.py`; hosted OS execution remains a CI gate |
+| Canonical-root one-command onboarding | Locally proven | `tests/test_onboarding.py`, installed distribution smoke |
+| Watcher, cache, fail-closed ingestion, rollback | Locally proven | resilience, ingestion-security, and next-release suites |
+| Lexical, hash-hybrid, optional semantic diagnostics | Locally proven | retrieval diagnostics and public benchmark suites |
+| Tree-sitter, regex, and pluggable LSP parsing | Locally proven | parser registry and five-ecosystem extraction tests |
+| Structured checkpoints and provenance | Locally proven | blueprint, feedback, context, CLI, API, and MCP tests |
+| Pramana-aware action governance | Locally proven | governance unit/API/MCP tests and rendered block/override journey |
+| Bounded graph, dependents, impact, evidence, relevance | Locally proven | release-intelligence tests and rendered graph/reference journey |
+| Privacy-safe public benchmark | Locally proven | packaged corpus digest, multimode metrics, quality gates |
+| Reinforcement and conservative decay | Locally proven | lifecycle tests and rendered operator action |
+| Isolated multi-brain workspaces | Locally proven | workspace tests and persisted rendered workflow |
+| Selective redacted export/import | Locally proven | staged validation, hostile bundle tests, rendered preview/export |
+| Authenticated local snapshots | Locally proven | tamper/size/link tests and rendered create/verify |
+| Opt-in Git hooks | Locally proven | linked-worktree/security tests and rendered on/off workflow |
+| Accessibility and responsive behavior | Locally proven | destination-wide axe WCAG checks, tab/navigation state, focus containment, live announcements, clipboard failure, reduced motion, forced-colors structure, and zero-overlap mobile Canvas |
+| Small-to-large resource evidence | Locally proven | `benchmarks/performance-baseline-v1.json` and bounded CI probe |
+| Install, upgrade/reinstall, uninstall | Locally proven | isolated wheel lifecycle smoke |
+| Shell-safe generated commands and exact bootstrap identity | Locally proven | executable PowerShell/POSIX hostile-path tests plus rendered duplicate-root and failed-verification scenarios |
+| Final security review | In progress | remediation scan reproduced one low issue; fixed tree must pass a new frozen-commit scan with zero open findings |
+| Windows, macOS, Linux execution | Configured, externally gated | GitHub Actions matrix must run on the pushed candidate |
+| Release artifacts for every OS | Configured, externally gated | CI builds, smokes, checksums, and uploads per OS |
+| Tag, formal GitHub Release, links, post-publish install | Owner gated | No tag or publication before explicit approval |
+
+## Residual Risks
+
+- Optional Sentence Transformers behavior depends on a separately installed provider and model; the
+  public benchmark reports unavailable/not-requested states instead of inventing semantic scores.
+- Native LSP quality depends on the operator-selected adapter command. Rta-Smriti bounds and exposes
+  the adapter but cannot certify arbitrary third-party language servers.
+- HMAC snapshots authenticate with a shared secret; they are not encrypted and are not public-key
+  signatures.
+- Performance evidence is synthetic and environment-specific. It is useful for regression detection,
+  not a promise for every repository or machine.
+- Automated WCAG and keyboard checks do not substitute for testing every operating-system screen
+  reader, browser zoom implementation, or third-party assistive technology.
+- Hosted cross-platform results and downloadable artifacts do not exist until the owner approves a
+  push and GitHub Actions completes successfully.
