@@ -18,6 +18,7 @@ from .db import connect, ingest_repo
 
 
 _SPAWNED_PROCESSES: dict[str, subprocess.Popen] = {}
+_CONTENT_EVENT_TYPES = frozenset({"created", "modified", "deleted", "moved"})
 
 
 def _now_iso() -> str:
@@ -86,6 +87,16 @@ def _is_safe_regular_file(path: Path) -> bool:
         return path.is_file() and not path.is_symlink() and path.stat().st_nlink == 1
     except OSError:
         return False
+
+
+def _watchdog_event_requires_refresh(event, is_internal_event) -> bool:
+    """Ignore access/open/close noise and react only to repository content changes."""
+    if getattr(event, "is_directory", False):
+        return False
+    if getattr(event, "event_type", None) not in _CONTENT_EVENT_TYPES:
+        return False
+    paths = [getattr(event, "src_path", None), getattr(event, "dest_path", None)]
+    return any(path and not is_internal_event(path) for path in paths)
 
 
 def _write_stop_request(path: Path) -> None:
@@ -363,10 +374,7 @@ def run_watcher_worker(
 
             class Handler(FileSystemEventHandler):
                 def on_any_event(self, event) -> None:
-                    if event.is_directory:
-                        return
-                    paths = [getattr(event, "src_path", None), getattr(event, "dest_path", None)]
-                    if any(path and not is_internal_event(path) for path in paths):
+                    if _watchdog_event_requires_refresh(event, is_internal_event):
                         change_event.set()
 
             observer = Observer()

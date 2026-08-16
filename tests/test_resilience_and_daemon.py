@@ -10,7 +10,14 @@ from unittest.mock import patch
 from rta_brain import db
 from rta_brain.mcp_server import McpRequestScheduler, RtaBrainMcpServer
 from rta_brain.parsers import ParserRegistry
-from rta_brain.watch_daemon import _process_alive, start_watcher, stop_watcher, watcher_paths, watcher_status
+from rta_brain.watch_daemon import (
+    _process_alive,
+    _watchdog_event_requires_refresh,
+    start_watcher,
+    stop_watcher,
+    watcher_paths,
+    watcher_status,
+)
 
 
 class RtaBrainResilienceTests(unittest.TestCase):
@@ -150,6 +157,20 @@ class RtaBrainResilienceTests(unittest.TestCase):
 
 
 class RtaBrainWatchDaemonTests(unittest.TestCase):
+    def test_watchdog_ignores_file_access_events_but_keeps_content_changes(self):
+        class Event:
+            is_directory = False
+            src_path = "/repo/main.py"
+            dest_path = None
+
+            def __init__(self, event_type):
+                self.event_type = event_type
+
+        is_internal = lambda _path: False
+        self.assertFalse(_watchdog_event_requires_refresh(Event("opened"), is_internal))
+        self.assertFalse(_watchdog_event_requires_refresh(Event("closed"), is_internal))
+        self.assertTrue(_watchdog_event_requires_refresh(Event("modified"), is_internal))
+
     def test_process_liveness_probe_is_non_destructive(self):
         self.assertTrue(_process_alive(os.getpid()))
 
