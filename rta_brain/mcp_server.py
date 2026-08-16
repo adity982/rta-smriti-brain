@@ -331,6 +331,8 @@ def _confined_thread_path(path: Path, allowed_roots: tuple[Path, ...]) -> tuple[
     if not candidate.is_absolute():
         raise ValueError("thread path must be absolute")
     lexical = candidate.absolute()
+    if _path_is_link_or_reparse(lexical):
+        raise ValueError(f"thread path contains a link or reparse point: {lexical}")
     try:
         resolved = lexical.resolve(strict=True)
     except OSError as exc:

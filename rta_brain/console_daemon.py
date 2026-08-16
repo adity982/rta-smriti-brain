@@ -18,7 +18,8 @@ from pathlib import Path
 from .console import create_dashboard_server
 from .runtime_control import (
     clear_control_files,
-    detached_process_kwargs,
+    detached_popen_kwargs,
+    detached_worker_command,
     is_safe_regular_file,
     now_iso,
     open_log,
@@ -117,13 +118,20 @@ def _worker_command(
     if default_project:
         suffix.extend(("--default-project", default_project))
     if getattr(sys, "frozen", False):
-        return [str(Path(sys.executable).resolve()), *suffix]
-    return [
+        return detached_worker_command([str(Path(sys.executable).resolve()), *suffix])
+    trusted_root = str(tool_root.resolve())
+    bootstrap = (
+        "import runpy,sys;"
+        f"sys.path.insert(0,{trusted_root!r});"
+        "runpy.run_module('rta_brain.console_worker',run_name='__main__')"
+    )
+    return detached_worker_command([
         str(Path(sys.executable).resolve()),
-        "-m",
-        "rta_brain.console_worker",
+        "-I",
+        "-c",
+        bootstrap,
         *suffix[1:],
-    ]
+    ])
 
 
 def _authorized_result(state: dict, paths: dict[str, Path]) -> dict:
@@ -221,13 +229,11 @@ def start_console(
     try:
         process = subprocess.Popen(
             _worker_command(tool_root.resolve(), root, default_db, default_project, host, int(port), paths),
-            cwd=tool_root.resolve(),
             stdin=subprocess.DEVNULL,
             stdout=log_stream,
             stderr=log_stream,
-            close_fds=True,
             env=env,
-            **detached_process_kwargs(),
+            **detached_popen_kwargs(tool_root.resolve()),
         )
     except Exception:
         paths["lock"].unlink(missing_ok=True)

@@ -1,6 +1,7 @@
 import json
 import os
 import socket
+import sys
 import tempfile
 import threading
 import time
@@ -22,7 +23,9 @@ from rta_brain.console_daemon import (
 )
 from rta_brain.db import connect, ingest_repo, init_project, remember
 from rta_brain.runtime_control import (
+    detached_popen_kwargs,
     detached_process_kwargs,
+    detached_worker_command,
     process_alive,
     read_json,
     write_json,
@@ -48,7 +51,7 @@ class RuntimeControlTests(unittest.TestCase):
                 "token": Path("capability.secret"),
             },
         )
-        self.assertIn("rta_brain.console_worker", command)
+        self.assertTrue(any("rta_brain.console_worker" in part for part in command))
         self.assertNotIn("rta_brain.cli", command)
 
     def test_json_state_write_is_atomic_and_round_trips(self):
@@ -77,9 +80,22 @@ class RuntimeControlTests(unittest.TestCase):
         if os.name == "nt":
             self.assertGreater(options["creationflags"], 0)
             self.assertNotIn("start_new_session", options)
+        elif sys.platform == "darwin":
+            self.assertEqual(options, {})
         else:
             self.assertTrue(options["start_new_session"])
             self.assertNotIn("creationflags", options)
+
+    def test_macos_launch_uses_nohup_and_posix_spawn_compatible_options(self):
+        with patch("rta_brain.runtime_control.sys.platform", "darwin"):
+            self.assertEqual(
+                detached_worker_command(["python", "-m", "worker"]),
+                ["/usr/bin/nohup", "python", "-m", "worker"],
+            )
+            self.assertEqual(
+                detached_popen_kwargs(Path("trusted-root")),
+                {"cwd": None, "close_fds": False},
+            )
 
 
 class ManagedConsoleTests(unittest.TestCase):

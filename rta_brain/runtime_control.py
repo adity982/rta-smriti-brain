@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
@@ -182,4 +183,18 @@ def clear_control_files(paths: dict[str, Path], keys: Iterable[str]) -> None:
 def detached_process_kwargs() -> dict:
     if os.name == "nt":
         return {"creationflags": 0x00000008 | 0x00000200 | 0x08000000}
+    if sys.platform == "darwin":
+        return {}
     return {"start_new_session": True}
+
+
+def detached_worker_command(command: list[str]) -> list[str]:
+    if sys.platform == "darwin":
+        return ["/usr/bin/nohup", *command]
+    return command
+
+
+def detached_popen_kwargs(cwd: Path) -> dict:
+    if sys.platform == "darwin":
+        return {"cwd": None, "close_fds": False}
+    return {"cwd": cwd, "close_fds": True, **detached_process_kwargs()}

@@ -15,7 +15,8 @@ from pathlib import Path
 from .db import connect, ingest_repo
 from .runtime_control import (
     clear_control_files,
-    detached_process_kwargs,
+    detached_popen_kwargs,
+    detached_worker_command,
     is_safe_regular_file,
     now_iso,
     open_log,
@@ -158,15 +159,24 @@ def _worker_command(db_path: Path, root: Path, project: str, paths: dict[str, Pa
         "--interval", str(interval),
     ]
     if getattr(sys, "frozen", False):
-        return [str(Path(sys.executable).resolve()), "--db", str(db_path), *suffix]
-    return [
+        return detached_worker_command(
+            [str(Path(sys.executable).resolve()), "--db", str(db_path), *suffix]
+        )
+    trusted_root = str(Path(__file__).resolve().parents[1])
+    bootstrap = (
+        "import runpy,sys;"
+        f"sys.path.insert(0,{trusted_root!r});"
+        "runpy.run_module('rta_brain.watch_worker',run_name='__main__')"
+    )
+    return detached_worker_command([
         str(Path(sys.executable).resolve()),
-        "-m",
-        "rta_brain.watch_worker",
+        "-I",
+        "-c",
+        bootstrap,
         "--db",
         str(db_path),
         *suffix[1:],
-    ]
+    ])
 
 
 def start_watcher(
@@ -200,7 +210,6 @@ def start_watcher(
     with os.fdopen(descriptor, "w", encoding="ascii", newline="\n") as stream:
         stream.write(token_hash + "\n")
     env = {**os.environ, "RTA_SMIRTI_WATCH_TOKEN": secrets_token}
-    spawn_options = detached_process_kwargs()
     try:
         log_stream = _open_log(paths["log"])
     except Exception:
@@ -209,13 +218,11 @@ def start_watcher(
     try:
         process = subprocess.Popen(
             _worker_command(database, repository, project, paths, interval),
-            cwd=Path(__file__).resolve().parents[1],
             stdin=subprocess.DEVNULL,
             stdout=log_stream,
             stderr=log_stream,
-            close_fds=True,
             env=env,
-            **spawn_options,
+            **detached_popen_kwargs(Path(__file__).resolve().parents[1]),
         )
     except Exception:
         paths["lock"].unlink(missing_ok=True)

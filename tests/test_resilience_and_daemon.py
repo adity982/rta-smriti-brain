@@ -172,7 +172,7 @@ class RtaBrainWatchDaemonTests(unittest.TestCase):
             },
             2.0,
         )
-        self.assertIn("rta_brain.watch_worker", command)
+        self.assertTrue(any("rta_brain.watch_worker" in part for part in command))
         self.assertNotIn("rta_brain.cli", command)
 
     def test_watchdog_ignores_file_access_events_but_keeps_content_changes(self):
