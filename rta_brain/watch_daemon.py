@@ -16,7 +16,6 @@ from .db import connect, ingest_repo
 from .runtime_control import (
     clear_control_files,
     detach_current_worker_session,
-    detached_popen_kwargs,
     detached_worker_bootstrap,
     is_safe_regular_file,
     now_iso,
@@ -24,6 +23,7 @@ from .runtime_control import (
     prepare_control_dir,
     process_alive,
     read_json,
+    spawn_detached_worker,
     stop_requested,
     write_json,
     write_stop_request,
@@ -211,13 +211,11 @@ def start_watcher(
         paths["lock"].unlink(missing_ok=True)
         raise
     try:
-        process = subprocess.Popen(
+        process = spawn_detached_worker(
             _worker_command(database, repository, project, paths, interval),
-            stdin=subprocess.DEVNULL,
-            stdout=log_stream,
-            stderr=log_stream,
-            env=env,
-            **detached_popen_kwargs(Path(__file__).resolve().parents[1]),
+            log_stream,
+            env,
+            Path(__file__).resolve().parents[1],
         )
     except Exception:
         paths["lock"].unlink(missing_ok=True)

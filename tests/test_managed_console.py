@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from rta_brain.console_daemon import (
     _worker_command,
@@ -23,12 +23,13 @@ from rta_brain.console_daemon import (
 )
 from rta_brain.db import connect, ingest_repo, init_project, remember
 from rta_brain.runtime_control import (
+    SpawnedWorker,
     detach_current_worker_session,
-    detached_popen_kwargs,
     detached_process_kwargs,
     detached_worker_bootstrap,
     process_alive,
     read_json,
+    spawn_detached_worker,
     write_json,
 )
 
@@ -92,10 +93,6 @@ class RuntimeControlTests(unittest.TestCase):
             bootstrap = detached_worker_bootstrap("rta_brain.worker", Path("trusted-root"))
             self.assertIn("os.setsid()", bootstrap)
             self.assertIn("runpy.run_module('rta_brain.worker'", bootstrap)
-            self.assertEqual(
-                detached_popen_kwargs(Path("trusted-root")),
-                {"cwd": None, "close_fds": False},
-            )
 
     def test_macos_worker_session_detach_is_idempotent(self):
         with (
@@ -107,6 +104,50 @@ class RuntimeControlTests(unittest.TestCase):
             detach_current_worker_session()
             detach_current_worker_session()
         setsid.assert_called_once_with()
+
+    def test_macos_worker_uses_posix_spawn_with_explicit_stdio_actions(self):
+        log_stream = MagicMock()
+        log_stream.fileno.return_value = 72
+        with (
+            patch("rta_brain.runtime_control.sys.platform", "darwin"),
+            patch("rta_brain.runtime_control.os.open", return_value=71),
+            patch("rta_brain.runtime_control.os.close") as close,
+            patch("rta_brain.runtime_control.os.posix_spawn", return_value=1234, create=True) as spawn,
+            patch("rta_brain.runtime_control.os.POSIX_SPAWN_DUP2", 2, create=True),
+            patch("rta_brain.runtime_control.os.POSIX_SPAWN_CLOSE", 1, create=True),
+        ):
+            process = spawn_detached_worker(
+                ["/trusted/python", "-I", "-c", "pass"],
+                log_stream,
+                {"SAFE": "1"},
+                Path("ignored-on-darwin"),
+            )
+        self.assertEqual(process.pid, 1234)
+        spawn.assert_called_once_with(
+            "/trusted/python",
+            ["/trusted/python", "-I", "-c", "pass"],
+            {"SAFE": "1"},
+            file_actions=[(2, 71, 0), (2, 72, 1), (2, 72, 2), (1, 71), (1, 72)],
+        )
+        close.assert_called_once_with(71)
+
+    def test_spawned_worker_reports_exit_and_forwards_signals(self):
+        process = SpawnedWorker(1234)
+        with (
+            patch("rta_brain.runtime_control.os.WNOHANG", 1, create=True),
+            patch("rta_brain.runtime_control.os.waitpid", return_value=(1234, 256)),
+            patch("rta_brain.runtime_control.os.waitstatus_to_exitcode", return_value=1),
+        ):
+            self.assertEqual(process.poll(), 1)
+            self.assertEqual(process.wait(timeout=0.1), 1)
+        with patch("rta_brain.runtime_control.os.kill") as kill:
+            with (
+                patch("rta_brain.runtime_control.signal.SIGTERM", 15, create=True),
+                patch("rta_brain.runtime_control.signal.SIGKILL", 9, create=True),
+            ):
+                process.terminate()
+                process.kill()
+        self.assertEqual(kill.call_count, 2)
 
 
 class ManagedConsoleTests(unittest.TestCase):

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import signal
+import subprocess
 import sys
 import time
 import uuid
@@ -206,7 +208,64 @@ def detach_current_worker_session() -> None:
         os.setsid()
 
 
-def detached_popen_kwargs(cwd: Path) -> dict:
-    if sys.platform == "darwin":
-        return {"cwd": None, "close_fds": False}
-    return {"cwd": cwd, "close_fds": True, **detached_process_kwargs()}
+class SpawnedWorker:
+    """Small Popen-compatible handle for workers launched with posix_spawn."""
+
+    def __init__(self, pid: int):
+        self.pid = int(pid)
+        self.returncode: int | None = None
+
+    def poll(self) -> int | None:
+        if self.returncode is not None:
+            return self.returncode
+        try:
+            waited_pid, status = os.waitpid(self.pid, os.WNOHANG)
+        except ChildProcessError:
+            return self.returncode
+        if waited_pid:
+            self.returncode = os.waitstatus_to_exitcode(status)
+        return self.returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
+        while self.poll() is None:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(["rta-smriti-worker"], timeout)
+            time.sleep(0.02)
+        return int(self.returncode)
+
+    def terminate(self) -> None:
+        os.kill(self.pid, signal.SIGTERM)
+
+    def kill(self) -> None:
+        os.kill(self.pid, signal.SIGKILL)
+
+
+def spawn_detached_worker(command: list[str], log_stream, env: dict[str, str], cwd: Path):
+    if sys.platform != "darwin":
+        return subprocess.Popen(
+            command,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=log_stream,
+            stderr=log_stream,
+            env=env,
+            close_fds=True,
+            **detached_process_kwargs(),
+        )
+
+    devnull_fd = os.open(os.devnull, os.O_RDONLY)
+    log_fd = log_stream.fileno()
+    file_actions = [
+        (os.POSIX_SPAWN_DUP2, devnull_fd, 0),
+        (os.POSIX_SPAWN_DUP2, log_fd, 1),
+        (os.POSIX_SPAWN_DUP2, log_fd, 2),
+    ]
+    for descriptor in dict.fromkeys((devnull_fd, log_fd)):
+        if descriptor > 2:
+            file_actions.append((os.POSIX_SPAWN_CLOSE, descriptor))
+    try:
+        pid = os.posix_spawn(command[0], command, env, file_actions=file_actions)
+    finally:
+        os.close(devnull_fd)
+    return SpawnedWorker(pid)

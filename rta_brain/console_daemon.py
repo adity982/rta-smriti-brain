@@ -19,7 +19,6 @@ from .console import create_dashboard_server
 from .runtime_control import (
     clear_control_files,
     detach_current_worker_session,
-    detached_popen_kwargs,
     detached_worker_bootstrap,
     is_safe_regular_file,
     now_iso,
@@ -28,6 +27,7 @@ from .runtime_control import (
     process_alive,
     read_json,
     read_secret,
+    spawn_detached_worker,
     stop_requested,
     write_json,
     write_secret,
@@ -222,13 +222,11 @@ def start_console(
         paths["lock"].unlink(missing_ok=True)
         raise
     try:
-        process = subprocess.Popen(
+        process = spawn_detached_worker(
             _worker_command(tool_root.resolve(), root, default_db, default_project, host, int(port), paths),
-            stdin=subprocess.DEVNULL,
-            stdout=log_stream,
-            stderr=log_stream,
-            env=env,
-            **detached_popen_kwargs(tool_root.resolve()),
+            log_stream,
+            env,
+            tool_root.resolve(),
         )
     except Exception:
         paths["lock"].unlink(missing_ok=True)
