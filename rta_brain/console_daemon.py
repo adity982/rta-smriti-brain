@@ -18,8 +18,9 @@ from pathlib import Path
 from .console import create_dashboard_server
 from .runtime_control import (
     clear_control_files,
+    detach_current_worker_session,
     detached_popen_kwargs,
-    detached_worker_command,
+    detached_worker_bootstrap,
     is_safe_regular_file,
     now_iso,
     open_log,
@@ -118,20 +119,14 @@ def _worker_command(
     if default_project:
         suffix.extend(("--default-project", default_project))
     if getattr(sys, "frozen", False):
-        return detached_worker_command([str(Path(sys.executable).resolve()), *suffix])
-    trusted_root = str(tool_root.resolve())
-    bootstrap = (
-        "import runpy,sys;"
-        f"sys.path.insert(0,{trusted_root!r});"
-        "runpy.run_module('rta_brain.console_worker',run_name='__main__')"
-    )
-    return detached_worker_command([
+        return [str(Path(sys.executable).resolve()), *suffix]
+    return [
         str(Path(sys.executable).resolve()),
         "-I",
         "-c",
-        bootstrap,
+        detached_worker_bootstrap("rta_brain.console_worker", tool_root),
         *suffix[1:],
-    ])
+    ]
 
 
 def _authorized_result(state: dict, paths: dict[str, Path]) -> dict:
@@ -324,6 +319,7 @@ def run_console_worker(
     lock_file: Path,
     token_file: Path,
 ) -> int:
+    detach_current_worker_session()
     launch_secret = os.environ.get("RTA_SMIRTI_CONSOLE_LAUNCH_SECRET", "")
     capability = os.environ.get("RTA_SMIRTI_CONSOLE_CAPABILITY", "")
     instance_id = os.environ.get("RTA_SMIRTI_CONSOLE_INSTANCE_ID", "")

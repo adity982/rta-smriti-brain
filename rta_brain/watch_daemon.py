@@ -15,8 +15,9 @@ from pathlib import Path
 from .db import connect, ingest_repo
 from .runtime_control import (
     clear_control_files,
+    detach_current_worker_session,
     detached_popen_kwargs,
-    detached_worker_command,
+    detached_worker_bootstrap,
     is_safe_regular_file,
     now_iso,
     open_log,
@@ -159,24 +160,18 @@ def _worker_command(db_path: Path, root: Path, project: str, paths: dict[str, Pa
         "--interval", str(interval),
     ]
     if getattr(sys, "frozen", False):
-        return detached_worker_command(
-            [str(Path(sys.executable).resolve()), "--db", str(db_path), *suffix]
-        )
-    trusted_root = str(Path(__file__).resolve().parents[1])
-    bootstrap = (
-        "import runpy,sys;"
-        f"sys.path.insert(0,{trusted_root!r});"
-        "runpy.run_module('rta_brain.watch_worker',run_name='__main__')"
-    )
-    return detached_worker_command([
+        return [str(Path(sys.executable).resolve()), "--db", str(db_path), *suffix]
+    return [
         str(Path(sys.executable).resolve()),
         "-I",
         "-c",
-        bootstrap,
+        detached_worker_bootstrap(
+            "rta_brain.watch_worker", Path(__file__).resolve().parents[1]
+        ),
         "--db",
         str(db_path),
         *suffix[1:],
-    ])
+    ]
 
 
 def start_watcher(
@@ -288,6 +283,7 @@ def run_watcher_worker(
     lock_file: Path,
     interval_seconds: float,
 ) -> int:
+    detach_current_worker_session()
     token = os.environ.get("RTA_SMIRTI_WATCH_TOKEN", "")
     if not token:
         raise RuntimeError("watcher launch token is missing")

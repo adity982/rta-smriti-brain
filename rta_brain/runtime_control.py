@@ -188,10 +188,22 @@ def detached_process_kwargs() -> dict:
     return {"start_new_session": True}
 
 
-def detached_worker_command(command: list[str]) -> list[str]:
+def detached_worker_bootstrap(module: str, trusted_root: Path) -> str:
+    statements = ["import os,runpy,sys"]
     if sys.platform == "darwin":
-        return ["/usr/bin/nohup", *command]
-    return command
+        statements.append("os.setsid()")
+    statements.extend(
+        (
+            f"sys.path.insert(0,{str(trusted_root.resolve())!r})",
+            f"runpy.run_module({module!r},run_name='__main__')",
+        )
+    )
+    return ";".join(statements)
+
+
+def detach_current_worker_session() -> None:
+    if sys.platform == "darwin" and os.getsid(0) != os.getpid():
+        os.setsid()
 
 
 def detached_popen_kwargs(cwd: Path) -> dict:

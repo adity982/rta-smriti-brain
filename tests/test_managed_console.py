@@ -23,9 +23,10 @@ from rta_brain.console_daemon import (
 )
 from rta_brain.db import connect, ingest_repo, init_project, remember
 from rta_brain.runtime_control import (
+    detach_current_worker_session,
     detached_popen_kwargs,
     detached_process_kwargs,
-    detached_worker_command,
+    detached_worker_bootstrap,
     process_alive,
     read_json,
     write_json,
@@ -86,16 +87,26 @@ class RuntimeControlTests(unittest.TestCase):
             self.assertTrue(options["start_new_session"])
             self.assertNotIn("creationflags", options)
 
-    def test_macos_launch_uses_nohup_and_posix_spawn_compatible_options(self):
+    def test_macos_launch_detaches_in_fresh_worker_and_uses_posix_spawn_options(self):
         with patch("rta_brain.runtime_control.sys.platform", "darwin"):
-            self.assertEqual(
-                detached_worker_command(["python", "-m", "worker"]),
-                ["/usr/bin/nohup", "python", "-m", "worker"],
-            )
+            bootstrap = detached_worker_bootstrap("rta_brain.worker", Path("trusted-root"))
+            self.assertIn("os.setsid()", bootstrap)
+            self.assertIn("runpy.run_module('rta_brain.worker'", bootstrap)
             self.assertEqual(
                 detached_popen_kwargs(Path("trusted-root")),
                 {"cwd": None, "close_fds": False},
             )
+
+    def test_macos_worker_session_detach_is_idempotent(self):
+        with (
+            patch("rta_brain.runtime_control.sys.platform", "darwin"),
+            patch("rta_brain.runtime_control.os.getpid", return_value=41),
+            patch("rta_brain.runtime_control.os.getsid", side_effect=(9, 41), create=True),
+            patch("rta_brain.runtime_control.os.setsid", create=True) as setsid,
+        ):
+            detach_current_worker_session()
+            detach_current_worker_session()
+        setsid.assert_called_once_with()
 
 
 class ManagedConsoleTests(unittest.TestCase):
