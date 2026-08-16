@@ -188,6 +188,7 @@ class ManagedConsoleTests(unittest.TestCase):
             startup_timeout=10.0,
         )
         self.assertEqual(started["state"], "running")
+        self.assertEqual(started["startup_stage"], "running")
         self.assertTrue(process_alive(started["pid"]))
         self.assertRegex(started["url"], r"^http://127\.0\.0\.1:\d+/#token=")
 
@@ -228,6 +229,7 @@ class ManagedConsoleTests(unittest.TestCase):
             startup_timeout=10.0,
         )
         self.assertEqual(restarted["state"], "running")
+        self.assertEqual(restarted["startup_stage"], "running")
         self.assertNotEqual(restarted["pid"], started["pid"])
 
         stopped = stop_console(self.brain_dir, timeout=10.0)

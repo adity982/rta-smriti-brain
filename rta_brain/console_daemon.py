@@ -15,7 +15,6 @@ import webbrowser
 import json
 from pathlib import Path
 
-from .console import create_dashboard_server
 from .runtime_control import (
     clear_control_files,
     detach_current_worker_session,
@@ -262,7 +261,15 @@ def start_console(
         tail = paths["log"].read_text(encoding="utf-8", errors="ignore")[-2_000:]
     except OSError:
         pass
-    raise RuntimeError(f"console did not become ready within {startup_timeout:g} seconds{': ' + tail if tail else ''}")
+    observed = read_json(paths["state"])
+    stage = ""
+    if observed and observed.get("launch_fingerprint") == launch_fingerprint:
+        stage = str(observed.get("startup_stage") or observed.get("state") or "")
+    detail = tail or (f"startup stage: {stage}" if stage else "")
+    raise RuntimeError(
+        f"console did not become ready within {startup_timeout:g} seconds"
+        f"{': ' + detail if detail else ''}"
+    )
 
 
 def open_console(brain_dir: Path, *, launch_browser: bool = True) -> dict:
@@ -340,6 +347,7 @@ def run_console_worker(
         "started_at": now_iso(),
         "heartbeat_at": now_iso(),
         "last_error": None,
+        "startup_stage": "loading_console",
     }
     server = None
     should_stop = False
@@ -351,6 +359,13 @@ def run_console_worker(
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     try:
+        write_json(state_file, state, label="console state")
+        print("rta-smriti console stage=loading_console", file=sys.stderr, flush=True)
+        from .console import create_dashboard_server
+
+        state["startup_stage"] = "binding_loopback"
+        write_json(state_file, state, label="console state")
+        print("rta-smriti console stage=binding_loopback", file=sys.stderr, flush=True)
         server, _config, _url = create_dashboard_server(
             tool_root,
             brain_dir,
@@ -365,6 +380,7 @@ def run_console_worker(
         state["port"] = int(server.server_address[1])
         write_secret(token_file, capability, label="console capability")
         state["state"] = "running"
+        state["startup_stage"] = "running"
         write_json(state_file, state, label="console state")
         last_heartbeat = time.monotonic()
         while not should_stop and not stop_requested(stop_file, label="console"):
