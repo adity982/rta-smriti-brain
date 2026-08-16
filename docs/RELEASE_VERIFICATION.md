@@ -1,20 +1,21 @@
 # Release Verification
 
-This page records the reproducible checks for the local release candidate. It
-is implementation evidence, not a substitute for green hosted CI, owner
-approval, or a formal GitHub Release.
+This page records the reproducible checks and publication evidence for the
+formal `v0.4.0-alpha` prerelease. It distinguishes local verification, hosted
+CI, and post-publication installation proof.
 
 ## Publication State
 
 - Source version: `0.4.0-alpha` (`0.4.0a1` in Python package metadata)
-- Local candidate branch: `release/unified-next`
-- Target publication branch: `main`
-- Formal `v0.4.0-alpha` Git tag: intentionally not created
-- Formal `v0.4.0-alpha` GitHub Release: intentionally not created
-- Latest historical tag: `v0.3.0-alpha`
+- Published branch: `main`
+- Frozen release commit: `b9215466beb0f3db41681239c7809832883abcc6`
+- Formal Git tag: `v0.4.0-alpha` (annotated and verified against the frozen commit)
+- Formal GitHub Release: [`Rta-Smriti Brain v0.4.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.4.0-alpha)
+- Release state: published prerelease
 
-No v0.4 source, tag, binary, or Release described by this candidate has been
-published yet. Publication remains an explicit owner gate.
+The release contains the universal wheel, Windows x64, Linux x64, and macOS
+ARM64 binaries, a combined SHA-256 manifest, and the synthetic public-benchmark
+result. GitHub-generated source archives are also available from the tag.
 
 ## Verification Commands
 
@@ -52,15 +53,13 @@ gitleaks dir --redact --no-banner launch-site/public
 
 ## Current Verified Snapshot
 
-Verified locally on Windows on 2026-08-16 before publication. The checked-in
-workflow defines equivalent Windows, Ubuntu, and macOS jobs, but this exact
-candidate is not considered cross-platform verified until those hosted jobs
-run green after the owner-approved push.
+Verified locally and through GitHub Actions on 2026-08-16. The final `main`
+workflow run is [CI run 32](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/31959287286).
 
 | Gate | Result |
 | --- | --- |
-| Pytest regression suite | 169 passed, 4 platform/privilege skips, 513 subtests passed |
-| Unittest discovery | 173 tests passed, 4 platform/privilege skips |
+| Pytest regression suite | 176 passed, 6 platform/privilege skips, 513 subtests passed |
+| Unittest discovery | 182 tests passed, 6 platform/privilege skips |
 | Python bytecode compilation | Passed |
 | Operator console production build | Passed |
 | Launch-site production build | Passed |
@@ -75,23 +74,27 @@ run green after the owner-approved push.
 | Manual operator browser workflow | Six local projects loaded; Graph, Files, Canvas, Bases, references, task handoff, agent selection, context packs, release checks, bootstrap, settings, and watcher controls passed at desktop and 390 px |
 | Accessibility repair | Intelligence and Bases tabs expose tab semantics and roving keyboard focus; Bases exposes table, row-group, row, header, and cell relationships; exactly one route is current; toolbar toggles expose state; graph search and workspace fields have names; status changes are live; modal focus is trapped/restored; keyboard Canvas inspection focuses and reveals the mobile inspector; normal-mode WCAG scans passed every destination; mobile Canvas cards had zero overlaps |
 | Performance and resource probe | Sanitized synthetic baselines passed at 100, 1,000, and 10,000 files; the committed JSON reports indexing, deep freshness, search/context-pack p95, SQLite size, and traced peak memory without hostnames or absolute paths |
-| Publication privacy scan | Passed across 163 public candidates, including the refreshed website, screenshots, gallery, poster, and video |
+| Publication privacy scan | Passed across 165 public candidates, including the website, screenshots, gallery, poster, and video |
 | Launch-site operator acceptance | Built-site Playwright journey passed at desktop and 390 px: product and evidence tabs, mobile navigation, media metadata, local asset links, horizontal overflow, WCAG axe scans, and console/page errors |
 | Public benchmark | Six synthetic documents and queries; lexical and dependency-free hash-hybrid regression gates passed; this is not superiority evidence |
 | Codex Security remediation scan | A frozen pre-fix snapshot reviewed 18 changed runtime artifacts across eight threat surfaces and reproduced one low-severity stale-selection issue (`bf16b280-16e1-4d67-8d2a-08e7f83fab4e`). The issue is fixed and covered by a failing-then-passing rendered test. This scan is remediation evidence, not the final clean-tree gate |
-| Codex Security exact-commit gate | The previous release-candidate commit `259bba6` passed an immutable 17-artifact, eight-surface scan with zero findings. The final asset-refresh commit must independently pass the same zero-finding gate before owner approval |
-| Built-in publish-readiness command | Structural gates passed; the clean-tree gate is re-evaluated on the frozen candidate commit before owner approval |
+| Codex Security exact-commit gate | Full-candidate scan `c75b2a3f-4330-4f04-a0eb-c4655a37481d` and final runtime-diff scan `7d6952ce-130a-4746-8db4-c98b9a195d89` completed with full coverage and zero findings; the final follow-up changed test assertions only |
+| Built-in publish-readiness command | 11/11 structural and clean-tree checks passed on the candidate before publication |
 | Git whitespace validation | Passed |
+| Hosted compatibility | Final `main` matrix passed Windows x64, macOS ARM64, and Ubuntu with Python 3.11, 3.12, and 3.13 |
+| Published assets | Six release assets uploaded; GitHub asset digests match the recomputed combined manifest |
+| Post-publish installation | Every public asset redownloaded and checksum-verified; Windows binary doctor passed; published wheel completed 20 operator checks, forced upgrade, and clean uninstall |
 
-The four skips are explicit platform or privilege conditions: Windows cannot
-exercise POSIX mode bits, and this account cannot create the symlinks used by
-three rejection tests. Hard-link, reparse-aware, descriptor-identity, and
-replace-during-read controls remain exercised on Windows.
+The six local skips are explicit platform or privilege conditions. Windows
+cannot exercise POSIX mode bits, and this account cannot create the symlinks
+used by rejection tests. The hosted macOS and Linux jobs exercise their native
+paths; hard-link, reparse-aware, descriptor-identity, and replace-during-read
+controls remain exercised on Windows.
 
-Hosted compatibility is accepted only when all three operating-system jobs are
-green. Each job performs the dashboard builds, privacy scan, Python regression
+Each hosted job performed the dashboard builds, privacy scan, Python regression
 suite, bytecode compilation, package-resolution check, clean-wheel install and
-first-run smoke, and built-in publish-readiness check.
+first-run smoke, and built-in publish-readiness check. The final matrix passed
+before the release tag was created.
 
 Gitleaks, Bandit, Ruff, and Semgrep were unavailable in the current shell, so
 this page does not claim fresh results from any of them. The bundled privacy
@@ -103,10 +106,10 @@ current synthetic fixture and launch source. Product Hunt and website video and
 poster copies match byte-for-byte; private-project scale claims are not accepted
 as launch evidence.
 
-The final Windows executable and universal wheel are staged under the ignored
-local release-artifact directory with a generated `SHA256SUMS.txt`; the manifest
-was recomputed and matched both files. macOS and Linux binaries must be produced
-and checksum-tested by the hosted matrix from the exact approved commit.
+The final wheel and three native binaries were produced and smoke-tested by the
+hosted matrix from the approved commit. Their workflow ZIP digests and enclosed
+manifests were verified before upload. The six public release assets were then
+downloaded again, and every file matched the published `SHA256SUMS.txt`.
 
 ## Privacy Boundary
 

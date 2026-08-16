@@ -59,14 +59,16 @@ BrainDir="$HOME/.local/share/rta-smriti/brains"
 The repository includes a reproducible PyInstaller specification. The release
 workflow builds and smoke-tests separate Windows, macOS, and Linux artifacts,
 renames them with version/OS/architecture, and uploads a `SHA256SUMS.txt`
-manifest. A tagged release attaches those artifacts only after owner approval
-and green hosted jobs. Until that release exists, the virtual-environment
-installation above is the verified public path.
+manifest. The formal
+[`v0.4.0-alpha` release](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.4.0-alpha)
+contains the universal wheel, Windows x64, Linux x64, and macOS ARM64 binaries,
+the combined checksum manifest, and the synthetic public-benchmark result.
 
-The current candidate has local installed-wheel and standalone-binary proof on
-Windows. macOS and Linux artifact claims become current only after the exact
-candidate commit passes the hosted matrix; workflow presence alone is not
-reported as execution evidence.
+Those assets were built and smoke-tested by the green Windows, Ubuntu, and
+macOS matrix for commit `b9215466beb0f3db41681239c7809832883abcc6`. The
+published files were then downloaded through their public release URLs, checked
+against `SHA256SUMS.txt`, and the wheel completed a clean 20-check operator
+smoke, forced upgrade, and uninstall on Windows.
 
 Maintainers can build the executable for the current operating system with:
 
