@@ -127,9 +127,10 @@ class RtaBrainMcpTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             payloads = responses(result.stdout)
             self.assertEqual(len(payloads), 4)
-            search_text = payloads[2]["result"]["content"][0]["text"]
+            payloads_by_id = {payload["id"]: payload for payload in payloads}
+            search_text = payloads_by_id[3]["result"]["content"][0]["text"]
             self.assertIn("Rta-Smriti", search_text)
-            pack_text = payloads[3]["result"]["content"][0]["text"]
+            pack_text = payloads_by_id[4]["result"]["content"][0]["text"]
             self.assertIn("# Rta-Smriti Context Pack", pack_text)
             self.assertIn("Pramana: anumana", pack_text)
 
