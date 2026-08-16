@@ -143,8 +143,9 @@ Open the URL printed in the terminal.
 
 Keep the terminal open while the dashboard is in use. The complete printed URL,
 including `#token=...`, authorizes that browser session. If the browser later
-reports `connection refused`, rerun the dashboard command and open its new URL;
-this alpha does not install a background service or survive a reboot by itself.
+reports `connection refused`, rerun the dashboard command and open its new URL.
+Repository sync is a separate per-project background process when enabled; the
+dashboard and watcher are never registered as login or privileged system services.
 
 ### The Daily Five-Step Loop
 
@@ -331,7 +332,15 @@ Keep a repository refreshed while you work:
 & $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" watch-repo C:\path\to\project --project project-name --interval 2
 ```
 
-This watcher stays in the foreground and stops cleanly with `Ctrl+C`; it does not install a daemon or operating-system service.
+This watcher stays in the foreground and stops cleanly with `Ctrl+C`. For managed background sync, use **Settings > Repository sync** in the dashboard or:
+
+```powershell
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" watcher start C:\path\to\project --project project-name --interval 2
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json watcher status --project project-name
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" watcher stop --project project-name
+```
+
+The managed worker survives terminal and dashboard closure. It is not a privileged operating-system service, never auto-starts at login, and must be restarted after a reboot. Install `.[watcher]` for event-driven updates; otherwise the same command uses portable polling.
 
 ## Configure Retrieval And Parsing
 

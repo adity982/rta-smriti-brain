@@ -637,7 +637,7 @@ button:disabled {
 .graphSettings {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: minmax(300px, 0.8fr) minmax(620px, 2fr);
+  grid-template-columns: minmax(260px, 0.75fr) minmax(520px, 1.65fr) minmax(230px, 0.7fr);
   align-items: stretch;
   gap: 10px;
   padding: 8px;
@@ -768,6 +768,82 @@ button:disabled {
   margin: 0;
   color: #f9d98c;
   font-size: 11px;
+}
+
+.watcherSettings {
+  align-items: stretch;
+  flex-direction: column;
+  justify-content: center;
+  gap: 7px;
+}
+
+.watcherHeading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.watcherHeading > span:nth-child(2) {
+  display: grid;
+  gap: 2px;
+}
+
+.watcherHeading strong {
+  color: #e6f1fb;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.watcherHeading small,
+.watcherSettings p {
+  color: #8ea3b8;
+  font-size: 11px;
+}
+
+.watcherSettings p {
+  margin: 0;
+  line-height: 1.35;
+}
+
+.watcherDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #64748b;
+  box-shadow: 0 0 0 4px rgba(100, 116, 139, 0.1);
+}
+
+.watcherDot.running {
+  background: #34d399;
+  box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.12);
+}
+
+.watcherStartButton,
+.watcherStopButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  border-radius: 6px;
+}
+
+.watcherStartButton {
+  border: 1px solid rgba(52, 211, 153, 0.35);
+  color: #c9fff0;
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.watcherStopButton {
+  border: 1px solid rgba(248, 113, 113, 0.32);
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.watcherError {
+  color: #fbbf24;
+  font-size: 11px;
+  font-style: normal;
 }
 
 .graphSettings input[type="range"] {

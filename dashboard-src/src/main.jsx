@@ -435,6 +435,8 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [projectSettings, setProjectSettings] = useState(null);
   const [parserCapabilities, setParserCapabilities] = useState({});
+  const [watcher, setWatcher] = useState({ state: "stopped", backend: null });
+  const [isChangingWatcher, setIsChangingWatcher] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [receipts, setReceipts] = useState([]);
   const [checkpoint, setCheckpoint] = useState(null);
@@ -502,12 +504,13 @@ function App() {
     const requestId = projectRequestRef.current + 1;
     projectRequestRef.current = requestId;
     const params = { db_path: project.db_path, project: project.project };
-    const [memoryPayload, graphPayload, stalePayload, settingsPayload, checkpointPayload] = await Promise.all([
+    const [memoryPayload, graphPayload, stalePayload, settingsPayload, checkpointPayload, watcherPayload] = await Promise.all([
       api(`/api/memories?${qs({ ...params, limit: 40 })}`),
       api(`/api/graph?${qs({ ...params, limit: 120 })}`),
       api(`/api/stale-check?${qs(params)}`),
       api(`/api/settings?${qs(params)}`),
       api(`/api/checkpoint?${qs(params)}`),
+      api(`/api/watcher?${qs(params)}`),
     ]);
     if (requestId !== projectRequestRef.current) return;
     setMemories(memoryPayload.memories || []);
@@ -516,6 +519,7 @@ function App() {
     setProjectSettings(settingsPayload.settings);
     setParserCapabilities(settingsPayload.parser_capabilities || {});
     setCheckpoint(checkpointPayload.checkpoint || null);
+    setWatcher(watcherPayload);
     setSelectedNode(null);
     setReferenceHistory([]);
   }
@@ -721,6 +725,42 @@ function App() {
     }
   }
 
+  async function startWatcher() {
+    if (!selectedParams || isChangingWatcher) return;
+    setIsChangingWatcher(true);
+    setMessage(`Starting background sync for ${selectedProject.project}...`);
+    try {
+      const payload = await api("/api/watcher", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, action: "start", interval: 2 }),
+      });
+      setWatcher(payload);
+      setMessage(`${selectedProject.project} background sync is running with ${payload.backend}.`);
+    } catch (error) {
+      setMessage(`Background sync could not start: ${error.message}`);
+    } finally {
+      setIsChangingWatcher(false);
+    }
+  }
+
+  async function stopWatcher() {
+    if (!selectedParams || isChangingWatcher) return;
+    setIsChangingWatcher(true);
+    setMessage(`Stopping background sync for ${selectedProject.project}...`);
+    try {
+      const payload = await api("/api/watcher", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, action: "stop" }),
+      });
+      setWatcher(payload);
+      setMessage(`${selectedProject.project} background sync stopped.`);
+    } catch (error) {
+      setMessage(`Background sync could not stop: ${error.message}`);
+    } finally {
+      setIsChangingWatcher(false);
+    }
+  }
+
   async function saveCheckpoint(values) {
     if (!selectedParams || isSavingCheckpoint) return;
     setIsSavingCheckpoint(true);
@@ -733,7 +773,7 @@ function App() {
       setMessage("Structured checkpoint saved for the next task.");
     } catch (error) {
       if (error.message.includes("checkpoint version conflict")) {
-        await loadProject(selectedProject);
+        await loadProjectDetails(selectedProject);
         setMessage("A newer checkpoint was saved by another agent. The latest version has been loaded; review and save again.");
         return;
       }
@@ -826,6 +866,7 @@ function App() {
     setViewMode(view);
     setSemanticFocus(null);
     setNavContext(view);
+    setSettingsOpen(false);
   }
 
   function focusSemanticHub(hub) {
@@ -838,6 +879,7 @@ function App() {
     setViewMode("files");
     setSemanticFocus(null);
     setNavContext("files");
+    setSettingsOpen(false);
     loadFiles(fileTree.prefix || "", fileTree.query || "");
   }
 
@@ -846,6 +888,7 @@ function App() {
     setSemanticFocus(null);
     setBaseScope({ table, kind });
     setNavContext(context);
+    setSettingsOpen(false);
   }
 
   const shellKind = health?.shell || "powershell";
@@ -962,8 +1005,9 @@ function App() {
               <button className={inspectorOpen && activeDrawer === "memory" ? "active" : ""} onClick={() => showDrawer("memory")}><Database size={17} /><span>Memory Ledger</span></button>
               <button className={inspectorOpen && activeDrawer === "checkpoint" ? "active" : ""} onClick={() => showDrawer("checkpoint")}><Route size={17} /><span>Continue Work</span></button>
               <button className={inspectorOpen && activeDrawer === "receipts" ? "active" : ""} onClick={() => showDrawer("receipts")}><Sparkles size={17} /><span>Context Packs</span><em>{receipts.length}</em></button>
+              <button onClick={() => setCommandOpen(true)}><Command size={17} /><span>Command Palette</span></button>
               <button title="Check this Rta-Smriti checkout for GitHub release requirements" className={inspectorOpen && activeDrawer === "publish" ? "active" : ""} onClick={showPublishReadiness}><Rocket size={17} /><span>Rta-Smriti Release</span><em>{publishReady}/{publishTotal}</em></button>
-              <button className={settingsOpen ? "active" : ""} onClick={() => { setViewMode("graph"); setSettingsOpen(true); }}><SlidersHorizontal size={17} /><span>Settings</span></button>
+              <button className={settingsOpen ? "active" : ""} onClick={() => { showWorkspace("graph"); setSettingsOpen(true); }}><SlidersHorizontal size={17} /><span>Settings</span></button>
             </div>
           </nav>
           <div className="railFooter">
@@ -1044,6 +1088,10 @@ function App() {
                   parserCapabilities={parserCapabilities}
                   onSave={saveProjectSettings}
                   isSaving={isSavingSettings}
+                  watcher={watcher}
+                  onStartWatcher={startWatcher}
+                  onStopWatcher={stopWatcher}
+                  isChangingWatcher={isChangingWatcher}
                 />
               )}
             </div>
@@ -1178,6 +1226,7 @@ function App() {
 function GraphSettings({
   depth, setDepth, showLabels, setShowLabels, showEdges, setShowEdges,
   projectSettings, setProjectSettings, parserCapabilities, onSave, isSaving,
+  watcher, onStartWatcher, onStopWatcher, isChangingWatcher,
 }) {
   const settings = projectSettings || {};
   const updateSetting = (key, value) => setProjectSettings((current) => ({ ...(current || {}), [key]: value }));
@@ -1238,6 +1287,22 @@ function GraphSettings({
           <ShieldCheck size={15} /> {isSaving ? "Saving..." : "Save Policy"}
         </button>
         <p className="blockedPolicyWarning"><ShieldCheck size={14} /> Blocked files stay excluded and freshness remains fail-closed until this policy changes.</p>
+      </div>
+      <div className="settingsGroup watcherSettings">
+        <div className="watcherHeading">
+          <span className={`watcherDot ${watcher?.state === "running" ? "running" : ""}`} />
+          <span><strong>Repository sync</strong><small>{watcher?.state || "stopped"}{watcher?.backend ? ` / ${watcher.backend}` : ""}</small></span>
+        </div>
+        <p>Keep the indexed brain current after this console closes.</p>
+        {watcher?.last_error && <em className="watcherError" title={watcher.last_error}>Last cycle needs attention</em>}
+        <button
+          className={watcher?.state === "running" ? "watcherStopButton" : "watcherStartButton"}
+          onClick={watcher?.state === "running" ? onStopWatcher : onStartWatcher}
+          disabled={isChangingWatcher}
+        >
+          {watcher?.state === "running" ? <CircleDot size={15} /> : <Activity size={15} />}
+          {isChangingWatcher ? "Working..." : watcher?.state === "running" ? "Stop Sync" : "Start Sync"}
+        </button>
       </div>
     </div>
   );

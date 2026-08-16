@@ -14,8 +14,9 @@ Rta-Smriti Brain is local-first and stores data in SQLite files controlled by th
 - Bootstrap writes to `AGENTS.md` are opt-in and reject linked destinations.
 - No cloud sync.
 - No API keys required.
-- No background daemon.
-- The foreground watcher uses the same bounded, fail-closed repository walker as manual ingestion.
+- Managed background sync is opt-in per project. It is an ordinary user process, not a privileged service or login item, and never auto-starts after reboot.
+- Foreground and background watchers use the same bounded, fail-closed repository walker and rollback-safe indexing transaction as manual ingestion.
+- Watcher state, lock, and stop files reject symbolic and hard links. The dashboard derives the watch root from the selected project's canonical binding instead of accepting a client-supplied path.
 - Regex and FTS5 remain the no-execution defaults. Tree-sitter and local embeddings load only when selected.
 - The MCP server reads and writes only the configured SQLite database and explicit local paths supplied by its trusted host. JSON-RPC frames are type-checked and capped at 1 MB.
 

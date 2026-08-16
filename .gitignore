@@ -4,6 +4,8 @@ __pycache__/
 *.sqlite-shm
 *.sqlite-wal
 .rta-smriti/
+.rta-smriti-daemons/
+.tmp-daemon-debug-*/
 *.log
 *.out
 *.err

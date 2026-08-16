@@ -153,6 +153,42 @@ def main() -> int:
         if not Path(mcp["command"]).is_file() or mcp["args"][:2] != ["-m", "rta_brain.mcp_server"]:
             raise AssertionError(f"installed MCP command is invalid: {mcp}")
 
+        watcher = json.loads(
+            run(
+                [
+                    str(cli), "--db", str(db), "--json", "watcher", "start", str(project),
+                    "--project", "sample", "--interval", "0.2",
+                ],
+                root,
+            ).stdout
+        )
+        if watcher["state"] != "running" or watcher["backend"] not in {"watchdog", "polling"}:
+            raise AssertionError(f"installed background watcher did not start: {watcher}")
+        try:
+            (project / "app.py").write_text("def hello():\n    return 'updated-world'\n", encoding="utf-8")
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                refreshed = json.loads(
+                    run(
+                        [str(cli), "--db", str(db), "--json", "stale-check", "--project", "sample"],
+                        root,
+                    ).stdout
+                )
+                if refreshed["state"] == "fresh":
+                    break
+                time.sleep(0.1)
+            else:
+                raise AssertionError(f"installed background watcher did not refresh the project: {refreshed}")
+        finally:
+            stopped = json.loads(
+                run(
+                    [str(cli), "--db", str(db), "--json", "watcher", "stop", "--project", "sample"],
+                    root,
+                ).stdout
+            )
+        if stopped["state"] != "stopped":
+            raise AssertionError(f"installed background watcher did not stop: {stopped}")
+
         wrapper_dir = root / "bin"
         install = json.loads(
             run([str(cli), "--json", "install-local", "--target", str(wrapper_dir)], root).stdout
@@ -208,7 +244,7 @@ def main() -> int:
                 dashboard.kill()
                 dashboard.wait(timeout=5)
 
-        print(json.dumps({"status": "ok", "checks": 15}, sort_keys=True))
+        print(json.dumps({"status": "ok", "checks": 17}, sort_keys=True))
     return 0
 
 

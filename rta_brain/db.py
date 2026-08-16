@@ -874,7 +874,7 @@ def _configured_manifest_digest(file_digest: str, settings: dict, parser_registr
     }, sort_keys=True))
 
 
-def ingest_repo(
+def _ingest_repo_impl(
     conn: sqlite3.Connection,
     root: Path,
     project: str = "default",
@@ -920,6 +920,7 @@ def ingest_repo(
             "parser_adapter": parser_adapter, "embedding_provider": embedding_provider_name,
             "parser_warnings": [], "manifest_unchanged": True,
         }
+    conn.execute("BEGIN IMMEDIATE")
     existing = {str(row["path"]): dict(row) for row in conn.execute(
         "SELECT id, path, title, hash, metadata_json, updated_at FROM sources WHERE project_id = ? AND kind = 'file'",
         (project_id,),
@@ -1066,6 +1067,27 @@ def ingest_repo(
         "parser_adapter": parser_adapter, "embedding_provider": embedding_provider_name,
         "parser_warnings": parser_warnings[:100], "manifest_unchanged": False,
     }
+
+
+def ingest_repo(
+    conn: sqlite3.Connection,
+    root: Path,
+    project: str = "default",
+    force: bool = False,
+    allow_root_rebind: bool = False,
+) -> dict:
+    """Refresh a repository atomically so failed parses never leak a partial index."""
+    try:
+        return _ingest_repo_impl(
+            conn,
+            root,
+            project=project,
+            force=force,
+            allow_root_rebind=allow_root_rebind,
+        )
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def query_to_fts(query: str) -> str:

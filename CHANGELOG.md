@@ -4,7 +4,10 @@ All notable changes are documented here. The project follows semantic versioning
 
 ## [0.4.0-alpha] - Unreleased
 
-- Added a foreground incremental repository watcher and persistent stat-keyed SHA-256 cache.
+- Added foreground and managed-background incremental repository sync with optional filesystem events, portable polling fallback, lifecycle status, heartbeat, and a persistent stat-keyed SHA-256 cache.
+- Made repository refresh transactional so parser or indexing failures cannot leave a partial new snapshot visible.
+- Added bounded concurrent MCP request scheduling so control traffic remains responsive while mutations preserve causal order.
+- Expanded optional Tree-sitter extraction for Python, TypeScript, Go, Rust, and Java symbols and imports.
 - Added optional hybrid FTS and local-vector retrieval with dependency-free hash embeddings and a lazy Sentence Transformers adapter.
 - Added a parser registry with deterministic regex, optional Tree-sitter, explicit LSP command, and Python entry-point adapters.
 - Added per-project ingestion policies for parser choice, retrieval provider, semantic weight, and source-file size caps up to 16 MB.

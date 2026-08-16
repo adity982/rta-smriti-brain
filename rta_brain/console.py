@@ -23,6 +23,7 @@ from .db import (
 from .parsers import ParserRegistry
 from .project import bootstrap_project, mcp_config_payload, runtime_shell, shell_cli_command, projects_list, self_check
 from .repository import canonical_root, canonical_root_key, repository_state, trusted_git_candidates
+from .watch_daemon import start_watcher, stop_watcher, watcher_status
 
 
 @dataclass(frozen=True)
@@ -677,6 +678,11 @@ def make_handler(config: ConsoleConfig):
                     finally:
                         conn.close()
                     return
+                if parsed.path == "/api/watcher":
+                    q = _query(self)
+                    db_path = resolve_brain_db(config, q["db_path"])
+                    self._json(watcher_status(db_path, q["project"]))
+                    return
                 if parsed.path == "/api/checkpoint":
                     q = _query(self)
                     conn = _open_db(resolve_brain_db(config, q["db_path"]))
@@ -812,6 +818,33 @@ def make_handler(config: ConsoleConfig):
                         })
                     finally:
                         conn.close()
+                    return
+                if self.path == "/api/watcher":
+                    db_path = resolve_brain_db(config, payload["db_path"])
+                    project = str(payload["project"])
+                    action = str(payload.get("action", "status"))
+                    if action == "stop":
+                        self._json(stop_watcher(db_path, project))
+                        return
+                    if action != "start":
+                        raise ValueError("watcher action must be start or stop")
+                    conn = _open_db(db_path)
+                    try:
+                        row = conn.execute(
+                            "SELECT root_path FROM projects WHERE name = ?", (project,)
+                        ).fetchone()
+                    finally:
+                        conn.close()
+                    if not row or not row["root_path"]:
+                        raise ValueError("project has no repository path to watch")
+                    self._json(
+                        start_watcher(
+                            db_path,
+                            Path(row["root_path"]),
+                            project,
+                            interval_seconds=float(payload.get("interval", 2.0)),
+                        )
+                    )
                     return
                 if self.path == "/api/bootstrap":
                     config.brain_dir.mkdir(parents=True, exist_ok=True)

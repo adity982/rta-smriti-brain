@@ -4,7 +4,8 @@ This alpha turns repository memory from a manual snapshot into an operator-contr
 
 ## New
 
-- Foreground `watch-repo` command using incremental manifests
+- Foreground `watch-repo` plus managed-background `watcher` lifecycle commands using incremental manifests
+- Dashboard repository-sync controls with heartbeat, backend, and error visibility
 - Persistent SHA-256 cache for repeated deep freshness checks
 - Optional local hybrid FTS and vector retrieval
 - Dependency-free deterministic hash embedding provider
@@ -25,14 +26,14 @@ This alpha turns repository memory from a manual snapshot into an operator-contr
 - `install-local` emits native `.cmd` launchers on Windows and executable POSIX launchers on macOS and Linux.
 - Generated agent, MCP, dashboard, bootstrap, and context-pack commands use the active operating system's quoting and invocation rules.
 - Setup no longer assumes the wrapper directory is already on `PATH`.
-- Dashboard recovery guidance now explains the foreground process and one-session capability URL.
+- Dashboard recovery guidance now distinguishes the foreground console from opt-in background repository sync.
 - Windows, Ubuntu, and macOS CI build and smoke-test an installed wheel through bootstrap, retrieval, wrappers, MCP config, dashboard assets, and API authorization.
 - Bootstrap now writes agent bridge files before the final index pass, so a newly created brain starts fresh instead of immediately reporting those generated files as added.
 
 ## Defaults And Boundaries
 
 - SQLite remains local.
-- No hosted account, sync service, telemetry, or background daemon is added.
+- No hosted account, cloud sync service, telemetry, privileged service, login item, or automatic reboot persistence is added.
 - FTS5 and regex remain available deterministic defaults.
 - The recommended bootstrap flow enables the dependency-free hash provider; lexical-only retrieval remains selectable and external embedding packages are never installed automatically.
 - Sources above the selected cap remain blocked and keep freshness fail-closed.

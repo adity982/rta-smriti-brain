@@ -3,6 +3,7 @@ import asyncio
 import json
 import sys
 from pathlib import Path
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from . import __version__
@@ -311,73 +312,93 @@ class RtaBrainMcpServer:
         return payload
 
 
+MUTATING_TOOLS = {
+    "brain_remember",
+    "brain_remember_batch",
+    "brain_ingest_repo",
+    "brain_ingest_thread",
+    "brain_checkpoint",
+    "brain_reflect",
+}
+
+
+def _tool_name(request: dict[str, Any]) -> str | None:
+    if not isinstance(request, dict) or request.get("method") != "tools/call":
+        return None
+    params = request.get("params")
+    return str(params.get("name")) if isinstance(params, dict) and params.get("name") else None
+
+
+class McpRequestScheduler:
+    """Run blocking tool calls concurrently while preserving mutation causality."""
+
+    def __init__(
+        self,
+        server: RtaBrainMcpServer,
+        emit: Callable[[dict[str, Any]], Awaitable[None]],
+        max_concurrency: int = 4,
+    ) -> None:
+        self.server = server
+        self.emit = emit
+        self.capacity = asyncio.Semaphore(max(1, int(max_concurrency)))
+        self.pending: set[asyncio.Task] = set()
+        self.latest_mutation: asyncio.Task | None = None
+
+    async def _process(self, request: Any, dependency: asyncio.Task | None) -> None:
+        if dependency is not None:
+            await dependency
+        async with self.capacity:
+            response = await self.server.handle_async(request)
+        if response is not None:
+            await self.emit(response)
+
+    async def submit(self, request: Any) -> None:
+        tool_name = _tool_name(request)
+        is_mutation = tool_name in MUTATING_TOOLS
+        is_tool_call = isinstance(request, dict) and request.get("method") == "tools/call"
+        dependency = self.latest_mutation if (is_mutation or is_tool_call) else None
+        task = asyncio.create_task(self._process(request, dependency))
+        if is_mutation:
+            self.latest_mutation = task
+        self.pending.add(task)
+        task.add_done_callback(self.pending.discard)
+
+    async def close(self) -> None:
+        if self.pending:
+            await asyncio.gather(*tuple(self.pending))
+
+
 async def serve_stdio_async(db_path: Path, default_project: str) -> int:
     server = RtaBrainMcpServer(db_path=db_path, default_project=default_project)
     stream = sys.stdin.buffer
     write_lock = asyncio.Lock()
-    order_condition = asyncio.Condition()
-    next_output = 0
-    sequence_counter = 0
-    capacity = asyncio.Semaphore(4)
-    pending: set[asyncio.Task] = set()
-    latest_mutation: asyncio.Task | None = None
 
-    async def emit(sequence: int, response: dict[str, Any] | None) -> None:
-        nonlocal next_output
-        async with order_condition:
-            await order_condition.wait_for(lambda: sequence == next_output)
-            if response is not None:
-                async with write_lock:
-                    print(json.dumps(response, separators=(",", ":")), flush=True)
-            next_output += 1
-            order_condition.notify_all()
+    async def emit(response: dict[str, Any]) -> None:
+        async with write_lock:
+            print(json.dumps(response, separators=(",", ":")), flush=True)
 
-    async def process(
-        sequence: int,
-        request: dict[str, Any],
-        dependency: asyncio.Task | None = None,
-    ) -> None:
-        if dependency is not None:
-            await dependency
-        async with capacity:
-            response = await server.handle_async(request)
-        await emit(sequence, response)
+    scheduler = McpRequestScheduler(server, emit, max_concurrency=4)
 
     while True:
         line = await asyncio.to_thread(stream.readline, MAX_MCP_FRAME_BYTES + 1)
         if not line:
             break
         if len(line) > MAX_MCP_FRAME_BYTES:
-            sequence = sequence_counter
-            sequence_counter += 1
             while line and not line.endswith(b"\n"):
                 line = await asyncio.to_thread(stream.readline, MAX_MCP_FRAME_BYTES + 1)
             response = RtaBrainMcpServer.error(None, -32600, f"request frame exceeds {MAX_MCP_FRAME_BYTES} bytes")
-            await emit(sequence, response)
+            await emit(response)
             continue
         if not line.strip():
             continue
-        sequence = sequence_counter
-        sequence_counter += 1
         try:
             request = json.loads(line)
         except json.JSONDecodeError as exc:
             response = RtaBrainMcpServer.error(None, -32700, f"parse error: {exc}")
-            await emit(sequence, response)
+            await emit(response)
         else:
-            dependency = latest_mutation
-            task = asyncio.create_task(process(sequence, request, dependency))
-            params = request.get("params") if isinstance(request, dict) else None
-            tool_name = params.get("name") if isinstance(params, dict) else None
-            if tool_name in {
-                "brain_remember", "brain_remember_batch", "brain_ingest_repo", "brain_ingest_thread",
-                "brain_checkpoint", "brain_reflect",
-            }:
-                latest_mutation = task
-            pending.add(task)
-            task.add_done_callback(pending.discard)
-    if pending:
-        await asyncio.gather(*pending)
+            await scheduler.submit(request)
+    await scheduler.close()
     return 0
 
 

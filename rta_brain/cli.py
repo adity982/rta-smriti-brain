@@ -12,6 +12,7 @@ from .db import (
 )
 from .project import bootstrap_project, install_local, mcp_config_payload, projects_list, self_check
 from .watch import watch_repository
+from .watch_daemon import run_watcher_worker, start_watcher, stop_watcher, watcher_status
 
 
 def default_db_path() -> Path:
@@ -74,6 +75,21 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument("path")
     watch.add_argument("--project", default="default")
     watch.add_argument("--interval", type=float, default=2.0, help="Polling interval in seconds")
+
+    watcher = sub.add_parser("watcher", help="Manage the background incremental repository watcher")
+    add_common_options(watcher)
+    watcher.add_argument("action", choices=("start", "status", "stop"))
+    watcher.add_argument("path", nargs="?", help="Repository path; defaults to the project's bound root")
+    watcher.add_argument("--project", default="default")
+    watcher.add_argument("--interval", type=float, default=2.0, help="Event coalescing or polling interval in seconds")
+
+    worker = sub.add_parser("_watch-worker", help=argparse.SUPPRESS)
+    worker.add_argument("--root", required=True)
+    worker.add_argument("--project", required=True)
+    worker.add_argument("--state-file", required=True)
+    worker.add_argument("--stop-file", required=True)
+    worker.add_argument("--lock-file", required=True)
+    worker.add_argument("--interval", type=float, required=True)
 
     settings = sub.add_parser("settings", help="Read or update a project's indexing and retrieval policy")
     add_common_options(settings)
@@ -196,6 +212,46 @@ def main(argv=None) -> int:
     if args.command == "publish-readiness":
         emit(publish_readiness(tool_root()), args.json)
         return 0
+    if args.command == "_watch-worker":
+        return run_watcher_worker(
+            Path(args.db),
+            Path(args.root),
+            args.project,
+            Path(args.state_file),
+            Path(args.stop_file),
+            Path(args.lock_file),
+            args.interval,
+        )
+    if args.command == "watcher":
+        try:
+            db_path = Path(args.db).expanduser().resolve()
+            if args.action == "status":
+                payload = watcher_status(db_path, args.project)
+            elif args.action == "stop":
+                payload = stop_watcher(db_path, args.project)
+            else:
+                root = Path(args.path).expanduser().resolve() if args.path else None
+                if root is None:
+                    conn = connect(db_path)
+                    try:
+                        row = conn.execute(
+                            "SELECT root_path FROM projects WHERE name = ?", (args.project,)
+                        ).fetchone()
+                    finally:
+                        conn.close()
+                    if not row or not row["root_path"]:
+                        raise ValueError("project has no bound repository path; provide a path")
+                    root = Path(row["root_path"])
+                payload = start_watcher(db_path, root, args.project, args.interval)
+            emit(payload, args.json)
+            return 0
+        except Exception as exc:
+            error = {"status": "error", "error": {"type": exc.__class__.__name__, "message": str(exc)}}
+            if getattr(args, "json", False):
+                print(json.dumps(error, indent=2, sort_keys=True), file=sys.stderr)
+            else:
+                print(f"error: {exc}", file=sys.stderr)
+            return 1
     try:
         conn = connect(Path(args.db))
         with conn:

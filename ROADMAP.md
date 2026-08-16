@@ -4,7 +4,7 @@
 
 - Guided first-run onboarding beyond the current dashboard bootstrap
 - Richer retrieval evaluation corpus and relevance diagnostics
-- Optional background service wrappers around the foreground repository watcher
+- Optional opt-in login integration around the managed background watcher
 - Approximate nearest-neighbor indexes for very large local embedding collections
 - More MCP host recipes and community agent adapters
 

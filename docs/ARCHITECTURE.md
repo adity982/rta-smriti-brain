@@ -31,7 +31,7 @@ Each brain is one SQLite database. Connections use WAL journaling, normal synchr
 
 ## Ingestion
 
-The walker rejects links, non-regular files, ignored folders, traversal overages, total-size overages, and sources above the project's configured cap. A stat manifest skips unchanged repositories. Changed files alone are parsed, chunked, indexed, and embedded. `watch-repo` polls this incremental path in the foreground.
+The walker rejects links, non-regular files, ignored folders, traversal overages, total-size overages, and sources above the project's configured cap. A stat manifest skips unchanged repositories. Changed files alone are parsed, chunked, indexed, and embedded. `watch-repo` runs this incremental path in the foreground. The `watcher` lifecycle command runs it in a detached per-project worker, using optional filesystem events when `watchdog` is installed and portable polling otherwise.
 
 Deep freshness uses SHA-256 values cached by project, absolute source path, size, and nanosecond modification time. `ingest-repo --force` bypasses the manifest and metadata shortcuts for an uncached re-read.
 
@@ -62,6 +62,10 @@ Context packs enforce a caller-selected token budget. Checkpoints and high-ranke
 ## Agent Concurrency
 
 The stdio MCP server moves blocking SQLite, hashing, parsing, and embedding work to worker threads with bounded concurrency. Mutation visibility is ordered, memory batches are atomic, and checkpoints use optimistic versions under a SQLite write transaction so stale agents cannot silently overwrite newer continuation state.
+
+## Background Sync
+
+Managed watchers are explicit user processes, not privileged services. A random launch capability binds each worker to an unlinked lock file. State, heartbeat, counters, stop requests, and logs live beside the selected brain under `.rta-smriti-daemons`. Control files reject symbolic and hard links, state writes are atomic, repository events are coalesced, and every indexing cycle uses a fresh SQLite connection and one rollback-safe transaction. The dashboard never accepts a client-supplied watch root; it reads the canonical root already bound to the selected project.
 
 ## Distribution
 

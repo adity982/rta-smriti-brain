@@ -13,7 +13,7 @@ python -m unittest discover -s tests -v
 Compile check:
 
 ```powershell
-python -m compileall -q rta_brain tests
+python -m compileall -q rta_brain tests scripts
 ```
 
 Build the packaged console and launch site:

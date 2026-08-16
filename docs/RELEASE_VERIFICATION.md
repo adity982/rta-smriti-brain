@@ -28,6 +28,7 @@ python -m pip install ".[binary]"
 python scripts/build_binary.py
 python scripts/smoke_binary.py
 python scripts/privacy_scan.py
+pip-audit . --progress-spinner off
 python rta-brain.py publish-readiness --json
 git diff --check
 ```
@@ -50,16 +51,17 @@ update. The same workflow runs on Windows, Ubuntu, and macOS in
 
 | Gate | Result |
 | --- | --- |
-| Python regression suite | 66 passed, 1 privilege-gated skip (67 total) |
+| Python regression suite | 75 passed, 1 privilege-gated skip (76 total) |
 | Python bytecode compilation | Passed |
 | Operator console production build | Passed |
 | Launch-site production build | Passed |
 | Root npm dependency audit | 0 vulnerabilities |
+| Python project dependency audit | No known vulnerabilities reported by `pip-audit` |
 | Editable Python package dry-run | Resolved `rta-smriti-brain-0.4.0a1` |
-| Installed wheel first-run smoke | 15 checks passed |
-| Standalone Windows binary | Built from the versioned spec; CLI, SQLite/FTS, MCP dispatch, ephemeral-port launch, and packaged dashboard HTTP 200 passed |
-| Operator browser workflow | File preview, task handoff, context pack, receipts, settings, checkpoint, Canvas, and Bases passed at desktop and 390 px; 0 console errors |
-| Publication privacy scan | Passed across 118 public candidates |
+| Installed wheel first-run smoke | 17 checks passed, including managed watcher start, refresh, status, and stop from an unrelated working directory |
+| Standalone Windows binary | Built from the versioned spec; CLI, SQLite/FTS, MCP dispatch, packaged dashboard assets, and managed background sync passed |
+| Operator browser workflow | Six local projects loaded; Graph, Files, Canvas, Bases, references, task handoff, copy actions, agent selection, context packs, release checks, bootstrap, settings, and watcher controls passed at desktop and 390 px; 0 console warnings or errors |
+| Publication privacy scan | Passed across 120 public candidates |
 | Built-in publish-readiness command | Structural gates passed; clean-tree gate confirmed after commit |
 | Git whitespace validation | Passed |
 

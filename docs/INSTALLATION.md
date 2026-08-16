@@ -90,8 +90,10 @@ macOS or Linux:
 ```
 
 Keep the dashboard terminal open and open the complete printed URL, including
-its one-session `#token=...` fragment. The alpha runs in the foreground and does
-not install a daemon or login item.
+its one-session `#token=...` fragment. The dashboard runs in the foreground.
+Per-project repository sync can run as a managed background process, but it is
+not installed as a login item or privileged system service and does not restart
+automatically after reboot.
 
 ## Optional Local Capabilities
 
@@ -101,6 +103,9 @@ python -m pip install ".[tokenization]"
 
 # Tree-sitter parsing with regex fallback
 python -m pip install ".[tree-sitter]"
+
+# Filesystem-event repository sync with polling fallback
+python -m pip install ".[watcher]"
 
 # Local Sentence Transformers retrieval
 python -m pip install ".[embeddings]"

@@ -27,7 +27,7 @@ Rta-Smriti gives each project a memory that stays on your machine.
 - Runs a local operator console with graph, canvas, typed bases, context-pack receipts, memory ledger, freshness checks, and bootstrap flow.
 - Exposes a dependency-light stdio MCP server for agent integrations.
 - Runs independent MCP tool calls concurrently while preserving ordered mutation visibility.
-- Watches active repositories with a foreground incremental indexer and reuses a persistent SHA-256 cache for deep freshness checks.
+- Watches active repositories with foreground or managed-background incremental sync and reuses a persistent SHA-256 cache for deep freshness checks.
 - Supports optional local hybrid retrieval through a built-in deterministic hash provider or an installed Sentence Transformers model.
 - Supports built-in regex parsing plus optional Tree-sitter and explicit LSP adapter commands.
 - Keeps data local by default: no API keys, no telemetry, no cloud database.
@@ -128,10 +128,11 @@ Run the local operator console:
 ```
 
 Keep this terminal open while using the dashboard. Open the complete URL printed
-by the command, including its one-session `#token=...` fragment. Rta-Smriti does
-not install a background service in this alpha; after a reboot, closed terminal,
-or `connection refused` message, rerun the dashboard command and use the newly
-printed URL.
+by the command, including its one-session `#token=...` fragment. The dashboard is
+an explicit foreground operator surface; after a reboot, closed terminal, or
+`connection refused` message, rerun it and use the newly printed URL. Repository
+sync can run separately in the background from **Settings** or the `watcher`
+command and can be stopped explicitly at any time.
 
 The dashboard runs on `127.0.0.1` and includes:
 
@@ -198,6 +199,7 @@ init              Initialize a project brain
 remember          Store a durable memory
 ingest-repo       Index a repository or folder
 watch-repo        Continuously refresh a repository using incremental indexing
+watcher           Start, inspect, or stop managed background repository sync
 settings          Read or update a project's indexing and retrieval policy
 ingest-thread     Index a long thread, transcript, or handoff file
 search            Search memories and indexed files
@@ -282,7 +284,7 @@ Verified:
 - MCP stdio server
 - React dashboard
 - local publish-readiness checks
-- incremental foreground repository watcher and SHA-256 cache
+- incremental foreground and managed-background repository sync with SHA-256 cache
 - optional local hybrid retrieval
 - parser adapter registry with regex, Tree-sitter, LSP, and entry-point extension paths
 - configurable fail-closed large-file policy
@@ -298,7 +300,7 @@ Intentional design constraints:
 
 Current alpha limitations:
 
-- `watch-repo` runs in the foreground. Rta-Smriti does not install an operating-system service or background daemon.
+- Managed background sync is per project and user-started. It is not installed as a privileged operating-system service and does not auto-start after a reboot.
 - Hybrid retrieval is dependency-free in the recommended bootstrap flow through the built-in hash provider. Sentence Transformers remains optional and requires a separately installed local package and model.
 - Auto parsing is the default: installed Tree-sitter grammars are used for supported languages, with deterministic regex fallback. LSP integration requires an explicitly configured local adapter command.
 - The first deep SHA-256 pass can still take several minutes on repositories with tens of thousands of files. Later checks reuse hashes when file size and modification time are unchanged.
@@ -314,6 +316,11 @@ See [ROADMAP.md](ROADMAP.md) for planned improvements. Local-first operation and
 
 # Keep an active project incrementally refreshed until Ctrl+C.
 & $RtaBrain --db .\.rta-smriti\brain.sqlite watch-repo . --project demo --interval 2
+
+# Or run the same incremental refresh as a managed background process.
+& $RtaBrain --db .\.rta-smriti\brain.sqlite watcher start . --project demo --interval 2
+& $RtaBrain --db .\.rta-smriti\brain.sqlite --json watcher status --project demo
+& $RtaBrain --db .\.rta-smriti\brain.sqlite watcher stop --project demo
 
 # Auto mode will use optional Tree-sitter after the package is installed.
 python -m pip install -e ".[tree-sitter]"

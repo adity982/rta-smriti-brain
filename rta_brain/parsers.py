@@ -25,6 +25,35 @@ IMPORT_PATTERNS = (
     re.compile(r"require\(['\"]([^'\"]+)['\"]\)"),
 )
 
+TREE_SITTER_LANGUAGES = {
+    ".py": "python",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".ts": "typescript",
+    ".tsx": "tsx",
+    ".go": "go",
+    ".rs": "rust",
+    ".java": "java",
+}
+TREE_SITTER_SYMBOL_NODES = {
+    "python": {"function_definition", "class_definition"},
+    "javascript": {"function_declaration", "class_declaration", "method_definition"},
+    "typescript": {"function_declaration", "class_declaration", "method_definition", "interface_declaration", "type_alias_declaration"},
+    "tsx": {"function_declaration", "class_declaration", "method_definition", "interface_declaration", "type_alias_declaration"},
+    "go": {"function_declaration", "method_declaration", "type_spec"},
+    "rust": {"function_item", "struct_item", "enum_item", "trait_item", "union_item", "type_item", "mod_item"},
+    "java": {"class_declaration", "interface_declaration", "enum_declaration", "record_declaration", "method_declaration", "constructor_declaration"},
+}
+TREE_SITTER_IMPORT_NODES = {
+    "python": {"import_statement", "import_from_statement"},
+    "javascript": {"import_statement"},
+    "typescript": {"import_statement"},
+    "tsx": {"import_statement"},
+    "go": {"import_declaration", "import_spec"},
+    "rust": {"use_declaration"},
+    "java": {"import_declaration"},
+}
+
 
 @dataclass
 class ParseResult:
@@ -66,26 +95,33 @@ class TreeSitterParser:
     def parse(self, path: Path, text: str) -> ParseResult:
         if not self.available:
             raise RuntimeError("tree-sitter-language-pack is not installed")
-        language = {
-            ".py": "python", ".js": "javascript", ".jsx": "javascript",
-            ".ts": "typescript", ".tsx": "tsx",
-            ".go": "go", ".rs": "rust", ".java": "java",
-        }.get(path.suffix.lower())
+        language = TREE_SITTER_LANGUAGES.get(path.suffix.lower())
         if not language:
             raise RuntimeError(f"Tree-sitter language is not configured for {path.suffix or 'this file'}")
-        tree = self._get_parser(language).parse(text.encode("utf-8"))
+        source = text.encode("utf-8")
+        tree = self._get_parser(language).parse(source)
         symbols: set[str] = set()
         imports: set[str] = set()
 
+        def node_text(node) -> str:
+            return source[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")
+
+        def import_names(snippet: str) -> set[str]:
+            if language == "go":
+                return set(re.findall(r'(?m)^\s*(?:import\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\s+)?["`]([^"`]+)["`]', snippet))
+            if language == "rust":
+                return {match.strip() for match in re.findall(r"\buse\s+([^;]+)", snippet) if match.strip()}
+            if language == "java":
+                return set(re.findall(r"\bimport\s+(?:static\s+)?([A-Za-z_][A-Za-z0-9_.*]+)\s*;", snippet))
+            return set(RegexParser().parse(path, snippet).imports)
+
         def visit(node) -> None:
-            if node.type in {"function_definition", "class_definition", "function_declaration", "class_declaration", "method_definition"}:
+            if node.type in TREE_SITTER_SYMBOL_NODES.get(language, set()):
                 name = node.child_by_field_name("name")
                 if name:
-                    symbols.add(text.encode("utf-8")[name.start_byte:name.end_byte].decode("utf-8", errors="ignore"))
-            if node.type in {"import_statement", "import_from_statement"}:
-                snippet = text.encode("utf-8")[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")
-                fallback = RegexParser().parse(path, snippet)
-                imports.update(fallback.imports)
+                    symbols.add(node_text(name))
+            if node.type in TREE_SITTER_IMPORT_NODES.get(language, set()):
+                imports.update(import_names(node_text(node)))
             for child in node.children:
                 visit(child)
 
