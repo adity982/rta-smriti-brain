@@ -2,7 +2,7 @@
 
 **Category:** Open-source developer tool, local AI project memory
 
-**Current source:** `0.4.0-alpha` on `main`
+**Release candidate:** `0.4.0-alpha`; publication target: `main`
 
 **Release state:** The `v0.4.0-alpha` tag and GitHub Release are intentionally not created.
 

@@ -9,7 +9,7 @@ export const FinaleScene = () => {
     <div style={{ position:"absolute",left:110,top:235,width:1120,opacity:interpolate(frame,[0,24,245,285],[0,1,1,0],{extrapolateLeft:"clamp",extrapolateRight:"clamp",easing:Easing.bezier(.16,1,.3,1)}),translate:`0 ${interpolate(frame,[0,24],[30,0],{extrapolateRight:"clamp"})}px` }}>
       <div style={{ color:palette.teal,fontSize:22,fontWeight:850,textTransform:"uppercase" }}>Rta-Smriti Brain</div>
       <h1 style={{ margin:"20px 0 26px",fontSize:118,lineHeight:.96,letterSpacing:0 }}>Give every project<br />a memory.</h1>
-      <p style={{ margin:0,color:palette.muted,fontSize:36,lineHeight:1.4 }}>Local-first. Agent-neutral. Evidence-aware.</p>
+      <p style={{ margin:0,color:palette.muted,fontSize:36,lineHeight:1.4 }}>Local-first. Agent-neutral. Evidence-aware. Governed.</p>
       <div style={{ display:"inline-flex",marginTop:55,padding:"18px 24px",border:`1px solid ${palette.teal}`,borderRadius:7,background:"rgba(8,30,35,.82)",fontFamily:"ui-monospace, monospace",fontSize:24,color:palette.text }}>Open source · MIT License</div>
     </div>
   </Scene>;

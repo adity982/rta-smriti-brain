@@ -1,5 +1,6 @@
 import importlib
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -143,6 +144,59 @@ class RtaBrainNextReleaseTests(unittest.TestCase):
             finally:
                 conn.close()
 
+    def test_event_scoped_ingestion_hashes_content_even_when_stats_are_restored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            source = root / "core.py"
+            source.write_text("VALUE = 1\n", encoding="utf-8")
+            conn = db.connect(Path(tmp) / "brain.sqlite")
+            try:
+                db.ingest_repo(conn, root, project="demo")
+                original = source.stat()
+                source.write_text("VALUE = 2\n", encoding="utf-8")
+                os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+
+                refreshed = db.ingest_repo(
+                    conn, root, project="demo", changed_paths=[source],
+                )
+                indexed = conn.execute(
+                    "SELECT hash FROM sources WHERE path = ?", (str(source.resolve()),),
+                ).fetchone()
+
+                self.assertEqual(refreshed["updated_files"], 1)
+                self.assertEqual(refreshed["verified_changed_paths"], 1)
+                self.assertEqual(indexed["hash"], db.sha256_text("VALUE = 2\n"))
+            finally:
+                conn.close()
+
+    def test_event_scoped_ingestion_rejects_an_external_link_into_the_repository(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            outside = Path(tmp) / "outside"
+            root.mkdir()
+            outside.mkdir()
+            source = root / "core.py"
+            source.write_text("VALUE = 1\n", encoding="utf-8")
+            linked_root = outside / "repo-link"
+            try:
+                linked_root.symlink_to(root, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"directory symlink creation unavailable: {exc}")
+
+            conn = db.connect(Path(tmp) / "brain.sqlite")
+            try:
+                db.ingest_repo(conn, root, project="demo")
+                with self.assertRaisesRegex(ValueError, "outside the repository root"):
+                    db.ingest_repo(
+                        conn,
+                        root,
+                        project="demo",
+                        changed_paths=[linked_root / source.name],
+                    )
+            finally:
+                conn.close()
+
     def test_parser_registry_and_lsp_adapter_are_pluggable(self):
         parsers = importlib.import_module("rta_brain.parsers")
         self.assertTrue(hasattr(parsers, "ParserRegistry"), "parser registry is missing")
@@ -192,6 +246,18 @@ class RtaBrainNextReleaseTests(unittest.TestCase):
         self.assertIn("select option", styles)
         self.assertIn("Save Checkpoint", source)
         self.assertIn("Local Hybrid (Recommended)", source)
+        self.assertIn("Action Gate", source)
+        self.assertIn("Evaluate action", source)
+        self.assertIn('"/api/preflight"', source)
+        self.assertIn('"/api/governance-policy"', source)
+        self.assertIn('"/api/governance"', console)
+        self.assertIn('"/api/preflight"', console)
+        self.assertIn('"/api/governance-policy"', console)
+        self.assertNotIn('<option value="upamana">', source)
+        self.assertNotIn('<option value="arthapatti">', source)
+        self.assertNotIn('<option value="anupalabdhi">', source)
+        self.assertIn("Override receipts", source)
+        self.assertIn("governanceRequestRef", source)
         self.assertIn('"/api/settings"', console)
         self.assertIn('"/api/checkpoint"', console)
         self.assertIn('"/api/continuation-prompt"', console)

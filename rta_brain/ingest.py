@@ -1,6 +1,7 @@
 import hashlib
 import os
 import re
+import stat as stat_module
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -122,9 +123,16 @@ class FileRecord:
     sha256: str
     symbols: list[str]
     imports: list[str]
+    calls: list[str]
     chunks: list[str]
     parser: str = "regex"
     parser_warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _VerifiedText:
+    path: Path
+    text: str
 
 
 def sha256_text(text: str) -> str:
@@ -196,18 +204,194 @@ def walk_repo(root: Path, rejected: list[dict[str, str]] | None = None, max_file
             yield resolved
 
 
-def read_text(path: Path, max_bytes: int = MAX_FILE_BYTES) -> str | None:
-    if path.stat().st_size > max_bytes:
-        return None
+def _file_identity(file_stat) -> tuple[int, int, int]:
+    return (
+        int(file_stat.st_dev),
+        int(file_stat.st_ino),
+        stat_module.S_IFMT(file_stat.st_mode),
+    )
+
+
+def _is_reparse_point(file_stat) -> bool:
+    marker = getattr(stat_module, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return bool(marker and getattr(file_stat, "st_file_attributes", 0) & marker)
+
+
+def _lexical_root_for_candidate(root: Path, candidate: Path) -> Path:
+    requested_root = root.expanduser().absolute()
+    candidate = candidate.expanduser().absolute()
     try:
-        return path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
+        candidate.relative_to(requested_root)
+    except ValueError:
+        pass
+    else:
+        for ancestor in (candidate, *candidate.parents):
+            try:
+                ancestor_stat = ancestor.lstat()
+            except OSError:
+                continue
+            if stat_module.S_ISLNK(ancestor_stat.st_mode) or _is_reparse_point(ancestor_stat):
+                raise ValueError(f"linked path ancestor rejected: {ancestor}")
+            if ancestor == requested_root:
+                return requested_root
+        raise ValueError(f"path is outside the repository root: {candidate}")
+
+    for ancestor in (candidate, *candidate.parents):
         try:
-            return path.read_text(encoding="utf-8", errors="ignore")
+            ancestor_stat = ancestor.lstat()
         except OSError:
+            continue
+        if stat_module.S_ISLNK(ancestor_stat.st_mode) or _is_reparse_point(ancestor_stat):
+            raise ValueError(f"linked path ancestor rejected: {ancestor}")
+        try:
+            if os.path.samefile(ancestor, requested_root):
+                return ancestor
+        except OSError:
+            continue
+    raise ValueError(f"path is outside the repository root: {candidate}")
+
+
+def _capture_path_chain(root: Path, candidate: Path) -> tuple[tuple[Path, tuple[int, int, int]], ...]:
+    relative = candidate.relative_to(root)
+    paths = [root]
+    current = root
+    for part in relative.parts:
+        current = current / part
+        paths.append(current)
+    captured = []
+    for index, item in enumerate(paths):
+        item_stat = item.lstat()
+        if stat_module.S_ISLNK(item_stat.st_mode) or _is_reparse_point(item_stat):
+            raise OSError(f"linked or reparse path rejected: {item}")
+        if index < len(paths) - 1 and not stat_module.S_ISDIR(item_stat.st_mode):
+            raise OSError(f"non-directory ancestor rejected: {item}")
+        captured.append((item, _file_identity(item_stat)))
+    return tuple(captured)
+
+
+def _open_verified_descriptor(root: Path | None, candidate: Path) -> int:
+    file_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOINHERIT", 0)
+    )
+    file_flags |= getattr(os, "O_NOFOLLOW", 0)
+    supports_relative_open = os.open in os.supports_dir_fd and hasattr(os, "O_DIRECTORY")
+    if root is None or not supports_relative_open:
+        return os.open(candidate, file_flags)
+
+    relative = candidate.relative_to(root)
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0)
+    directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(root, directory_flags)
+    try:
+        for part in relative.parts[:-1]:
+            child = os.open(part, directory_flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return os.open(relative.parts[-1], file_flags, dir_fd=descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _read_verified_text(path: Path, max_bytes: int, root: Path | None = None) -> _VerifiedText | None:
+    if max_bytes < 0:
+        raise ValueError("max_bytes must not be negative")
+    source = path.expanduser().absolute()
+    try:
+        source_lstat = source.lstat()
+        if stat_module.S_ISLNK(source_lstat.st_mode) or _is_reparse_point(source_lstat):
             return None
-    except OSError:
+        requested_root = root.expanduser().absolute() if root is not None else None
+        canonical_root = requested_root.resolve(strict=True) if requested_root is not None else None
+        if canonical_root is not None:
+            if not canonical_root.is_dir():
+                return None
+            lexical_root = _lexical_root_for_candidate(requested_root, source)
+            lexical_chain = _capture_path_chain(lexical_root, source)
+        else:
+            lexical_root = None
+            lexical_chain = None
+        candidate = source.resolve(strict=True)
+        if canonical_root is not None:
+            candidate.relative_to(canonical_root)
+            before_chain = _capture_path_chain(canonical_root, candidate)
+        else:
+            before_chain = ((candidate, _file_identity(candidate.lstat())),)
+        before = candidate.lstat()
+        if (
+            not stat_module.S_ISREG(before.st_mode)
+            or stat_module.S_ISLNK(before.st_mode)
+            or _is_reparse_point(before)
+            or before.st_nlink > 1
+            or before.st_size > max_bytes
+        ):
+            return None
+
+        descriptor = _open_verified_descriptor(canonical_root, candidate)
+        try:
+            opened = os.fstat(descriptor)
+            if (
+                not stat_module.S_ISREG(opened.st_mode)
+                or opened.st_nlink > 1
+                or opened.st_size > max_bytes
+                or _file_identity(opened) != _file_identity(before)
+                or opened.st_size != before.st_size
+                or opened.st_mtime_ns != before.st_mtime_ns
+            ):
+                return None
+            chunks = []
+            remaining = max_bytes + 1
+            while remaining:
+                chunk = os.read(descriptor, min(65_536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            payload = b"".join(chunks)
+            after_open = os.fstat(descriptor)
+            if (
+                len(payload) > max_bytes
+                or _file_identity(after_open) != _file_identity(opened)
+                or after_open.st_size != opened.st_size
+                or after_open.st_mtime_ns != opened.st_mtime_ns
+            ):
+                return None
+        finally:
+            os.close(descriptor)
+
+        if canonical_root is not None:
+            if _capture_path_chain(lexical_root, source) != lexical_chain:
+                return None
+            after_chain = _capture_path_chain(canonical_root, candidate)
+            if after_chain != before_chain:
+                return None
+            post_resolved = source.resolve(strict=True)
+            post_resolved.relative_to(canonical_root)
+            if post_resolved != candidate:
+                return None
+        after_path = candidate.lstat()
+        if (
+            _file_identity(after_path) != _file_identity(opened)
+            or after_path.st_size != after_open.st_size
+            or after_path.st_mtime_ns != after_open.st_mtime_ns
+        ):
+            return None
+    except (OSError, ValueError):
         return None
+
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        text = payload.decode("utf-8", errors="ignore")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return _VerifiedText(path=candidate, text=text)
+
+
+def read_text(path: Path, max_bytes: int = MAX_FILE_BYTES, *, root: Path | None = None) -> str | None:
+    verified = _read_verified_text(path, max_bytes=max_bytes, root=root)
+    return verified.text if verified is not None else None
 
 
 def extract_symbols(text: str) -> list[str]:
@@ -258,20 +442,22 @@ def build_file_record(
     lsp_command: str = "",
     parser_registry=None,
 ) -> FileRecord | None:
-    text = read_text(path, max_bytes=max_bytes)
-    if text is None:
+    verified = _read_verified_text(path, max_bytes=max_bytes, root=root)
+    if verified is None:
         return None
+    text = verified.text
     from .parsers import ParserRegistry
 
     registry = parser_registry or ParserRegistry(lsp_command=lsp_command)
-    parsed = registry.parse(path, text, parser_name=parser_name)
+    parsed = registry.parse(verified.path, text, parser_name=parser_name)
     return FileRecord(
-        path=path.resolve(),
-        relative_path=path.resolve().relative_to(root.resolve()).as_posix(),
+        path=verified.path,
+        relative_path=verified.path.relative_to(root.resolve()).as_posix(),
         text=text,
         sha256=sha256_text(text),
         symbols=parsed.symbols,
         imports=parsed.imports,
+        calls=parsed.calls,
         chunks=chunk_text(text),
         parser=parsed.parser,
         parser_warnings=tuple(parsed.warnings),

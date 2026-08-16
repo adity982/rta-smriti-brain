@@ -129,23 +129,35 @@ continue the release hardening work from the previous thread
 
 ## Use The Dashboard
 
-Run:
+For the first use, onboard the project and open the console in one command:
 
 ```powershell
-& $RtaBrain dashboard --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains"
+& $RtaBrain start C:\path\to\project --project project-name --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains" --write-agents
 ```
 
 ```bash
-"$RtaBrain" dashboard --brain-dir "$BrainDir"
+"$RtaBrain" start /path/to/project --project project-name --brain-dir "$BrainDir" --write-agents
 ```
 
-Open the URL printed in the terminal.
+The command detects the canonical Git root, creates or migrates the project brain,
+indexes it, starts managed repository sync and the managed console, then opens an
+authorized browser. It is safe to rerun. Later use `console open`; the console and
+watcher survive terminal closure.
 
-Keep the terminal open while the dashboard is in use. The complete printed URL,
-including `#token=...`, authorizes that browser session. If the browser later
-reports `connection refused`, rerun the dashboard command and open its new URL.
-Repository sync is a separate per-project background process when enabled; the
-dashboard and watcher are never registered as login or privileged system services.
+```powershell
+& $RtaBrain console status --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains" --json
+& $RtaBrain console open --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains"
+& $RtaBrain console restart --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains"
+& $RtaBrain console stop --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains"
+```
+
+Login startup is optional, user-level, and reversible:
+
+```powershell
+& $RtaBrain console login-enable --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains"
+& $RtaBrain console login-status --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains" --json
+& $RtaBrain console login-disable --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains"
+```
 
 ### The Daily Five-Step Loop
 
@@ -158,6 +170,25 @@ dashboard and watcher are never registered as login or privileged system service
 Before ending a meaningful session, open **Continue Work** and record the objective, verified evidence, remaining gaps, safest next action, and exploration that should not be repeated. Save the checkpoint, then use **Copy New Task Prompt** when opening the next agent task.
 
 Graph is the map, Files is the source reader, Canvas is the working board, Bases is the structured database, and the Context-Pack Studio is the handoff point.
+
+### Connect An MCP-Capable Agent
+
+Generate host configuration with the installed command rather than composing an
+OS-specific executable path by hand:
+
+```powershell
+& $RtaBrain --db "$BrainDir\project-name.sqlite" --json mcp-config --project project-name --name rta-smriti-project
+```
+
+Add the returned `mcpServers` entry to the agent host. It is bound to one project
+and read-only by default. To grant an advanced capability, append only the
+required server argument to the generated `args`: `--allow-memory-writes`,
+`--allow-repo-ingestion`, or `--allow-thread-ingestion` together with one or
+more `--allow-thread-root <absolute-path>` pairs. Repository ingestion still
+uses the brain's registered canonical root. Thread files are confined to the
+declared roots. Agent-authored memory remains unverified `anumana` with
+confidence capped at `0.75`; agents cannot create or retire governance policy,
+attest required checks, or override a block.
 
 ### What The Dashboard Shows
 
@@ -205,6 +236,18 @@ Open the detail-panel button in the graph toolbar to see what is selected, must-
 
 Shows visible connections and backlinks for the selected graph node.
 
+**Action Gate**
+
+Checks a proposed action against typed constraints, failed approaches, fragile paths, required checks, and prohibited repetition. It shows why the result is `allow`, `warn`, or `block`, including policy scope, expiry, pramana, verification, and source hash. Only an owner can create or retire policies or override a block; every override creates a durable receipt.
+
+**Intelligence**
+
+Explains the active retrieval mode, provider, embedding coverage, parser fallback, freshness, rank components, latency, and source hashes. Its graph query follows bounded dependencies, dependents, impact, evidence, or relevance links and labels approximate relationships with confidence.
+
+**Workspaces**
+
+Creates an explicit local group of independent project brains. Add only the projects you intend to search together. Each project retains its own database, canonical root, and memories; workspace search returns grouped results rather than merging stores.
+
 **Memory Ledger**
 
 Shows remembered decisions, their verification provenance when recorded, and lets you run reflection to suppress duplicate memories or flag simple contradictions.
@@ -213,9 +256,9 @@ Shows remembered decisions, their verification provenance when recorded, and let
 
 Stores objective, verified evidence, remaining gaps, next action, and prohibited repetition as structured SQLite fields. The newest checkpoint leads future context packs and the one-click new-task prompt. Every save carries an optimistic version, so a stale agent is warned instead of overwriting newer state.
 
-**Launch Readiness**
+**Rta-Smriti Release**
 
-Shows what the package needs before publishing.
+Checks whether the Rta-Smriti tool checkout itself has the public files needed for a GitHub release. It is maintainer tooling, not a judgment that the selected user project is ready to launch.
 
 **Bootstrap Brain**
 
@@ -340,7 +383,7 @@ This watcher stays in the foreground and stops cleanly with `Ctrl+C`. For manage
 & $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" watcher stop --project project-name
 ```
 
-The managed worker survives terminal and dashboard closure. It is not a privileged operating-system service, never auto-starts at login, and must be restarted after a reboot. Install `.[watcher]` for event-driven updates; otherwise the same command uses portable polling.
+The managed worker survives terminal and dashboard closure. It is not a privileged operating-system service. Login startup remains disabled unless the owner explicitly enables it. Install `.[watcher]` for event-driven updates; otherwise the same command uses portable polling. Event-driven workers content-hash touched paths even when metadata is unchanged. Polling-only workers force a full content verification at least every five minutes.
 
 ## Configure Retrieval And Parsing
 
@@ -365,6 +408,81 @@ python -m pip install -e ".[tree-sitter]"
 python -m pip install -e ".[embeddings]"
 ```
 
+## Govern A High-Risk Action
+
+Create a hash-backed policy from trusted project evidence, then evaluate the intended action:
+
+```powershell
+& $RtaBrain --db "$BrainDir\project-name.sqlite" policy add --project project-name --kind required_check --statement "Privacy proof is required before publishing" --effect block --action-contains publish --required-check privacy-proof --pramana pratyaksha --verification-status verified --source-path docs/release-policy.md
+& $RtaBrain --db "$BrainDir\project-name.sqlite" preflight "publish release" --project project-name --json
+& $RtaBrain --db "$BrainDir\project-name.sqlite" preflight "publish release" --project project-name --check privacy-proof --json
+```
+
+When `--source-path` points inside the canonical project root, Rta-Smriti hashes the current file. Low-trust or unverified memory can warn, but cannot independently block. Completed checks are owner attestations; agents using MCP cannot supply them or override a result.
+
+## Explain Retrieval And Impact
+
+```powershell
+& $RtaBrain --db "$BrainDir\project-name.sqlite" retrieval-diagnostics "authentication boundary" --project project-name --json
+& $RtaBrain --db "$BrainDir\project-name.sqlite" graph-query authorize --project project-name --type impact --depth 2 --limit 100 --json
+& $RtaBrain benchmark --json
+# Optional: requires the embeddings extra and an available local model
+& $RtaBrain benchmark --include-semantic --semantic-model all-MiniLM-L6-v2 --json
+```
+
+Graph calls are approximate hints. Verify consequential changes against source and tests. The packaged benchmark is a synthetic regression harness, not competitive proof.
+
+## Search Multiple Project Brains
+
+The workspace record lives in one owner brain and references other local brain databases explicitly. Workspace search is query-only and does not add recall receipts to member brains; deleted, symlinked, or hard-linked member databases fail closed:
+
+```powershell
+& $RtaBrain --db "$BrainDir\api.sqlite" workspace create --name product-stack --description "API and web" --json
+& $RtaBrain --db "$BrainDir\api.sqlite" workspace add --name product-stack --project api --member-db "$BrainDir\api.sqlite" --role backend --json
+& $RtaBrain --db "$BrainDir\api.sqlite" workspace add --name product-stack --project web --member-db "$BrainDir\web.sqlite" --role frontend --json
+& $RtaBrain --db "$BrainDir\api.sqlite" workspace search --name product-stack --query "shared envelope version" --json
+```
+
+## Export Or Authenticate Local Memory
+
+Selective bundles exclude source code and redact home paths and common credential patterns by default:
+
+```powershell
+& $RtaBrain --db "$BrainDir\project-name.sqlite" bundle-export .\project-memory.rta.json --project project-name --preview --json
+& $RtaBrain --db "$BrainDir\project-name.sqlite" bundle-export .\project-memory.rta.json --project project-name --json
+& $RtaBrain --db "$BrainDir\import.sqlite" bundle-import .\project-memory.rta.json --conflict rename --preview --json
+& $RtaBrain --db "$BrainDir\import.sqlite" bundle-import .\project-memory.rta.json --conflict rename --json
+```
+
+Preview first. It performs the same integrity, redaction, schema, bounds, and conflict analysis without writing the export or changing the destination brain. A real import is staged in a temporary in-memory database and committed only after every record succeeds. Bundle SHA-256 proves content integrity, not sender identity: imported memories are downgraded to unverified `smriti`, while imported checkpoints and policies enter quarantine for owner review. Bundle inputs are capped at 25 MB.
+
+Authenticated snapshots contain the complete SQLite brain. Keep both the snapshot and its separate key private:
+
+```powershell
+& $RtaBrain --db "$BrainDir\project-name.sqlite" snapshot create .\project-brain.rta-snapshot --key "$BrainDir\snapshot.key" --json
+& $RtaBrain snapshot verify .\project-brain.rta-snapshot --key "$BrainDir\snapshot.key" --json
+```
+
+HMAC-SHA256 detects tampering; it does not encrypt the snapshot or provide public-key identity. Snapshot databases are capped at 64 MiB and legacy envelopes at 16 MiB; authentication and bounded reads occur before payload acceptance.
+
+## Opt In To Checkpoints And Feedback
+
+The managed Git hook resolves Git's configured hook directory, including linked worktrees, and refuses to replace an unknown, symlinked, or hard-linked `post-commit` hook:
+
+```powershell
+& $RtaBrain --db "$BrainDir\project-name.sqlite" git-hooks install --root C:\path\to\project --project project-name --json
+& $RtaBrain git-hooks uninstall --root C:\path\to\project --json
+```
+
+Record operator outcomes and age only eligible old, unverified inference or hypothesis memories:
+
+```powershell
+& $RtaBrain --db "$BrainDir\project-name.sqlite" memory-feedback 42 --project project-name --outcome helpful --evidence "Resolved incident 184" --json
+& $RtaBrain --db "$BrainDir\project-name.sqlite" memory-decay --project project-name --minimum-age-days 90 --step 0.03 --json
+```
+
+Verified evidence and `pratyaksha` or `sabda` records are protected from decay.
+
 ## What Not To Publish
 
 Never commit:
@@ -375,6 +493,8 @@ Never commit:
 - local screenshots with private project names
 - logs containing local paths
 - generated brain folders
+- selective bundles or authenticated snapshots unless they were created from synthetic public data and reviewed
+- snapshot HMAC keys
 - credentials or API keys
 
 The public GitHub repo should contain only the tool, docs, tests, and demo-safe assets.

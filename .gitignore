@@ -5,6 +5,7 @@ __pycache__/
 *.sqlite-wal
 .rta-smriti/
 .rta-smriti-daemons/
+.worktrees/
 .tmp-daemon-debug-*/
 *.log
 *.out
@@ -23,7 +24,10 @@ dashboard-src/dist/
 *.egg-info/
 .pytest_cache/
 .playwright-cli/
+playwright-report/
+test-results/
 .firecrawl/
 output/
 launch-dist/
 launch-video/out/
+release-artifacts/

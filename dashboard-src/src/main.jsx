@@ -4,6 +4,7 @@ import {
   Activity,
   ArrowLeft,
   BrainCircuit,
+  Boxes,
   CheckCircle2,
   ChevronRight,
   CircleDot,
@@ -21,6 +22,7 @@ import {
   FolderTree,
   GitBranch,
   GitPullRequest,
+  Gauge,
   HardDrive,
   Layers3,
   Map as MapIcon,
@@ -34,12 +36,17 @@ import {
   Route,
   Rocket,
   Search,
+  ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Table2,
+  ThumbsDown,
+  ThumbsUp,
   Zap,
 } from "lucide-react";
+import { chooseProject, isExactProjectIdentity } from "./project-selection.js";
+import { shellPathArg, shellQuote } from "./shell-command.js";
 import "./styles.css";
 
 const DEFAULT_TASK = "Prepare this project for a focused coding task";
@@ -128,24 +135,6 @@ function displayPath(value) {
     .replace(/^[A-Za-z]:[\\/]Users[\\/][^\\/]+/i, "%USERPROFILE%")
     .replace(/^\/(?:Users|home)\/[^/]+/i, "$HOME")
     .replace(/^[/\\]{2}[^/\\]+[/\\][^/\\]+/, "<network-share>");
-}
-
-function shellQuote(value, shellKind) {
-  const text = String(value ?? "");
-  if (shellKind === "powershell") return `'${text.replaceAll("'", "''")}'`;
-  return `'${text.replaceAll("'", `'"'"'`)}'`;
-}
-
-function shellPathArg(value, shellKind) {
-  const text = String(value || "");
-  if (shellKind === "powershell") {
-    const portable = text.replace(/^[A-Za-z]:[\\/]Users[\\/][^\\/]+/i, "$env:USERPROFILE");
-    if (portable.startsWith("$env:USERPROFILE")) return `"${portable.replaceAll('"', '`"')}"`;
-    return shellQuote(portable, shellKind);
-  }
-  const portable = text.replace(/^\/(?:Users|home)\/[^/]+/i, "$HOME");
-  if (portable.startsWith("$HOME")) return `"${portable.replaceAll('"', '\\"')}"`;
-  return shellQuote(portable, shellKind);
 }
 
 function readApiToken() {
@@ -403,6 +392,8 @@ function App() {
   const [freshness, setFreshness] = useState(null);
   const projectRequestRef = useRef(0);
   const fileRequestRef = useRef(0);
+  const governanceRequestRef = useRef(0);
+  const inspectorRef = useRef(null);
   const [publish, setPublish] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [message, setMessage] = useState("");
@@ -443,6 +434,11 @@ function App() {
   const [isSavingCheckpoint, setIsSavingCheckpoint] = useState(false);
   const [isRefreshingPublish, setIsRefreshingPublish] = useState(false);
   const [referenceHistory, setReferenceHistory] = useState([]);
+  const [governance, setGovernance] = useState({ policies: [], receipts: [] });
+  const [preflightDecision, setPreflightDecision] = useState(null);
+  const [isGovernanceBusy, setIsGovernanceBusy] = useState(false);
+  const [intelligence, setIntelligence] = useState({ diagnostics: null, graph: null, workspaces: [] });
+  const [isIntelligenceBusy, setIsIntelligenceBusy] = useState(false);
 
   const selectedParams = useMemo(() => {
     if (!selectedProject) return null;
@@ -467,7 +463,7 @@ function App() {
     ? customAgent.trim() || "Custom Agent"
     : targetAgents.find((agent) => agent.value === targetAgent)?.label || "Universal / Any Agent";
 
-  async function loadHealth() {
+  async function loadHealth(preferredProject = null) {
     setIsLoading(true);
     try {
       const payload = await api("/api/health");
@@ -475,8 +471,16 @@ function App() {
       setHealth(payload);
       setProjects(payload.projects || []);
       setPublish(payload.publish);
-      setSelectedProject((current) => current || payload.projects?.find((project) => project.status === "ok") || payload.projects?.[0] || null);
+      const available = payload.projects || [];
+      const preferredDecision = chooseProject(available, null, preferredProject);
+      setSelectedProject((current) => chooseProject(available, current, preferredProject).selected);
+      if (preferredDecision.reason === "preferred_identity_missing") {
+        setMessage(`The new brain could not be matched to its exact database identity. Selection was cleared to protect the canonical root.`);
+      } else if (preferredDecision.reason === "preferred_name_ambiguous") {
+        setMessage(`More than one brain has that name. Select the exact database before continuing.`);
+      }
     } catch (error) {
+      if (isExactProjectIdentity(preferredProject)) setSelectedProject(null);
       setLoadError(error.message);
       setMessage(`Dashboard refresh failed: ${error.message}`);
     } finally {
@@ -499,18 +503,43 @@ function App() {
     }
   }
 
+  async function loadGovernance(project = selectedProject, { silent = false } = {}) {
+    if (!project) return null;
+    const requestId = governanceRequestRef.current + 1;
+    governanceRequestRef.current = requestId;
+    if (!silent) setIsGovernanceBusy(true);
+    try {
+      const payload = await api(`/api/governance?${qs({
+        db_path: project.db_path,
+        project: project.project,
+        limit: 50,
+      })}`);
+      if (requestId !== governanceRequestRef.current) return null;
+      setGovernance({ policies: payload.policies || [], receipts: payload.receipts || [] });
+      return payload;
+    } catch (error) {
+      if (requestId === governanceRequestRef.current) setMessage(`Action Gate could not load: ${error.message}`);
+      return null;
+    } finally {
+      if (!silent && requestId === governanceRequestRef.current) setIsGovernanceBusy(false);
+    }
+  }
+
   async function loadProjectDetails(project = selectedProject) {
     if (!project) return;
     const requestId = projectRequestRef.current + 1;
     projectRequestRef.current = requestId;
+    const governanceRequestId = governanceRequestRef.current + 1;
+    governanceRequestRef.current = governanceRequestId;
     const params = { db_path: project.db_path, project: project.project };
-    const [memoryPayload, graphPayload, stalePayload, settingsPayload, checkpointPayload, watcherPayload] = await Promise.all([
+    const [memoryPayload, graphPayload, stalePayload, settingsPayload, checkpointPayload, watcherPayload, governancePayload] = await Promise.all([
       api(`/api/memories?${qs({ ...params, limit: 40 })}`),
       api(`/api/graph?${qs({ ...params, limit: 120 })}`),
       api(`/api/stale-check?${qs(params)}`),
       api(`/api/settings?${qs(params)}`),
       api(`/api/checkpoint?${qs(params)}`),
       api(`/api/watcher?${qs(params)}`),
+      api(`/api/governance?${qs({ ...params, limit: 50 })}`),
     ]);
     if (requestId !== projectRequestRef.current) return;
     setMemories(memoryPayload.memories || []);
@@ -520,6 +549,9 @@ function App() {
     setParserCapabilities(settingsPayload.parser_capabilities || {});
     setCheckpoint(checkpointPayload.checkpoint || null);
     setWatcher(watcherPayload);
+    if (governanceRequestId === governanceRequestRef.current) {
+      setGovernance({ policies: governancePayload.policies || [], receipts: governancePayload.receipts || [] });
+    }
     setSelectedNode(null);
     setReferenceHistory([]);
   }
@@ -572,6 +604,8 @@ function App() {
     if (selectedProject) {
       setFileTree({ entries: [], prefix: "", query: "", total_files: 0 });
       setFilePreview(null);
+      setGovernance({ policies: [], receipts: [] });
+      setPreflightDecision(null);
       setMessage(`Loading ${selectedProject.project}...`);
       loadProjectDetails(selectedProject)
         .then(async () => {
@@ -797,6 +831,158 @@ function App() {
     }
   }
 
+  async function evaluatePreflight(values) {
+    if (!selectedParams || isGovernanceBusy) return null;
+    setIsGovernanceBusy(true);
+    try {
+      const payload = await api("/api/preflight", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, ...values, actor: "dashboard-operator" }),
+      });
+      setPreflightDecision(payload);
+      await loadGovernance(selectedProject, { silent: true });
+      const matched = payload.matches?.length || 0;
+      setMessage(`Action Gate: ${payload.decision.replaceAll("_", " ")} (${matched} matching ${matched === 1 ? "policy" : "policies"}).`);
+      return payload;
+    } catch (error) {
+      setMessage(`Action Gate failed: ${error.message}`);
+      return null;
+    } finally {
+      setIsGovernanceBusy(false);
+    }
+  }
+
+  async function createGovernancePolicy(values) {
+    if (!selectedParams || isGovernanceBusy) return null;
+    setIsGovernanceBusy(true);
+    try {
+      const payload = await api("/api/governance-policy", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, action: "create", ...values }),
+      });
+      await loadGovernance(selectedProject, { silent: true });
+      setPreflightDecision(null);
+      setMessage(`Governance policy ${payload.policy.id} added.`);
+      return payload;
+    } catch (error) {
+      setMessage(`Policy could not be added: ${error.message}`);
+      return null;
+    } finally {
+      setIsGovernanceBusy(false);
+    }
+  }
+
+  async function retireGovernancePolicy(policyId, reason) {
+    if (!selectedParams || isGovernanceBusy) return null;
+    setIsGovernanceBusy(true);
+    try {
+      const payload = await api("/api/governance-policy", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, action: "retire", policy_id: policyId, reason }),
+      });
+      await loadGovernance(selectedProject, { silent: true });
+      setPreflightDecision(null);
+      setMessage(`Governance policy ${policyId} retired.`);
+      return payload;
+    } catch (error) {
+      setMessage(`Policy could not be retired: ${error.message}`);
+      return null;
+    } finally {
+      setIsGovernanceBusy(false);
+    }
+  }
+
+  async function loadWorkspaces() {
+    if (!selectedParams) return [];
+    const payload = await api(`/api/workspaces?${qs(selectedParams)}`);
+    setIntelligence((current) => ({ ...current, workspaces: payload.workspaces || [] }));
+    return payload.workspaces || [];
+  }
+
+  async function runRetrievalDiagnostics(query) {
+    if (!selectedParams || !query.trim()) return null;
+    setIsIntelligenceBusy(true);
+    try {
+      const payload = await api(`/api/retrieval-diagnostics?${qs({ ...selectedParams, query: query.trim(), limit: 8 })}`);
+      setIntelligence((current) => ({ ...current, diagnostics: payload }));
+      setMessage(`Retrieval explained in ${payload.latency_ms} ms.`);
+      return payload;
+    } catch (error) {
+      setMessage(`Retrieval diagnostics failed: ${error.message}`);
+      return null;
+    } finally {
+      setIsIntelligenceBusy(false);
+    }
+  }
+
+  async function runImpactQuery(target, queryType = "impact") {
+    if (!selectedParams || !target.trim()) return null;
+    setIsIntelligenceBusy(true);
+    try {
+      const payload = await api(`/api/graph-query?${qs({ ...selectedParams, target: target.trim(), type: queryType, depth: 3, limit: 100 })}`);
+      setIntelligence((current) => ({ ...current, graph: payload }));
+      setMessage(`${queryType} query found ${payload.nodes.length} nodes and ${payload.edges.length} relationships.`);
+      return payload;
+    } catch (error) {
+      setMessage(`Graph query failed: ${error.message}`);
+      return null;
+    } finally {
+      setIsIntelligenceBusy(false);
+    }
+  }
+
+  async function createProjectWorkspace(values) {
+    if (!selectedParams) return null;
+    setIsIntelligenceBusy(true);
+    try {
+      const payload = await api("/api/workspace", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, action: "create", ...values }),
+      });
+      await loadWorkspaces();
+      setMessage(`Workspace ${payload.workspace.name} created.`);
+      return payload;
+    } catch (error) {
+      setMessage(`Workspace could not be created: ${error.message}`);
+      return null;
+    } finally {
+      setIsIntelligenceBusy(false);
+    }
+  }
+
+  async function addWorkspaceMember(values) {
+    if (!selectedParams) return null;
+    setIsIntelligenceBusy(true);
+    try {
+      const payload = await api("/api/workspace", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, action: "add", ...values }),
+      });
+      await loadWorkspaces();
+      setMessage(`${values.project} added to ${values.name}.`);
+      return payload;
+    } catch (error) {
+      setMessage(`Workspace member could not be added: ${error.message}`);
+      return null;
+    } finally {
+      setIsIntelligenceBusy(false);
+    }
+  }
+
+  async function recordMemoryFeedback(memoryId, outcome) {
+    if (!selectedParams) return;
+    try {
+      await api("/api/memory-feedback", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, memory_id: memoryId, outcome, evidence: "operator-dashboard" }),
+      });
+      await loadProjectDetails(selectedProject);
+      setMessage(`Memory ${memoryId} marked ${outcome}.`);
+    } catch (error) {
+      setMessage(`Memory feedback failed: ${error.message}`);
+    }
+  }
+
   function addFileToTask(path) {
     if (task.includes(path)) {
       setMessage(`${path} is already in the task objective.`);
@@ -823,6 +1009,8 @@ function App() {
   function showDrawer(name) {
     setActiveDrawer(name);
     setInspectorOpen(true);
+    setNavContext(name);
+    setSettingsOpen(false);
   }
 
   function showPublishReadiness() {
@@ -830,10 +1018,32 @@ function App() {
     refreshPublishReadiness();
   }
 
+  function showGovernance() {
+    showDrawer("governance");
+    loadGovernance();
+  }
+
+  function showIntelligence() {
+    showDrawer("intelligence");
+    loadWorkspaces().catch((error) => setMessage(`Workspaces could not load: ${error.message}`));
+  }
+
   function selectPrimaryNode(node, drawer = null) {
     setReferenceHistory([]);
     setSelectedNode(node);
     if (drawer) showDrawer(drawer);
+  }
+
+  function inspectCanvasNodeFromKeyboard(node) {
+    selectPrimaryNode(node, "evidence");
+    window.requestAnimationFrame(() => {
+      const inspector = inspectorRef.current;
+      if (!inspector) return;
+      inspector.focus({ preventScroll: true });
+      if (window.matchMedia("(max-width: 1180px)").matches) {
+        inspector.scrollIntoView({ block: "start" });
+      }
+    });
   }
 
   function openReference(reference) {
@@ -987,27 +1197,29 @@ function App() {
           <nav className="sideNavigation" aria-label="Operator console navigation">
             <div className="navGroup">
               <span className="navGroupLabel">Overview</span>
-              <button title="Explore project relationships" className={navContext === "graph" ? "active" : ""} onClick={() => showWorkspace("graph")}><GitBranch size={17} /><span>Graph</span></button>
-              <button title="Arrange a temporary working set" className={navContext === "canvas" ? "active" : ""} onClick={() => showWorkspace("canvas")}><MapIcon size={17} /><span>Canvas</span></button>
-              <button title="Scan structured project records" className={navContext === "bases" ? "active" : ""} onClick={() => showBase("memory", "", "bases")}><Table2 size={17} /><span>Bases</span></button>
+              <button title="Explore project relationships" aria-current={navContext === "graph" ? "page" : undefined} className={navContext === "graph" ? "active" : ""} onClick={() => showWorkspace("graph")}><GitBranch size={17} /><span>Graph</span></button>
+              <button title="Arrange a temporary working set" aria-current={navContext === "canvas" ? "page" : undefined} className={navContext === "canvas" ? "active" : ""} onClick={() => showWorkspace("canvas")}><MapIcon size={17} /><span>Canvas</span></button>
+              <button title="Scan structured project records" aria-current={navContext === "bases" ? "page" : undefined} className={navContext === "bases" ? "active" : ""} onClick={() => showBase("memory", "", "bases")}><Table2 size={17} /><span>Bases</span></button>
             </div>
             <div className="navGroup">
               <span className="navGroupLabel">Project</span>
-              <button title="Browse and preview indexed source" className={navContext === "files" ? "active" : ""} onClick={showFiles}><Files size={17} /><span>Files</span></button>
-              <button title="Scan indexed code symbols" className={navContext === "symbols" ? "active" : ""} onClick={() => showBase("files", "symbol", "symbols")}><Code2 size={17} /><span>Symbols</span></button>
-              <button title="Scan indexed dependencies" className={navContext === "imports" ? "active" : ""} onClick={() => showBase("files", "import", "imports")}><GitBranch size={17} /><span>Imports</span></button>
-              <button title="Review durable project knowledge" className={navContext === "memories" ? "active" : ""} onClick={() => showBase("memory", "", "memories")}><MemoryStick size={17} /><span>Memories</span></button>
-              <button title="Inspect evidence and freshness" className={navContext === "evidence" ? "active" : ""} onClick={() => { focusSemanticHub("evidence"); showDrawer("evidence"); }}><ShieldCheck size={17} /><span>Evidence</span></button>
+              <button title="Browse and preview indexed source" aria-current={navContext === "files" ? "page" : undefined} className={navContext === "files" ? "active" : ""} onClick={showFiles}><Files size={17} /><span>Files</span></button>
+              <button title="Scan indexed code symbols" aria-current={navContext === "symbols" ? "page" : undefined} className={navContext === "symbols" ? "active" : ""} onClick={() => showBase("files", "symbol", "symbols")}><Code2 size={17} /><span>Symbols</span></button>
+              <button title="Scan indexed dependencies" aria-current={navContext === "imports" ? "page" : undefined} className={navContext === "imports" ? "active" : ""} onClick={() => showBase("files", "import", "imports")}><GitBranch size={17} /><span>Imports</span></button>
+              <button title="Review durable project knowledge" aria-current={navContext === "memories" ? "page" : undefined} className={navContext === "memories" ? "active" : ""} onClick={() => showBase("memory", "", "memories")}><MemoryStick size={17} /><span>Memories</span></button>
+              <button title="Inspect evidence and freshness" aria-current={navContext === "evidence" ? "page" : undefined} className={navContext === "evidence" ? "active" : ""} onClick={() => { focusSemanticHub("evidence"); showDrawer("evidence"); }}><ShieldCheck size={17} /><span>Evidence</span></button>
             </div>
             <div className="navGroup">
               <span className="navGroupLabel">Tools</span>
-              <button className={searchOpen ? "active" : ""} onClick={() => { setViewMode("graph"); setNavContext("search"); setSearchOpen(true); }}><Search size={17} /><span>Search</span></button>
-              <button className={inspectorOpen && activeDrawer === "memory" ? "active" : ""} onClick={() => showDrawer("memory")}><Database size={17} /><span>Memory Ledger</span></button>
-              <button className={inspectorOpen && activeDrawer === "checkpoint" ? "active" : ""} onClick={() => showDrawer("checkpoint")}><Route size={17} /><span>Continue Work</span></button>
-              <button className={inspectorOpen && activeDrawer === "receipts" ? "active" : ""} onClick={() => showDrawer("receipts")}><Sparkles size={17} /><span>Context Packs</span><em>{receipts.length}</em></button>
+              <button aria-current={searchOpen && navContext === "search" ? "page" : undefined} className={searchOpen && navContext === "search" ? "active" : ""} onClick={() => { setViewMode("graph"); setNavContext("search"); setSearchOpen(true); }}><Search size={17} /><span>Search</span></button>
+              <button aria-current={navContext === "governance" ? "page" : undefined} className={navContext === "governance" ? "active" : ""} onClick={showGovernance}><ShieldAlert size={17} /><span>Action Gate</span><em>{governance.policies.length}</em></button>
+              <button aria-current={navContext === "intelligence" ? "page" : undefined} className={navContext === "intelligence" ? "active" : ""} onClick={showIntelligence}><Gauge size={17} /><span>Intelligence</span></button>
+              <button aria-current={navContext === "memory" ? "page" : undefined} className={navContext === "memory" ? "active" : ""} onClick={() => showDrawer("memory")}><Database size={17} /><span>Memory Ledger</span></button>
+              <button aria-current={navContext === "checkpoint" ? "page" : undefined} className={navContext === "checkpoint" ? "active" : ""} onClick={() => showDrawer("checkpoint")}><Route size={17} /><span>Continue Work</span></button>
+              <button aria-current={navContext === "receipts" ? "page" : undefined} className={navContext === "receipts" ? "active" : ""} onClick={() => showDrawer("receipts")}><Sparkles size={17} /><span>Context Packs</span><em>{receipts.length}</em></button>
               <button onClick={() => setCommandOpen(true)}><Command size={17} /><span>Command Palette</span></button>
-              <button title="Check this Rta-Smriti checkout for GitHub release requirements" className={inspectorOpen && activeDrawer === "publish" ? "active" : ""} onClick={showPublishReadiness}><Rocket size={17} /><span>Rta-Smriti Release</span><em>{publishReady}/{publishTotal}</em></button>
-              <button className={settingsOpen ? "active" : ""} onClick={() => { showWorkspace("graph"); setSettingsOpen(true); }}><SlidersHorizontal size={17} /><span>Settings</span></button>
+              <button title="Check this Rta-Smriti checkout for GitHub release requirements" aria-current={navContext === "publish" ? "page" : undefined} className={navContext === "publish" ? "active" : ""} onClick={showPublishReadiness}><Rocket size={17} /><span>Rta-Smriti Release</span><em>{publishReady}/{publishTotal}</em></button>
+              <button aria-current={navContext === "settings" ? "page" : undefined} className={navContext === "settings" ? "active" : ""} onClick={() => { showWorkspace("graph"); setSettingsOpen(true); setNavContext("settings"); }}><SlidersHorizontal size={17} /><span>Settings</span></button>
             </div>
           </nav>
           <div className="railFooter">
@@ -1023,22 +1235,22 @@ function App() {
         <main className={stageExpanded ? "brainStage expanded" : "brainStage"}>
           <div className="stageToolbar">
             <div className="viewSwitch" aria-label="Workspace view">
-              <button className={viewMode === "graph" ? "active" : ""} onClick={() => showWorkspace("graph")}><GitBranch size={15} /> Graph</button>
-              <button className={viewMode === "canvas" ? "active" : ""} onClick={() => showWorkspace("canvas")}><MapIcon size={15} /> Canvas</button>
-              <button className={viewMode === "bases" ? "active" : ""} onClick={() => showBase("memory", "", "bases")}><Table2 size={15} /> Bases</button>
+              <button aria-pressed={viewMode === "graph"} className={viewMode === "graph" ? "active" : ""} onClick={() => showWorkspace("graph")}><GitBranch size={15} /> Graph</button>
+              <button aria-pressed={viewMode === "canvas"} className={viewMode === "canvas" ? "active" : ""} onClick={() => showWorkspace("canvas")}><MapIcon size={15} /> Canvas</button>
+              <button aria-pressed={viewMode === "bases"} className={viewMode === "bases" ? "active" : ""} onClick={() => showBase("memory", "", "bases")}><Table2 size={15} /> Bases</button>
             </div>
             <div className="modeGroup" aria-label="Graph scope">
               {graphModes.map((mode) => (
                 <button key={mode} aria-pressed={graphMode === mode} className={graphMode === mode ? "active" : ""} onClick={() => setGraphMode(mode)}>{mode}</button>
               ))}
             </div>
-            <button className={searchOpen ? "toolButton active" : "toolButton"} onClick={() => setSearchOpen((value) => !value)} aria-label="Search" title="Search">
+            <button className={searchOpen ? "toolButton active" : "toolButton"} onClick={() => setSearchOpen((value) => !value)} aria-label="Search" aria-pressed={searchOpen} title="Search">
               <Search size={16} /> <span className="toolText">Search</span>
             </button>
-            <button className={typesOpen ? "toolButton active" : "toolButton"} onClick={() => setTypesOpen((value) => !value)} aria-label="Types" title="Types">
+            <button className={typesOpen ? "toolButton active" : "toolButton"} onClick={() => setTypesOpen((value) => !value)} aria-label="Types" aria-pressed={typesOpen} title="Types">
               <Layers3 size={16} /> <span className="toolText">Types</span>
             </button>
-            <button className={settingsOpen ? "toolButton active" : "toolButton"} onClick={() => setSettingsOpen((value) => !value)} aria-label="Settings" title="Graph settings">
+            <button className={settingsOpen ? "toolButton active" : "toolButton"} onClick={() => setSettingsOpen((value) => { const next = !value; setNavContext(next ? "settings" : viewMode); return next; })} aria-label="Settings" aria-pressed={settingsOpen} title="Graph settings">
               <SlidersHorizontal size={16} /> <span className="toolText">Settings</span>
             </button>
             <button className="toolButton iconOnly" onClick={() => exportView(`${selectedProject?.project || "rta-smriti"}-${viewMode}.json`, { project: selectedProject?.project, task, view: viewMode, graph: visibleGraph })} aria-label="Export current view" title="Export current view">
@@ -1061,13 +1273,13 @@ function App() {
 
           <div className={searchOpen || typesOpen || settingsOpen ? "graphFilters" : "graphFilters collapsed"}>
               {searchOpen && (
-                <label className="nodeSearch">
+                <label className="nodeSearch" id="graph-search-controls">
                   <Search size={15} />
-                  <input value={nodeQuery} onChange={(event) => setNodeQuery(event.target.value)} placeholder="Search files, symbols, memories..." autoFocus />
+                  <input value={nodeQuery} onChange={(event) => setNodeQuery(event.target.value)} placeholder="Search files, symbols, memories..." aria-label="Search graph nodes" autoFocus />
                 </label>
               )}
               {typesOpen && (
-                <div className="typeFilters" aria-label="Graph type filters">
+                <div className="typeFilters" id="graph-type-controls" aria-label="Graph type filters">
                   {allGraphTypes.map((type) => (
                     <button key={type} aria-pressed={activeTypes.includes(type)} className={activeTypes.includes(type) ? "active" : ""} onClick={() => toggleType(type)}>
                       <i style={{ background: graphPalette[type] }} /> {type}
@@ -1077,6 +1289,7 @@ function App() {
               )}
               {settingsOpen && (
                 <GraphSettings
+                  id="graph-settings-controls"
                   depth={graphDepth}
                   setDepth={setGraphDepth}
                   showLabels={showLabels}
@@ -1111,7 +1324,7 @@ function App() {
               onUse={addFileToTask}
             />
           )}
-          {viewMode === "canvas" && <CanvasBoard project={selectedProject} graph={visibleGraph} onSelect={(node) => selectPrimaryNode(node, "evidence")} onExport={exportView} />}
+          {viewMode === "canvas" && <CanvasBoard project={selectedProject} graph={visibleGraph} onSelect={(node) => selectPrimaryNode(node, "evidence")} onKeyboardInspect={inspectCanvasNodeFromKeyboard} onExport={exportView} />}
           {viewMode === "bases" && <BasesView memories={memories} graph={computedGraph} publish={publish} onSelect={(node) => selectPrimaryNode(node, "evidence")} initialTable={baseScope.table} kindFilter={baseScope.kind} />}
 
           <TaskComposer
@@ -1136,24 +1349,30 @@ function App() {
           />
         </main>
 
-        <aside className={inspectorOpen ? "inspector" : "inspector hidden"}>
+        <aside ref={inspectorRef} tabIndex={-1} aria-label="Project detail inspector" className={inspectorOpen ? "inspector" : "inspector hidden"}>
           <div className="inspectorTabs">
-            <button className={activeDrawer === "evidence" ? "active" : ""} onClick={() => showDrawer("evidence")}>
+            <button aria-pressed={activeDrawer === "evidence"} className={activeDrawer === "evidence" ? "active" : ""} onClick={() => showDrawer("evidence")}>
               <PanelRightOpen size={15} /> Evidence
             </button>
-            <button className={activeDrawer === "references" ? "active" : ""} onClick={() => showDrawer("references")}>
+            <button aria-pressed={activeDrawer === "references"} className={activeDrawer === "references" ? "active" : ""} onClick={() => showDrawer("references")}>
               <GitBranch size={15} /> Refs
             </button>
-            <button className={activeDrawer === "memory" ? "active" : ""} onClick={() => showDrawer("memory")}>
+            <button aria-pressed={activeDrawer === "governance"} className={activeDrawer === "governance" ? "active" : ""} onClick={showGovernance}>
+              <ShieldAlert size={15} /> Gate
+            </button>
+            <button aria-pressed={activeDrawer === "intelligence"} className={activeDrawer === "intelligence" ? "active" : ""} onClick={showIntelligence}>
+              <Gauge size={15} /> Intel
+            </button>
+            <button aria-pressed={activeDrawer === "memory"} className={activeDrawer === "memory" ? "active" : ""} onClick={() => showDrawer("memory")}>
               <MemoryStick size={15} /> Memory
             </button>
-            <button className={activeDrawer === "checkpoint" ? "active" : ""} onClick={() => showDrawer("checkpoint")}>
+            <button aria-pressed={activeDrawer === "checkpoint"} className={activeDrawer === "checkpoint" ? "active" : ""} onClick={() => showDrawer("checkpoint")}>
               <Route size={15} /> Continue
             </button>
-            <button className={activeDrawer === "receipts" ? "active" : ""} onClick={() => showDrawer("receipts")}>
+            <button aria-pressed={activeDrawer === "receipts"} className={activeDrawer === "receipts" ? "active" : ""} onClick={() => showDrawer("receipts")}>
               <Clipboard size={15} /> Packs
             </button>
-            <button className={activeDrawer === "publish" ? "active" : ""} onClick={showPublishReadiness}>
+            <button aria-pressed={activeDrawer === "publish"} className={activeDrawer === "publish" ? "active" : ""} onClick={showPublishReadiness}>
               <Rocket size={15} /> Release
             </button>
           </div>
@@ -1181,7 +1400,33 @@ function App() {
               onStart={goToReferenceStart}
             />
           )}
-          {activeDrawer === "memory" && <MemoryLedger memories={memories} onReflect={reflect} />}
+          {activeDrawer === "governance" && (
+            <GovernancePanel
+              project={selectedProject}
+              governance={governance}
+              decision={preflightDecision}
+              onEvaluate={evaluatePreflight}
+              onCreate={createGovernancePolicy}
+              onRetire={retireGovernancePolicy}
+              onRefresh={() => loadGovernance()}
+              isBusy={isGovernanceBusy}
+            />
+          )}
+          {activeDrawer === "memory" && <MemoryLedger memories={memories} onReflect={reflect} onFeedback={recordMemoryFeedback} />}
+          {activeDrawer === "intelligence" && (
+            <IntelligencePanel
+              project={selectedProject}
+              projects={projects}
+              task={task}
+              data={intelligence}
+              busy={isIntelligenceBusy}
+              onDiagnose={runRetrievalDiagnostics}
+              onGraphQuery={runImpactQuery}
+              onCreateWorkspace={createProjectWorkspace}
+              onAddMember={addWorkspaceMember}
+              onNotify={setMessage}
+            />
+          )}
           {activeDrawer === "checkpoint" && (
             <CheckpointPanel
               checkpoint={checkpoint}
@@ -1204,7 +1449,7 @@ function App() {
         <span>
           <CircleDot size={14} /> Graph DB: Local SQLite
         </span>
-        <span>
+        <span role="status" aria-live="polite" aria-atomic="true">
           <Activity size={14} /> {message || "Ready"}
         </span>
       </footer>
@@ -1224,6 +1469,7 @@ function App() {
 }
 
 function GraphSettings({
+  id,
   depth, setDepth, showLabels, setShowLabels, showEdges, setShowEdges,
   projectSettings, setProjectSettings, parserCapabilities, onSave, isSaving,
   watcher, onStartWatcher, onStopWatcher, isChangingWatcher,
@@ -1232,7 +1478,7 @@ function GraphSettings({
   const updateSetting = (key, value) => setProjectSettings((current) => ({ ...(current || {}), [key]: value }));
   const parserStatus = parserCapabilities[settings.parser_adapter];
   return (
-    <div className="graphSettings">
+    <div className="graphSettings" id={id}>
       <div className="settingsGroup graphDisplaySettings">
         <strong>Graph display</strong>
         <label>
@@ -1378,7 +1624,7 @@ function GraphCanvas({ graph, selectedNode, onSelect, query, showLabels, showEdg
 
   return (
     <section ref={canvasRef} className={`graphCanvas ${isPanning ? "panning" : ""}`} aria-label="Interactive project brain graph">
-      <svg className="graphSvg" viewBox={`${viewX} ${viewY} ${viewWidth} ${viewHeight}`} role="img" aria-label="Rta-Smriti graph">
+      <svg className="graphSvg" viewBox={`${viewX} ${viewY} ${viewWidth} ${viewHeight}`} role="group" aria-label="Rta-Smriti graph">
         <defs>
           <filter id="softGlow">
             <feGaussianBlur stdDeviation="5" result="blur" />
@@ -1724,7 +1970,7 @@ function FileExplorer({ tree, preview, loading, freshness, onOpen, onNavigate, o
   );
 }
 
-function CanvasBoard({ project, graph, onSelect, onExport }) {
+function CanvasBoard({ project, graph, onSelect, onKeyboardInspect, onExport }) {
   const storageKey = `${CANVAS_STORAGE_KEY}:${project?.project || "default"}`;
   const [positions, setPositions] = useState(() => readLocalJson(storageKey, {}));
   const [focusedNodeId, setFocusedNodeId] = useState("");
@@ -1766,6 +2012,7 @@ function CanvasBoard({ project, graph, onSelect, onExport }) {
   }
 
   function beginDrag(event, node, index) {
+    if (window.matchMedia("(max-width: 560px)").matches) return;
     const field = fieldRef.current;
     if (!field) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -1862,9 +2109,14 @@ function CanvasBoard({ project, graph, onSelect, onExport }) {
                 setFocusedNodeId((current) => current === node.id ? "" : node.id);
               }}
               onDoubleClick={() => onSelect(node)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                onKeyboardInspect(node);
+              }}
               aria-pressed={focusedNodeId === node.id}
               aria-label={`${node.label}, ${node.meta}, ${linkCount} direct links`}
-              title="Drag to arrange. Click to trace links. Double-click to inspect."
+              title="Drag to arrange. Click to trace links. Double-click or press Enter to inspect."
             >
               <span className="canvasPort incoming" aria-hidden="true" />
               <span className="canvasNodeIcon" aria-hidden="true"><NodeIcon size={14} /></span>
@@ -1888,6 +2140,11 @@ function CanvasBoard({ project, graph, onSelect, onExport }) {
 function BasesView({ memories, graph, publish, onSelect, initialTable = "memory", kindFilter = "" }) {
   const [table, setTable] = useState(initialTable);
   const [query, setQuery] = useState("");
+  const baseTabs = [
+    { id: "memory", label: "Memories" },
+    { id: "files", label: kindFilter === "symbol" ? "Symbols" : kindFilter === "import" ? "Imports" : "Sources" },
+    { id: "readiness", label: "Readiness" },
+  ];
   useEffect(() => {
     setTable(initialTable);
     setQuery("");
@@ -1895,19 +2152,44 @@ function BasesView({ memories, graph, publish, onSelect, initialTable = "memory"
   const normalized = query.toLowerCase();
   const memoryRows = memories.filter((item) => `${item.type} ${item.pramana} ${item.text}`.toLowerCase().includes(normalized));
   const fileRows = graph.nodes.filter((item) => (!kindFilter || item.meta === kindFilter) && `${item.label} ${item.meta}`.toLowerCase().includes(normalized));
+  function moveBaseTabFocus(event, index) {
+    const directions = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+    let nextIndex = index;
+    if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = baseTabs.length - 1;
+    else if (directions[event.key]) nextIndex = (index + directions[event.key] + baseTabs.length) % baseTabs.length;
+    else return;
+    event.preventDefault();
+    setTable(baseTabs[nextIndex].id);
+    event.currentTarget.parentElement?.querySelectorAll('[role="tab"]')[nextIndex]?.focus();
+  }
   return (
     <section className="basesView" aria-label="Typed project data tables">
       <div className="basesToolbar">
-        <div className="viewSwitch">
-          <button className={table === "memory" ? "active" : ""} onClick={() => setTable("memory")}>Memories</button>
-          <button className={table === "files" ? "active" : ""} onClick={() => setTable("files")}>{kindFilter === "symbol" ? "Symbols" : kindFilter === "import" ? "Imports" : "Sources"}</button>
-          <button className={table === "readiness" ? "active" : ""} onClick={() => setTable("readiness")}>Readiness</button>
+        <div className="viewSwitch" role="tablist" aria-label="Project data tables">
+          {baseTabs.map((entry, index) => (
+            <button key={entry.id} id={`base-tab-${entry.id}`} role="tab" aria-selected={table === entry.id} aria-controls={`base-panel-${entry.id}`} tabIndex={table === entry.id ? 0 : -1} className={table === entry.id ? "active" : ""} onClick={() => setTable(entry.id)} onKeyDown={(event) => moveBaseTabFocus(event, index)}>{entry.label}</button>
+          ))}
         </div>
-        <label className="nodeSearch"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter this base..." /></label>
+        <label className="nodeSearch"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter this base..." aria-label="Filter current project table" /></label>
       </div>
-      {table === "memory" && <div className="baseTable"><div className="baseRow head"><span>Type</span><span>Evidence</span><span>Confidence</span><span>Memory</span></div>{memoryRows.map((item) => <button className="baseRow" key={item.id}><span>{item.type}</span><span>{item.pramana}</span><span>{Math.round(item.confidence * 100)}%</span><span>{item.text}</span></button>)}</div>}
-      {table === "files" && <div className="baseTable"><div className="baseRow head"><span>Name</span><span>Kind</span><span>Layer</span><span>Action</span></div>{fileRows.map((item) => <button className="baseRow" key={item.id} onClick={() => onSelect(item)}><span>{item.label}</span><span>{item.type}</span><span>{item.meta}</span><span>Inspect</span></button>)}</div>}
-      {table === "readiness" && <div className="readinessGrid">{(publish?.checks || []).map((check) => <article key={check.name} className={check.ok ? "ready" : "open"}>{check.ok ? <CheckCircle2 size={18} /> : <CircleDot size={18} />}<strong>{check.name}</strong><span>{check.note || (check.ok ? "Ready" : "Open")}</span></article>)}</div>}
+      {table === "memory" && (
+        <div id="base-panel-memory" role="tabpanel" aria-labelledby="base-tab-memory">
+          <div className="baseTable" role="table" aria-label="Project memories">
+            <div role="rowgroup"><div className="baseRow head" role="row"><span role="columnheader">Type</span><span role="columnheader">Evidence</span><span role="columnheader">Confidence</span><span role="columnheader">Memory</span></div></div>
+            <div role="rowgroup">{memoryRows.map((item) => <div className="baseRow" role="row" key={item.id}><span role="cell">{item.type}</span><span role="cell">{item.pramana}</span><span role="cell">{Math.round(item.confidence * 100)}%</span><span role="cell">{item.text}</span></div>)}</div>
+          </div>
+        </div>
+      )}
+      {table === "files" && (
+        <div id="base-panel-files" role="tabpanel" aria-labelledby="base-tab-files">
+          <div className="baseTable" role="table" aria-label="Indexed project sources">
+            <div role="rowgroup"><div className="baseRow head" role="row"><span role="columnheader">Name</span><span role="columnheader">Kind</span><span role="columnheader">Layer</span><span role="columnheader">Action</span></div></div>
+            <div role="rowgroup">{fileRows.map((item) => <div className="baseRow" role="row" key={item.id}><span role="cell">{item.label}</span><span role="cell">{item.type}</span><span role="cell">{item.meta}</span><span role="cell"><button type="button" onClick={() => onSelect(item)} aria-label={`Inspect ${item.label}`}>Inspect</button></span></div>)}</div>
+          </div>
+        </div>
+      )}
+      {table === "readiness" && <div id="base-panel-readiness" role="tabpanel" aria-labelledby="base-tab-readiness" className="readinessGrid">{(publish?.checks || []).map((check) => <article key={check.name} className={check.ok ? "ready" : "open"}>{check.ok ? <CheckCircle2 size={18} /> : <CircleDot size={18} />}<strong>{check.name}</strong><span>{check.note || (check.ok ? "Ready" : "Open")}</span></article>)}</div>}
     </section>
   );
 }
@@ -2202,7 +2484,287 @@ function CheckpointPanel({ checkpoint, project, onSave, onCopy, isSaving }) {
   );
 }
 
-function MemoryLedger({ memories, onReflect }) {
+function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, onGraphQuery, onCreateWorkspace, onAddMember, onNotify }) {
+  const [tab, setTab] = useState("retrieval");
+  const [query, setQuery] = useState(task);
+  const [target, setTarget] = useState("");
+  const [queryType, setQueryType] = useState("impact");
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [selectedWorkspace, setSelectedWorkspace] = useState("");
+  const [memberKey, setMemberKey] = useState("");
+  const [workspaceQuery, setWorkspaceQuery] = useState("");
+  const [workspaceResults, setWorkspaceResults] = useState([]);
+  const [workspaceStatus, setWorkspaceStatus] = useState("");
+  const [bundlePath, setBundlePath] = useState("");
+  const [snapshotPath, setSnapshotPath] = useState("");
+  const [snapshotKeyPath, setSnapshotKeyPath] = useState("");
+  const [bundleConflict, setBundleConflict] = useState("rename");
+  const [bundleSections, setBundleSections] = useState({ memories: true, checkpoints: true, policies: true });
+  const [bundlePreview, setBundlePreview] = useState(null);
+  const [portabilityStatus, setPortabilityStatus] = useState("");
+  const [portabilityBusy, setPortabilityBusy] = useState(false);
+
+  useEffect(() => setQuery(task), [task]);
+  useEffect(() => {
+    if (!selectedWorkspace && data.workspaces?.length) setSelectedWorkspace(data.workspaces[0].name);
+  }, [data.workspaces, selectedWorkspace]);
+  useEffect(() => {
+    const base = String(project?.db_path || "brain.sqlite").replace(/\.sqlite$/i, "");
+    setBundlePath(`${base}.memory.rta.json`);
+    setSnapshotPath(`${base}.rta-snapshot`);
+    setSnapshotKeyPath(`${base}.snapshot.key`);
+    setBundlePreview(null);
+    setPortabilityStatus("");
+  }, [project?.db_path]);
+
+  const selectedMember = projects.find((item) => `${item.db_path}:${item.project}` === memberKey);
+  const diagnostics = data.diagnostics;
+  const graphResult = data.graph;
+  const tabs = [
+    { id: "retrieval", label: "Retrieval", icon: Gauge },
+    { id: "impact", label: "Impact", icon: Network },
+    { id: "workspaces", label: "Workspaces", icon: Boxes },
+    { id: "portability", label: "Vault", icon: HardDrive },
+  ];
+
+  function moveTabFocus(event, index) {
+    const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+    let nextIndex = index;
+    if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = tabs.length - 1;
+    else if (keys[event.key]) nextIndex = (index + keys[event.key] + tabs.length) % tabs.length;
+    else return;
+    event.preventDefault();
+    setTab(tabs[nextIndex].id);
+    event.currentTarget.parentElement?.querySelectorAll('[role="tab"]')[nextIndex]?.focus();
+  }
+
+  async function searchSelectedWorkspace() {
+    if (!project || !selectedWorkspace || !workspaceQuery.trim()) return;
+    try {
+      setWorkspaceStatus("Searching workspace...");
+      const payload = await api(`/api/workspace-search?${qs({
+        db_path: project.db_path, project: project.project, workspace: selectedWorkspace,
+        query: workspaceQuery.trim(), limit: 4,
+      })}`);
+      setWorkspaceResults(payload.results || []);
+      setWorkspaceStatus(`${payload.results?.length || 0} project brains searched.`);
+    } catch (error) {
+      setWorkspaceResults([]);
+      setWorkspaceStatus(error.message);
+    }
+  }
+
+  async function runBundle(action) {
+    if (!project || !bundlePath.trim()) return;
+    const selected = Object.entries(bundleSections).filter(([, enabled]) => enabled).map(([name]) => name);
+    if ((action === "export" || action === "preview-export") && !selected.length) {
+      setPortabilityStatus("Select at least one bundle section.");
+      return;
+    }
+    try {
+      setPortabilityBusy(true);
+      setPortabilityStatus(action.startsWith("preview") ? "Inspecting bundle..." : "Applying verified bundle operation...");
+      const payload = await api("/api/bundle", {
+        method: "POST",
+        body: JSON.stringify({
+          db_path: project.db_path,
+          project: project.project,
+          action,
+          path: bundlePath.trim(),
+          projects: [project.project],
+          include: selected,
+          redact: true,
+          conflict: bundleConflict,
+        }),
+      });
+      if (action.startsWith("preview")) {
+        setBundlePreview({ ...payload, operation: action });
+        setPortabilityStatus(`Preview ready: ${payload.counts?.memories || 0} memories, ${payload.counts?.checkpoints || 0} checkpoints, ${payload.counts?.policies || 0} policies.`);
+      } else {
+        setBundlePreview(null);
+        setPortabilityStatus(action === "export" ? "Redacted selective bundle written." : "Verified bundle imported through staging.");
+      }
+      onNotify?.(action.startsWith("preview") ? "Portability preview completed." : "Portability operation completed.");
+    } catch (error) {
+      setBundlePreview(null);
+      setPortabilityStatus(error.message);
+      onNotify?.(`Portability check failed: ${error.message}`);
+    } finally {
+      setPortabilityBusy(false);
+    }
+  }
+
+  async function runSnapshot(action) {
+    if (!project || !snapshotPath.trim() || !snapshotKeyPath.trim()) return;
+    try {
+      setPortabilityBusy(true);
+      const payload = await api("/api/snapshot", {
+        method: "POST",
+        body: JSON.stringify({
+          db_path: project.db_path,
+          project: project.project,
+          action,
+          path: snapshotPath.trim(),
+          key_path: snapshotKeyPath.trim(),
+        }),
+      });
+      setPortabilityStatus(action === "create" ? "Authenticated private snapshot created." : payload.valid ? "Snapshot signature and database digest verified." : `Snapshot invalid: ${payload.reason}`);
+    } catch (error) {
+      setPortabilityStatus(error.message);
+    } finally {
+      setPortabilityBusy(false);
+    }
+  }
+
+  async function runLocalControl(path, payload, success) {
+    if (!project) return;
+    try {
+      setPortabilityBusy(true);
+      const result = await api(path, {
+        method: "POST",
+        body: JSON.stringify({ db_path: project.db_path, project: project.project, ...payload }),
+      });
+      setPortabilityStatus(typeof success === "function" ? success(result) : success);
+    } catch (error) {
+      setPortabilityStatus(error.message);
+    } finally {
+      setPortabilityBusy(false);
+    }
+  }
+
+  return (
+    <div className="drawerContent intelligencePanel">
+      <div className="sectionHeader"><h2>Project Intelligence</h2><em>{project?.project || "No project"}</em></div>
+      <div className="intelligenceTabs" role="tablist" aria-label="Project intelligence views">
+        {tabs.map(({ id, label, icon: TabIcon }, index) => (
+          <button
+            key={id}
+            id={`intelligence-tab-${id}`}
+            role="tab"
+            type="button"
+            aria-selected={tab === id}
+            aria-controls={`intelligence-panel-${id}`}
+            tabIndex={tab === id ? 0 : -1}
+            className={tab === id ? "active" : ""}
+            onClick={() => setTab(id)}
+            onKeyDown={(event) => moveTabFocus(event, index)}
+          >
+            <TabIcon size={14} /> {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "retrieval" && (
+        <section id="intelligence-panel-retrieval" role="tabpanel" aria-labelledby="intelligence-tab-retrieval" className="intelligenceSection">
+          <label><span>Question to explain</span><textarea rows={3} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+          <button className="primarySmall" onClick={() => onDiagnose(query)} disabled={busy || !query.trim()}><Search size={15} /> Explain retrieval</button>
+          {diagnostics && (
+            <>
+              <div className="metricStrip">
+                <article><span>Mode</span><strong>{diagnostics.retrieval?.mode}</strong></article>
+                <article><span>Coverage</span><strong>{Math.round((diagnostics.index?.embedding_coverage || 0) * 100)}%</strong></article>
+                <article><span>Latency</span><strong>{diagnostics.latency_ms} ms</strong></article>
+              </div>
+              <div className="diagnosticResults">
+                {diagnostics.results?.map((item, index) => (
+                  <article key={`${item.path}-${index}`}>
+                    <div><strong>{item.path}</strong><em>#{item.ranking.position}</em></div>
+                    <span>lex {Number(item.ranking.lexical_score || 0).toFixed(3)} / sem {Number(item.ranking.semantic_score || 0).toFixed(3)} / hybrid {Number(item.ranking.hybrid_score || 0).toFixed(3)}</span>
+                    <small title={item.evidence.source_hash}>{item.evidence.verification_status}</small>
+                  </article>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
+      )}
+
+      {tab === "impact" && (
+        <section id="intelligence-panel-impact" role="tabpanel" aria-labelledby="intelligence-tab-impact" className="intelligenceSection">
+          <label><span>Symbol or file</span><input value={target} onChange={(event) => setTarget(event.target.value)} placeholder="helper or src/service.py" /></label>
+          <label><span>Question</span><select value={queryType} onChange={(event) => setQueryType(event.target.value)}><option value="impact">Change impact</option><option value="dependents">What depends on this?</option><option value="dependencies">What does this depend on?</option><option value="evidence">Supporting evidence</option><option value="relevance">Related knowledge</option></select></label>
+          <button className="primarySmall" onClick={() => onGraphQuery(target, queryType)} disabled={busy || !target.trim()}><Network size={15} /> Trace relationships</button>
+          {graphResult && (
+            <div className="impactResults">
+              <p><strong>{graphResult.nodes.length}</strong> nodes, <strong>{graphResult.edges.length}</strong> relationships{graphResult.truncated ? " (bounded result)" : ""}</p>
+              {graphResult.edges.slice(0, 12).map((edge) => <article key={edge.id}><span>{edge.from_name}</span><em>{edge.relation}</em><span>{edge.to_name}</span><small>{Math.round(edge.confidence * 100)}%</small></article>)}
+            </div>
+          )}
+        </section>
+      )}
+
+      {tab === "workspaces" && (
+        <section id="intelligence-panel-workspaces" role="tabpanel" aria-labelledby="intelligence-tab-workspaces" className="intelligenceSection">
+          <p className="drawerIntro">Group independently indexed brains for cross-repository recall without merging their roots or databases.</p>
+          <div className="workspaceList">
+            {data.workspaces?.map((workspace) => <button key={workspace.id} className={selectedWorkspace === workspace.name ? "active" : ""} onClick={() => setSelectedWorkspace(workspace.name)}><span>{workspace.name}</span><em>{workspace.project_count}</em></button>)}
+            {!data.workspaces?.length && <p className="emptyState">No workspaces in this brain yet.</p>}
+          </div>
+          <div className="workspaceAction">
+            <input value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} placeholder="Workspace name" aria-label="New workspace name" />
+            <button onClick={async () => { const result = await onCreateWorkspace({ name: workspaceName.trim() }); if (result) { setSelectedWorkspace(workspaceName.trim()); setWorkspaceName(""); } }} disabled={busy || !workspaceName.trim()}><Plus size={14} /> Create</button>
+          </div>
+          <label><span>Member brain</span><select value={memberKey} onChange={(event) => setMemberKey(event.target.value)}><option value="">Choose a project</option>{projects.map((item) => <option key={`${item.db_path}:${item.project}`} value={`${item.db_path}:${item.project}`}>{item.project}</option>)}</select></label>
+          <button className="primarySmall" onClick={() => onAddMember({ name: selectedWorkspace, project: selectedMember.project, member_db_path: selectedMember.db_path, role: "member" })} disabled={busy || !selectedWorkspace || !selectedMember}><Plus size={15} /> Add to workspace</button>
+          <div className="workspaceAction">
+            <input value={workspaceQuery} onChange={(event) => setWorkspaceQuery(event.target.value)} placeholder="Search every member brain" aria-label="Search workspace brains" />
+            <button onClick={searchSelectedWorkspace} disabled={!selectedWorkspace || !workspaceQuery.trim()}><Search size={14} /> Search</button>
+          </div>
+          {workspaceStatus && <p className="workspaceStatus" aria-live="polite">{workspaceStatus}</p>}
+          <div className="workspaceResults">
+            {workspaceResults.map((result) => (
+              <article key={result.project}>
+                <div><strong>{result.project}</strong><em>{result.retrieval?.mode}</em></div>
+                {[...(result.memories || []), ...(result.chunks || [])].slice(0, 3).map((item, index) => (
+                  <p key={`${item.id}-${index}`}><span>{item.path || item.type || "memory"}</span>{item.text}</p>
+                ))}
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {tab === "portability" && (
+        <section id="intelligence-panel-portability" role="tabpanel" aria-labelledby="intelligence-tab-portability" className="intelligenceSection portabilityPanel">
+          <p className="drawerIntro">Move selected memory without source code, authenticate a private brain copy, or opt into local lifecycle controls.</p>
+          <h3>Selective bundle</h3>
+          <label><span>Bundle path</span><input value={bundlePath} onChange={(event) => { setBundlePath(event.target.value); setBundlePreview(null); }} /></label>
+          <div className="bundleChecks">
+            {Object.keys(bundleSections).map((section) => <label key={section}><input type="checkbox" checked={bundleSections[section]} onChange={(event) => { setBundleSections({ ...bundleSections, [section]: event.target.checked }); setBundlePreview(null); }} /><span>{section}</span></label>)}
+          </div>
+          <label><span>Import conflict</span><select value={bundleConflict} onChange={(event) => { setBundleConflict(event.target.value); setBundlePreview(null); }}><option value="rename">Rename incoming project</option><option value="merge">Merge by project name</option><option value="fail">Fail on conflict</option></select></label>
+          <div className="portabilityActions">
+            <button onClick={() => runBundle("preview-export")} disabled={portabilityBusy}><Eye size={14} /> Preview export</button>
+            <button onClick={() => runBundle("export")} disabled={portabilityBusy || bundlePreview?.operation !== "preview-export"}><Download size={14} /> Export</button>
+            <button onClick={() => runBundle("preview-import")} disabled={portabilityBusy}><Eye size={14} /> Preview import</button>
+            <button onClick={() => runBundle("import")} disabled={portabilityBusy || bundlePreview?.operation !== "preview-import"}><Database size={14} /> Import</button>
+          </div>
+          {bundlePreview && <div className="portabilityReceipt"><strong>SHA-256 {bundlePreview.sha256?.slice(0, 12)}...</strong><span>{bundlePreview.redacted ? "Redaction verified" : "Unredacted"} / {bundlePreview.conflicts?.length || 0} conflicts</span>{bundlePreview.warnings?.map((warning) => <small key={warning}>{warning}</small>)}</div>}
+
+          <h3>Authenticated snapshot</h3>
+          <label><span>Private snapshot</span><input value={snapshotPath} onChange={(event) => setSnapshotPath(event.target.value)} /></label>
+          <label><span>Separate HMAC key</span><input value={snapshotKeyPath} onChange={(event) => setSnapshotKeyPath(event.target.value)} /></label>
+          <div className="portabilityActions two">
+            <button onClick={() => runSnapshot("create")} disabled={portabilityBusy}><HardDrive size={14} /> Create</button>
+            <button onClick={() => runSnapshot("verify")} disabled={portabilityBusy}><ShieldCheck size={14} /> Verify</button>
+          </div>
+          <p className="trustNote">Snapshots contain the complete local brain. HMAC verifies integrity; it does not encrypt the file.</p>
+
+          <h3>Local controls</h3>
+          <div className="portabilityActions">
+            <button onClick={() => runLocalControl("/api/git-hooks", { action: "install" }, "Managed post-commit checkpoint hook installed at the canonical root.")} disabled={portabilityBusy}><GitBranch size={14} /> Hook on</button>
+            <button onClick={() => runLocalControl("/api/git-hooks", { action: "uninstall" }, "Managed post-commit checkpoint hook removed.")} disabled={portabilityBusy}><GitBranch size={14} /> Hook off</button>
+            <button onClick={() => runLocalControl("/api/memory-decay", { minimum_age_days: 90, step: 0.03 }, (result) => `${result.decayed} eligible memories conservatively aged; ${result.protected_verified} verified records protected.`)} disabled={portabilityBusy}><MemoryStick size={14} /> Run decay</button>
+          </div>
+          {portabilityStatus && <p className="workspaceStatus" aria-live="polite">{portabilityStatus}</p>}
+        </section>
+      )}
+    </div>
+  );
+}
+
+function MemoryLedger({ memories, onReflect, onFeedback }) {
   const [filter, setFilter] = useState("all");
   const types = ["all", ...new Set(memories.map((memory) => memory.type).filter(Boolean))];
   const visible = filter === "all" ? memories : memories.filter((memory) => memory.type === filter);
@@ -2226,6 +2788,10 @@ function MemoryLedger({ memories, onReflect }) {
                 {memory.provenance.verification_status} / {memory.provenance.source_path || "source not recorded"}
               </small>
             )}
+            <div className="memoryFeedback" aria-label={`Feedback for memory ${memory.id}`}>
+              <button title="This memory helped" aria-label="Mark helpful" onClick={() => onFeedback(memory.id, "helpful")}><ThumbsUp size={13} /></button>
+              <button title="This memory was harmful or misleading" aria-label="Mark harmful" onClick={() => onFeedback(memory.id, "harmful")}><ThumbsDown size={13} /></button>
+            </div>
           </article>
         ))}
       </div>
@@ -2248,6 +2814,193 @@ function ReceiptsPanel({ receipts, onCopy, onClear }) {
           </article>
         ))}
         {!receipts.length && <p className="emptyText">Generate a context pack to create the first receipt.</p>}
+      </div>
+    </div>
+  );
+}
+
+function GovernancePanel({ project, governance, decision, onEvaluate, onCreate, onRetire, onRefresh, isBusy }) {
+  const [action, setAction] = useState("");
+  const [path, setPath] = useState("");
+  const [overrideReason, setOverrideReason] = useState("");
+  const [retireTarget, setRetireTarget] = useState(null);
+  const [retireReason, setRetireReason] = useState("");
+  const [policy, setPolicy] = useState({
+    kind: "constraint",
+    effect: "warn",
+    statement: "",
+    action_contains: "",
+    path_glob: "",
+    required_check: "",
+    pramana: "smriti",
+    confidence: "0.75",
+    verification_status: "unverified",
+    source_path: "",
+    overrideable: true,
+  });
+
+  async function submitEvaluation(event, reason = "") {
+    event?.preventDefault();
+    if (!action.trim()) return;
+    const result = await onEvaluate({
+      action: action.trim(),
+      path: path.trim() || null,
+      completed_checks: [],
+      override_reason: reason || null,
+    });
+    if (result?.override_receipt) setOverrideReason("");
+  }
+
+  async function submitPolicy(event) {
+    event.preventDefault();
+    if (!policy.statement.trim()) return;
+    const result = await onCreate({
+      kind: policy.kind,
+      effect: policy.effect,
+      statement: policy.statement.trim(),
+      action_contains: policy.action_contains.trim(),
+      path_glob: policy.path_glob.trim(),
+      required_check: policy.required_check.trim(),
+      pramana: policy.pramana,
+      confidence: Number(policy.confidence),
+      overrideable: policy.overrideable,
+      provenance: {
+        verification_status: policy.verification_status,
+        source_path: policy.source_path.trim() || null,
+      },
+    });
+    if (result) setPolicy((current) => ({ ...current, statement: "", action_contains: "", path_glob: "", required_check: "", source_path: "" }));
+  }
+
+  async function confirmRetire() {
+    if (!retireTarget || !retireReason.trim()) return;
+    const result = await onRetire(retireTarget, retireReason.trim());
+    if (result) {
+      setRetireTarget(null);
+      setRetireReason("");
+    }
+  }
+
+  if (!project) {
+    return <div className="drawerContent"><h2>Action Gate</h2><p className="emptyState">Select a project brain first.</p></div>;
+  }
+
+  const decisionLabel = decision?.decision?.replaceAll("_", " ") || "not checked";
+  const canOverride = decision && ["block", "warn"].includes(decision.decision)
+    && decision.matches?.some((match) => match.overrideable);
+
+  return (
+    <div className="drawerContent governancePanel">
+      <div className="sectionHeader">
+        <h2>Action Gate</h2>
+        <button className="freshnessAction" onClick={onRefresh} disabled={isBusy} aria-label="Refresh governance policies">
+          <RefreshCw className={isBusy ? "spin" : ""} size={13} /> Refresh
+        </button>
+      </div>
+
+      <form className="gateForm" onSubmit={submitEvaluation}>
+        <label>
+          <span>Intended action</span>
+          <textarea value={action} onChange={(event) => setAction(event.target.value)} placeholder="Publish v0.4 release" rows={3} required />
+        </label>
+        <label>
+          <span>Repository path <em>optional</em></span>
+          <input value={path} onChange={(event) => setPath(event.target.value)} placeholder="src/release.py" />
+        </label>
+        <button className="primarySmall" type="submit" disabled={isBusy || !action.trim()}>
+          <ShieldCheck size={16} /> {isBusy ? "Evaluating..." : "Evaluate action"}
+        </button>
+      </form>
+
+      <section className={`gateDecision ${decision?.decision || "idle"}`} aria-live="polite">
+        <ShieldAlert size={22} />
+        <div><span>Decision</span><strong>{decisionLabel}</strong></div>
+        <em>{decision?.matches?.length || 0} matched</em>
+      </section>
+
+      {decision?.matches?.length > 0 && (
+        <div className="gateMatches">
+          {decision.matches.map((match) => (
+            <article key={match.policy_id} className={match.effective_effect}>
+              <div className="policyLine"><strong>{match.kind.replaceAll("_", " ")}</strong><em>{match.effective_effect}</em></div>
+              <p>{match.reason}</p>
+              <span>{match.pramana} / {Math.round(match.confidence * 100)}% / {match.provenance?.verification_status || "unverified"}</span>
+              {match.provenance?.source_path && <code>{match.provenance.source_path}</code>}
+            </article>
+          ))}
+        </div>
+      )}
+
+      {decision?.satisfied_policy_ids?.length > 0 && <p className="gateSatisfied"><CheckCircle2 size={14} /> {decision.satisfied_policy_ids.length} required check satisfied</p>}
+
+      {canOverride && (
+        <div className="overrideForm">
+          <label>
+            <span>Override reason</span>
+            <textarea value={overrideReason} onChange={(event) => setOverrideReason(event.target.value)} rows={2} placeholder="Owner approval and evidence reference" />
+          </label>
+          <button className="amberButton" type="button" disabled={isBusy || !overrideReason.trim()} onClick={(event) => submitEvaluation(event, overrideReason.trim())}>
+            Record override receipt
+          </button>
+        </div>
+      )}
+
+      <div className="sectionHeader governanceSectionTitle">
+        <span>Active policies</span><em>{governance.policies.length}</em>
+      </div>
+      <div className="policyList">
+        {governance.policies.map((item) => (
+          <article key={item.id}>
+            <div className="policyLine"><strong>{item.kind.replaceAll("_", " ")}</strong><em className={item.effect}>{item.effect}</em></div>
+            <p>{item.statement}</p>
+            <span>{item.pramana} / {Math.round(item.confidence * 100)}% / {item.provenance?.verification_status || "unverified"}</span>
+            {retireTarget === item.id ? (
+              <div className="retireForm">
+                <input value={retireReason} onChange={(event) => setRetireReason(event.target.value)} placeholder="Reason for retirement" autoFocus />
+                <button type="button" onClick={confirmRetire} disabled={isBusy || !retireReason.trim()}>Confirm</button>
+                <button type="button" onClick={() => { setRetireTarget(null); setRetireReason(""); }}>Cancel</button>
+              </div>
+            ) : <button className="policyRetire" type="button" onClick={() => setRetireTarget(item.id)}>Retire</button>}
+          </article>
+        ))}
+        {!governance.policies.length && <p className="emptyState">No active policies for {project.project}.</p>}
+      </div>
+
+      <details className="policyAuthoring">
+        <summary><Plus size={15} /> Add governance policy</summary>
+        <form onSubmit={submitPolicy}>
+          <label><span>Statement</span><textarea value={policy.statement} onChange={(event) => setPolicy({ ...policy, statement: event.target.value })} rows={3} required /></label>
+          <div className="policyFieldPair">
+            <label><span>Kind</span><select value={policy.kind} onChange={(event) => setPolicy({ ...policy, kind: event.target.value })}>
+              <option value="constraint">Constraint</option><option value="failed_approach">Failed approach</option><option value="fragile_path">Fragile path</option><option value="required_check">Required check</option><option value="prohibited_repetition">Prohibited repetition</option>
+            </select></label>
+            <label><span>Effect</span><select value={policy.effect} onChange={(event) => setPolicy({ ...policy, effect: event.target.value })}><option value="warn">Warn</option><option value="block">Block</option></select></label>
+          </div>
+          <label><span>Action contains</span><input value={policy.action_contains} onChange={(event) => setPolicy({ ...policy, action_contains: event.target.value })} placeholder="publish" /></label>
+          <label><span>Path glob</span><input value={policy.path_glob} onChange={(event) => setPolicy({ ...policy, path_glob: event.target.value })} placeholder="migrations/*.sql" /></label>
+          <label><span>Required check</span><input value={policy.required_check} onChange={(event) => setPolicy({ ...policy, required_check: event.target.value })} placeholder="privacy-scan" /></label>
+          <div className="policyFieldPair">
+            <label><span>Pramana</span><select value={policy.pramana} onChange={(event) => setPolicy({ ...policy, pramana: event.target.value })}><option value="smriti">Smriti</option><option value="pratyaksha">Pratyaksha</option><option value="sabda">Sabda</option><option value="anumana">Anumana</option><option value="kalpana">Kalpana</option></select></label>
+            <label><span>Confidence</span><input type="number" min="0" max="1" step="0.05" value={policy.confidence} onChange={(event) => setPolicy({ ...policy, confidence: event.target.value })} /></label>
+          </div>
+          <label><span>Verification</span><select value={policy.verification_status} onChange={(event) => setPolicy({ ...policy, verification_status: event.target.value })}><option value="unverified">Unverified</option><option value="verified">Verified</option><option value="failed">Failed</option><option value="stale">Stale</option></select></label>
+          <label><span>Evidence source</span><input value={policy.source_path} onChange={(event) => setPolicy({ ...policy, source_path: event.target.value })} placeholder="SECURITY.md" /></label>
+          <label className="checkLabel"><input type="checkbox" checked={policy.overrideable} onChange={(event) => setPolicy({ ...policy, overrideable: event.target.checked })} /><span>Operator may override with a recorded reason</span></label>
+          <p className="trustNote">Blocking requires hash-backed, verified Pratyaksha or Sabda evidence at 80% confidence or higher.</p>
+          <button className="primarySmall" type="submit" disabled={isBusy || !policy.statement.trim()}><Plus size={16} /> Add policy</button>
+        </form>
+      </details>
+
+      <div className="governanceReceipts"><span>Override receipts</span><strong>{governance.receipts.length}</strong></div>
+      <div className="governanceReceiptList">
+        {governance.receipts.slice(0, 5).map((receipt) => (
+          <article key={receipt.id}>
+            <div className="policyLine"><strong>{receipt.final_decision.replaceAll("_", " ")}</strong><em>#{receipt.id}</em></div>
+            <p>{receipt.action}</p>
+            <span>{receipt.actor} / {new Date(receipt.created_at).toLocaleString()}</span>
+            <small>{receipt.override_reason}</small>
+          </article>
+        ))}
       </div>
     </div>
   );
@@ -2292,11 +3045,12 @@ function BootstrapPanel({ onDone, shellKind }) {
   const [output, setOutput] = useState("");
   const [writeAgents, setWriteAgents] = useState(false);
   const [embeddingProvider, setEmbeddingProvider] = useState("hash");
+  const [targetAgent, setTargetAgent] = useState("universal");
   const [isBootstrapping, setIsBootstrapping] = useState(false);
 
   async function bootstrap() {
-    if (!path.trim() || !project.trim()) {
-      setOutput("Enter a project folder and project name.");
+    if (!path.trim()) {
+      setOutput("Enter a project folder.");
       return;
     }
     try {
@@ -2304,10 +3058,21 @@ function BootstrapPanel({ onDone, shellKind }) {
       setOutput("Building local brain...");
       const payload = await api("/api/bootstrap", {
         method: "POST",
-        body: JSON.stringify({ path, project, write_agents: writeAgents, embedding_provider: embeddingProvider }),
+        body: JSON.stringify({
+          path,
+          project: project.trim() || null,
+          target_agent: targetAgent,
+          write_agents: writeAgents,
+          embedding_provider: embeddingProvider,
+        }),
       });
-      setOutput(`Brain ready: ${payload.project}\nIndexed files: ${payload.ingest.indexed_files}\nDatabase: ${displayPath(payload.db_path)}${payload.agent_index_file ? `\nAgent bridge: ${displayPath(payload.agent_index_file)}` : ""}`);
-      await onDone();
+      const stageText = (payload.stages || []).map((stage) => `${stage.state === "complete" ? "OK" : "BLOCKED"}  ${stage.name}: ${stage.detail}`).join("\n");
+      if (!payload.ready) {
+        setOutput(`Setup needs attention at ${payload.error?.stage || "verification"}: ${payload.error?.message || "unknown error"}\n\n${stageText}\n\nResume: ${payload.recovery_commands?.resume || "rerun setup"}`);
+        return;
+      }
+      setOutput(`Brain ready: ${payload.project}\nIndexed files: ${payload.bootstrap?.ingest?.indexed_files || 0}\nDatabase: ${displayPath(payload.db_path)}\n\n${stageText}${payload.bootstrap?.agent_index_file ? `\n\nAgent bridge: ${displayPath(payload.bootstrap.agent_index_file)}` : ""}`);
+      await onDone({ project: payload.project, db_path: payload.db_path });
     } catch (error) {
       setOutput(`Bootstrap failed: ${error.message}`);
     } finally {
@@ -2328,7 +3093,13 @@ function BootstrapPanel({ onDone, shellKind }) {
         </label>
       <label>
         <span>Project Name</span>
-        <input value={project} onChange={(event) => setProject(event.target.value)} placeholder="my-project" />
+        <input value={project} onChange={(event) => setProject(event.target.value)} placeholder="Derived from folder when blank" />
+      </label>
+      <label>
+        <span>Target Agent</span>
+        <select value={targetAgent} onChange={(event) => setTargetAgent(event.target.value)}>
+          {targetAgents.map((agent) => <option key={agent.value} value={agent.value}>{agent.label}</option>)}
+        </select>
       </label>
       <label>
         <span>Retrieval</span>
@@ -2342,30 +3113,48 @@ function BootstrapPanel({ onDone, shellKind }) {
         <span>Write the optional AGENTS.md bridge into this project</span>
       </label>
       <button className="primarySmall" onClick={bootstrap} disabled={isBootstrapping}>
-        <Rocket size={16} /> {isBootstrapping ? "Building..." : "Build Local Brain"}
+        <Rocket size={16} /> {isBootstrapping ? "Starting..." : "Set Up & Start"}
       </button>
-      {output && <pre className="miniOutput">{output}</pre>}
+      {output && <pre className="miniOutput" role="status" aria-live="polite" aria-atomic="true">{output}</pre>}
     </div>
   );
 }
 
 function CommandPalette({ command, cliCommand, shellKind, brainDir, onClose, onCopy }) {
   const paletteRef = useRef(null);
+  const returnFocusRef = useRef(null);
   useEffect(() => {
+    returnFocusRef.current = document.activeElement;
     paletteRef.current?.querySelector("button")?.focus();
+    return () => returnFocusRef.current?.focus?.();
   }, []);
+
+  function keepFocusInside(event) {
+    if (event.key !== "Tab") return;
+    const controls = [...(paletteRef.current?.querySelectorAll("button:not(:disabled)") || [])];
+    if (!controls.length) return;
+    const first = controls[0];
+    const last = controls.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
   const defaultBrainDir = shellPathArg(
     brainDir || (shellKind === "powershell" ? "$env:USERPROFILE\\Documents\\Rta-Smriti\\brains" : "$HOME/.local/share/rta-smriti/brains"),
     shellKind,
   );
   const commands = [
     ["Copy context-pack command", command],
-    ["Open dashboard", `${cliCommand} dashboard --brain-dir ${defaultBrainDir}`],
+    ["Open managed console", `${cliCommand} console open --brain-dir ${defaultBrainDir}`],
     ["Check Rta-Smriti release", `${cliCommand} publish-readiness --json`],
   ];
   return (
     <div className="paletteBackdrop" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={onClose}>
-      <section ref={paletteRef} className="commandPalette" onMouseDown={(event) => event.stopPropagation()}>
+      <section ref={paletteRef} className="commandPalette" onMouseDown={(event) => event.stopPropagation()} onKeyDown={keepFocusInside}>
         <div className="paletteHeader">
           <span>
             <Command size={17} /> Command Palette

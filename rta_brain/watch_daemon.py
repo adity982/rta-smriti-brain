@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import signal
 import subprocess
@@ -11,18 +10,34 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
 from .db import connect, ingest_repo
+from .runtime_control import (
+    clear_control_files,
+    detach_current_worker_session,
+    detached_worker_bootstrap,
+    is_safe_regular_file,
+    now_iso,
+    open_log,
+    prepare_control_dir,
+    process_alive,
+    read_json,
+    spawn_detached_worker,
+    stop_requested,
+    write_json,
+    write_stop_request,
+)
 
 
 _SPAWNED_PROCESSES: dict[str, subprocess.Popen] = {}
 _CONTENT_EVENT_TYPES = frozenset({"created", "modified", "deleted", "moved"})
+MAX_PENDING_CHANGED_PATHS = 50_000
+MIN_POLLING_DEEP_VERIFY_SECONDS = 300.0
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return now_iso()
 
 
 def _slug(value: str) -> str:
@@ -44,49 +59,19 @@ def watcher_paths(db_path: Path, project: str) -> dict[str, Path]:
 
 
 def _prepare_control_dir(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-    if path.is_symlink() or not path.is_dir():
-        raise ValueError(f"watcher control directory is not a safe directory: {path}")
+    prepare_control_dir(path, label="watcher")
 
 
 def _write_json(path: Path, payload: dict) -> None:
-    _prepare_control_dir(path.parent)
-    if path.exists() and (path.is_symlink() or path.stat().st_nlink > 1):
-        raise ValueError(f"refusing linked watcher state: {path}")
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
-    try:
-        with temporary.open("x", encoding="utf-8", newline="\n") as stream:
-            json.dump(payload, stream, indent=2, sort_keys=True)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        for attempt in range(40):
-            try:
-                os.replace(temporary, path)
-                break
-            except PermissionError:
-                if attempt == 39:
-                    raise
-                time.sleep(0.025)
-    finally:
-        temporary.unlink(missing_ok=True)
+    write_json(path, payload, label="watcher state")
 
 
 def _read_json(path: Path) -> dict | None:
-    if not path.is_file() or path.is_symlink() or path.stat().st_nlink > 1:
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return payload if isinstance(payload, dict) else None
+    return read_json(path)
 
 
 def _is_safe_regular_file(path: Path) -> bool:
-    try:
-        return path.is_file() and not path.is_symlink() and path.stat().st_nlink == 1
-    except OSError:
-        return False
+    return is_safe_regular_file(path)
 
 
 def _watchdog_event_requires_refresh(event, is_internal_event) -> bool:
@@ -99,63 +84,48 @@ def _watchdog_event_requires_refresh(event, is_internal_event) -> bool:
     return any(path and not is_internal_event(path) for path in paths)
 
 
+def _normalized_event_path(path: str | Path) -> str:
+    return os.path.normcase(os.path.abspath(os.path.expanduser(os.fspath(path))))
+
+
+def _internal_event_filter(db_path: Path, control_path: Path):
+    database = _normalized_event_path(db_path)
+    control = _normalized_event_path(control_path)
+    sqlite_artifacts = {
+        database,
+        database + "-journal",
+        database + "-shm",
+        database + "-wal",
+    }
+
+    def is_internal(raw_path: str | None) -> bool:
+        if not raw_path:
+            return False
+        candidate = _normalized_event_path(raw_path)
+        if candidate in sqlite_artifacts:
+            return True
+        try:
+            return os.path.commonpath((candidate, control)) == control
+        except ValueError:
+            return False
+
+    return is_internal
+
+
 def _write_stop_request(path: Path) -> None:
-    _prepare_control_dir(path.parent)
-    try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        if not _is_safe_regular_file(path):
-            raise ValueError(f"refusing linked watcher stop file: {path}")
-        return
-    with os.fdopen(descriptor, "w", encoding="ascii", newline="\n") as stream:
-        stream.write("stop\n")
+    write_stop_request(path, label="watcher")
 
 
 def _stop_requested(path: Path) -> bool:
-    if not path.exists():
-        return False
-    if not _is_safe_regular_file(path):
-        raise ValueError(f"refusing linked watcher stop file: {path}")
-    return True
+    return stop_requested(path, label="watcher")
 
 
 def _open_log(path: Path):
-    _prepare_control_dir(path.parent)
-    if path.exists() and not _is_safe_regular_file(path):
-        raise ValueError(f"refusing linked watcher log: {path}")
-    descriptor = os.open(path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
-    return os.fdopen(descriptor, "a", encoding="utf-8", buffering=1)
+    return open_log(path, label="watcher")
 
 
 def _process_alive(pid: int | None) -> bool:
-    if not pid or int(pid) <= 0:
-        return False
-    if os.name == "nt":
-        import ctypes
-        from ctypes import wintypes
-
-        process_query_limited_information = 0x1000
-        still_active = 259
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel32.OpenProcess.restype = wintypes.HANDLE
-        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
-        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel32.CloseHandle.restype = wintypes.BOOL
-        handle = kernel32.OpenProcess(process_query_limited_information, False, int(pid))
-        if not handle:
-            return False
-        try:
-            exit_code = wintypes.DWORD()
-            return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))) and exit_code.value == still_active
-        finally:
-            kernel32.CloseHandle(handle)
-    try:
-        os.kill(int(pid), 0)
-    except (OSError, ValueError):
-        return False
-    return True
+    return process_alive(pid)
 
 
 def watcher_status(db_path: Path, project: str) -> dict:
@@ -176,10 +146,7 @@ def watcher_status(db_path: Path, project: str) -> dict:
 
 
 def _clear_stale_control(paths: dict[str, Path]) -> None:
-    for key in ("state", "stop", "lock"):
-        path = paths[key]
-        if path.exists() and not path.is_symlink() and path.stat().st_nlink == 1:
-            path.unlink(missing_ok=True)
+    clear_control_files(paths, ("state", "stop", "lock"))
 
 
 def _worker_command(db_path: Path, root: Path, project: str, paths: dict[str, Path], interval: float) -> list[str]:
@@ -194,7 +161,17 @@ def _worker_command(db_path: Path, root: Path, project: str, paths: dict[str, Pa
     ]
     if getattr(sys, "frozen", False):
         return [str(Path(sys.executable).resolve()), "--db", str(db_path), *suffix]
-    return [str(Path(sys.executable).resolve()), "-m", "rta_brain.cli", "--db", str(db_path), *suffix]
+    return [
+        str(Path(sys.executable).resolve()),
+        "-I",
+        "-c",
+        detached_worker_bootstrap(
+            "rta_brain.watch_worker", Path(__file__).resolve().parents[1]
+        ),
+        "--db",
+        str(db_path),
+        *suffix[1:],
+    ]
 
 
 def start_watcher(
@@ -228,27 +205,17 @@ def start_watcher(
     with os.fdopen(descriptor, "w", encoding="ascii", newline="\n") as stream:
         stream.write(token_hash + "\n")
     env = {**os.environ, "RTA_SMIRTI_WATCH_TOKEN": secrets_token}
-    creationflags = 0
-    kwargs = {"start_new_session": True}
-    if os.name == "nt":
-        creationflags = 0x00000008 | 0x00000200 | 0x08000000
-        kwargs = {}
     try:
         log_stream = _open_log(paths["log"])
     except Exception:
         paths["lock"].unlink(missing_ok=True)
         raise
     try:
-        process = subprocess.Popen(
+        process = spawn_detached_worker(
             _worker_command(database, repository, project, paths, interval),
-            cwd=Path(__file__).resolve().parents[1],
-            stdin=subprocess.DEVNULL,
-            stdout=log_stream,
-            stderr=log_stream,
-            close_fds=True,
-            env=env,
-            creationflags=creationflags,
-            **kwargs,
+            log_stream,
+            env,
+            Path(__file__).resolve().parents[1],
         )
     except Exception:
         paths["lock"].unlink(missing_ok=True)
@@ -314,6 +281,7 @@ def run_watcher_worker(
     lock_file: Path,
     interval_seconds: float,
 ) -> int:
+    detach_current_worker_session()
     token = os.environ.get("RTA_SMIRTI_WATCH_TOKEN", "")
     if not token:
         raise RuntimeError("watcher launch token is missing")
@@ -322,9 +290,13 @@ def run_watcher_worker(
         raise RuntimeError("watcher launch lock does not match")
     stop_event = threading.Event()
     change_event = threading.Event()
+    pending_lock = threading.Lock()
+    pending_changes = {"paths": set(), "force_full": False}
     observer = None
     backend = "polling"
     counters = {"cycles": 0, "updated_files": 0, "removed_files": 0, "errors": 0}
+    deep_verify_interval = max(MIN_POLLING_DEEP_VERIFY_SECONDS, float(interval_seconds) * 30.0)
+    last_deep_verify = time.monotonic()
     state = {
         "project": project,
         "db_path": str(db_path.expanduser().resolve()),
@@ -334,6 +306,7 @@ def run_watcher_worker(
         "state": "starting",
         "backend": backend,
         "interval_seconds": float(interval_seconds),
+        "deep_verify_interval_seconds": deep_verify_interval,
         "started_at": _now_iso(),
         "heartbeat_at": _now_iso(),
         "last_cycle_at": None,
@@ -352,29 +325,27 @@ def run_watcher_worker(
             from watchdog.events import FileSystemEventHandler
             from watchdog.observers import Observer
 
-            database_path = db_path.expanduser().resolve()
-            database_files = {
-                database_path,
-                Path(str(database_path) + "-shm"),
-                Path(str(database_path) + "-wal"),
-            }
-            control_path = state_file.expanduser().resolve().parent
-
-            def is_internal_event(raw_path: str | None) -> bool:
-                if not raw_path:
-                    return False
-                candidate = Path(raw_path).expanduser().resolve()
-                if candidate in database_files:
-                    return True
-                try:
-                    candidate.relative_to(control_path)
-                    return True
-                except ValueError:
-                    return False
+            is_internal_event = _internal_event_filter(
+                db_path.expanduser().resolve(),
+                state_file.expanduser().resolve().parent,
+            )
 
             class Handler(FileSystemEventHandler):
                 def on_any_event(self, event) -> None:
                     if _watchdog_event_requires_refresh(event, is_internal_event):
+                        candidates = (
+                            getattr(event, "src_path", None),
+                            getattr(event, "dest_path", None),
+                        )
+                        with pending_lock:
+                            for candidate in candidates:
+                                if not candidate or is_internal_event(candidate):
+                                    continue
+                                if len(pending_changes["paths"]) >= MAX_PENDING_CHANGED_PATHS:
+                                    pending_changes["paths"].clear()
+                                    pending_changes["force_full"] = True
+                                    break
+                                pending_changes["paths"].add(_normalized_event_path(candidate))
                         change_event.set()
 
             observer = Observer()
@@ -389,18 +360,37 @@ def run_watcher_worker(
         should_index = True
         while not stop_event.is_set() and not _stop_requested(stop_file):
             if should_index:
+                with pending_lock:
+                    cycle_paths = tuple(pending_changes["paths"])
+                    force_cycle = bool(pending_changes["force_full"])
+                    pending_changes["paths"].clear()
+                    pending_changes["force_full"] = False
+                if backend == "polling" and time.monotonic() - last_deep_verify >= deep_verify_interval:
+                    force_cycle = True
                 try:
                     conn = connect(db_path)
                     try:
-                        result = ingest_repo(conn, root, project=project)
+                        result = ingest_repo(
+                            conn, root, project=project, force=force_cycle,
+                            changed_paths=cycle_paths,
+                        )
                     finally:
                         conn.close()
+                    if force_cycle:
+                        last_deep_verify = time.monotonic()
                     counters["cycles"] += 1
                     counters["updated_files"] += int(result.get("updated_files", 0))
                     counters["removed_files"] += int(result.get("removed_files", 0))
                     state["last_cycle_at"] = _now_iso()
                     state["last_error"] = None
                 except Exception as exc:
+                    with pending_lock:
+                        if not pending_changes["force_full"]:
+                            pending_changes["paths"].update(cycle_paths)
+                            if len(pending_changes["paths"]) > MAX_PENDING_CHANGED_PATHS:
+                                pending_changes["paths"].clear()
+                                pending_changes["force_full"] = True
+                        pending_changes["force_full"] = pending_changes["force_full"] or force_cycle
                     counters["errors"] += 1
                     state["last_error"] = f"{exc.__class__.__name__}: {exc}"
                 state.update(counters)

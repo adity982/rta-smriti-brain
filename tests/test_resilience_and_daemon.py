@@ -11,7 +11,9 @@ from rta_brain import db
 from rta_brain.mcp_server import McpRequestScheduler, RtaBrainMcpServer
 from rta_brain.parsers import ParserRegistry
 from rta_brain.watch_daemon import (
+    _internal_event_filter,
     _process_alive,
+    _worker_command as watcher_worker_command,
     _watchdog_event_requires_refresh,
     start_watcher,
     stop_watcher,
@@ -157,6 +159,22 @@ class RtaBrainResilienceTests(unittest.TestCase):
 
 
 class RtaBrainWatchDaemonTests(unittest.TestCase):
+    def test_source_watcher_worker_uses_the_minimal_entry_point(self):
+        database = Path("brain.sqlite")
+        command = watcher_worker_command(
+            database,
+            Path("repository"),
+            "demo",
+            {
+                "state": Path("state.json"),
+                "stop": Path("stop.request"),
+                "lock": Path("launch.lock"),
+            },
+            2.0,
+        )
+        self.assertTrue(any("rta_brain.watch_worker" in part for part in command))
+        self.assertNotIn("rta_brain.cli", command)
+
     def test_watchdog_ignores_file_access_events_but_keeps_content_changes(self):
         class Event:
             is_directory = False
@@ -170,6 +188,48 @@ class RtaBrainWatchDaemonTests(unittest.TestCase):
         self.assertFalse(_watchdog_event_requires_refresh(Event("opened"), is_internal))
         self.assertFalse(_watchdog_event_requires_refresh(Event("closed"), is_internal))
         self.assertTrue(_watchdog_event_requires_refresh(Event("modified"), is_internal))
+
+    def test_internal_event_filter_ignores_only_database_artifacts_and_control_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            database = root / "brain.sqlite"
+            control = root / ".rta-smriti-daemons"
+            control.mkdir()
+            is_internal = _internal_event_filter(database, control)
+
+            internal_paths = [
+                database,
+                Path(str(database) + "-wal"),
+                Path(str(database) + "-shm"),
+                Path(str(database) + "-journal"),
+                control / "watcher.json.tmp",
+            ]
+            for candidate in internal_paths * 100:
+                with self.subTest(candidate=candidate):
+                    self.assertTrue(is_internal(str(candidate)))
+
+            legitimate_paths = [
+                root / "brain.sqlite-notes.py",
+                root / "src" / "brain.sqlite-wal.py",
+                root / ".rta-smriti-daemons-notes.md",
+                root / "main.py",
+            ]
+            for candidate in legitimate_paths:
+                with self.subTest(candidate=candidate):
+                    self.assertFalse(is_internal(str(candidate)))
+
+    def test_watchdog_filter_handles_removed_internal_paths_without_resolving_them(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            database = root / ".rta-smriti" / "brain.sqlite"
+            control = root / ".rta-smriti" / ".rta-smriti-daemons"
+            is_internal = _internal_event_filter(database, control)
+
+            self.assertTrue(is_internal(str(database) + "-journal"))
+            self.assertTrue(is_internal(str(control / "deleted-state.json")))
+            self.assertFalse(is_internal(str(root / "deleted-project.py")))
 
     def test_process_liveness_probe_is_non_destructive(self):
         self.assertTrue(_process_alive(os.getpid()))
@@ -249,7 +309,8 @@ class RtaBrainWatchDaemonTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
             root.mkdir()
-            (root / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+            source = root / "main.py"
+            source.write_text("VALUE = 1\n", encoding="utf-8")
             brain_dir = root / ".rta-smriti"
             brain_dir.mkdir()
             db_path = brain_dir / "brain.sqlite"
@@ -264,8 +325,40 @@ class RtaBrainWatchDaemonTests(unittest.TestCase):
                 if started["backend"] != "watchdog":
                     self.skipTest("watchdog is not installed")
                 time.sleep(0.8)
-                status = watcher_status(db_path, "demo")
-                self.assertLessEqual(status["cycles"], 3, status)
+                baseline = watcher_status(db_path, "demo")["cycles"]
+                for value in range(25):
+                    conn = db.connect(db_path)
+                    try:
+                        conn.execute("CREATE TABLE IF NOT EXISTS watcher_noise(value INTEGER)")
+                        conn.execute("INSERT INTO watcher_noise(value) VALUES (?)", (value,))
+                        conn.commit()
+                    finally:
+                        conn.close()
+                time.sleep(0.8)
+                after_internal_writes = watcher_status(db_path, "demo")
+                self.assertEqual(after_internal_writes["cycles"], baseline, after_internal_writes)
+
+                original = source.stat()
+                source.write_text("VALUE = 2\n", encoding="utf-8")
+                os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+                deadline = time.time() + 8
+                indexed = ""
+                while time.time() < deadline:
+                    status = watcher_status(db_path, "demo")
+                    conn = db.connect(db_path)
+                    try:
+                        row = conn.execute(
+                            "SELECT c.text FROM chunks c JOIN sources s ON s.id = c.source_id "
+                            "JOIN projects p ON p.id = s.project_id "
+                            "WHERE p.name = 'demo' AND s.title = 'main.py' ORDER BY c.ordinal LIMIT 1"
+                        ).fetchone()
+                        indexed = row["text"] if row else ""
+                    finally:
+                        conn.close()
+                    if status["cycles"] > baseline and "VALUE = 2" in indexed:
+                        break
+                    time.sleep(0.1)
+                self.assertIn("VALUE = 2", indexed)
             finally:
                 stop_watcher(db_path, "demo", timeout=8.0)
 

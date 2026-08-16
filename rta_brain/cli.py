@@ -4,15 +4,32 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .autostart import autostart_status, disable_autostart, enable_autostart
 from .context import build_context_pack, build_continuation_prompt
+from .benchmark import default_public_benchmark_path, run_public_benchmark
 from .console import publish_readiness, run_dashboard
+from .console_daemon import (
+    console_status,
+    open_console,
+    restart_console,
+    run_console_worker,
+    start_console,
+    stop_console,
+)
 from .db import (
-    connect, doctor, get_project_settings, graph, ingest_repo, ingest_thread, init_project, reflect,
+    connect, doctor, get_project_settings, graph, graph_query, ingest_repo, ingest_thread, init_project, reflect,
     remember, save_checkpoint, search, stale_check, update_project_settings,
 )
+from .governance import create_policy, list_policies, list_receipts, preflight, retire_policy
+from .diagnostics import retrieval_diagnostics
+from .hooks import install_git_hooks, uninstall_git_hooks
+from .lifecycle import apply_memory_feedback, run_conservative_decay
+from .onboarding import SUPPORTED_TARGET_AGENTS, onboard_project
+from .portability import export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_verify
 from .project import bootstrap_project, install_local, mcp_config_payload, projects_list, self_check
 from .watch import watch_repository
 from .watch_daemon import run_watcher_worker, start_watcher, stop_watcher, watcher_status
+from .workspaces import add_project_to_workspace, create_workspace, get_workspace, list_workspaces, search_workspace
 
 
 def default_db_path() -> Path:
@@ -118,6 +135,76 @@ def build_parser() -> argparse.ArgumentParser:
     graph_cmd.add_argument("--project", default="default")
     graph_cmd.add_argument("--limit", type=int, default=100)
 
+    graph_query_cmd = sub.add_parser("graph-query", help="Traverse dependencies, dependents, or impact around an entity")
+    add_common_options(graph_query_cmd)
+    graph_query_cmd.add_argument("target")
+    graph_query_cmd.add_argument("--project", default="default")
+    graph_query_cmd.add_argument("--type", dest="query_type", choices=("dependencies", "dependents", "impact", "evidence", "relevance"), default="impact")
+    graph_query_cmd.add_argument("--depth", type=int, default=2)
+    graph_query_cmd.add_argument("--limit", type=int, default=100)
+
+    diagnostics_cmd = sub.add_parser("retrieval-diagnostics", help="Explain retrieval mode, coverage, ranking, evidence, and freshness")
+    add_common_options(diagnostics_cmd)
+    diagnostics_cmd.add_argument("query")
+    diagnostics_cmd.add_argument("--project", default="default")
+    diagnostics_cmd.add_argument("--limit", type=int, default=8)
+
+    benchmark_cmd = sub.add_parser("benchmark", help="Run the reproducible public retrieval and safety benchmark")
+    add_common_options(benchmark_cmd)
+    benchmark_cmd.add_argument("--dataset", default=str(default_public_benchmark_path()))
+    benchmark_cmd.add_argument("--include-semantic", action="store_true")
+    benchmark_cmd.add_argument("--semantic-model", default="all-MiniLM-L6-v2")
+
+    workspace_cmd = sub.add_parser("workspace", help="Create and use a multi-project workspace")
+    add_common_options(workspace_cmd)
+    workspace_cmd.add_argument("action", choices=("create", "add", "show", "list", "search"))
+    workspace_cmd.add_argument("--name")
+    workspace_cmd.add_argument("--description", default="")
+    workspace_cmd.add_argument("--project")
+    workspace_cmd.add_argument("--member-db", help="Brain database containing the member project")
+    workspace_cmd.add_argument("--role", default="member")
+    workspace_cmd.add_argument("--query")
+    workspace_cmd.add_argument("--limit", type=int, default=4)
+
+    bundle_export = sub.add_parser("bundle-export", help="Export selected memories, checkpoints, and policies with redaction")
+    add_common_options(bundle_export)
+    bundle_export.add_argument("output")
+    bundle_export.add_argument("--project", action="append", dest="projects")
+    bundle_export.add_argument("--include", action="append", choices=("memories", "checkpoints", "policies"))
+    bundle_export.add_argument("--no-redact", action="store_true")
+    bundle_export.add_argument("--preview", action="store_true", help="Inspect the proposed bundle without writing it")
+
+    bundle_import = sub.add_parser("bundle-import", help="Verify and import a selective Rta-Smriti bundle")
+    add_common_options(bundle_import)
+    bundle_import.add_argument("source")
+    bundle_import.add_argument("--conflict", choices=("rename", "merge", "fail"), default="rename")
+    bundle_import.add_argument("--preview", action="store_true", help="Validate and report conflicts without changing the brain")
+
+    snapshot_cmd = sub.add_parser("snapshot", help="Create or verify an authenticated local brain snapshot")
+    add_common_options(snapshot_cmd)
+    snapshot_cmd.add_argument("action", choices=("create", "verify"))
+    snapshot_cmd.add_argument("path")
+    snapshot_cmd.add_argument("--key", required=True)
+
+    hooks_cmd = sub.add_parser("git-hooks", help="Opt in or out of managed Git checkpoint hooks")
+    add_common_options(hooks_cmd)
+    hooks_cmd.add_argument("action", choices=("install", "uninstall"))
+    hooks_cmd.add_argument("--root", default=str(Path.cwd()))
+    hooks_cmd.add_argument("--project", default="default")
+
+    feedback_cmd = sub.add_parser("memory-feedback", help="Record evidence-backed usefulness feedback for a memory")
+    add_common_options(feedback_cmd)
+    feedback_cmd.add_argument("memory_id", type=int)
+    feedback_cmd.add_argument("--project", default="default")
+    feedback_cmd.add_argument("--outcome", choices=("helpful", "neutral", "harmful"), required=True)
+    feedback_cmd.add_argument("--evidence", default="")
+
+    decay_cmd = sub.add_parser("memory-decay", help="Conservatively age unverified inference and hypothesis memories")
+    add_common_options(decay_cmd)
+    decay_cmd.add_argument("--project", default="default")
+    decay_cmd.add_argument("--minimum-age-days", type=int, default=90)
+    decay_cmd.add_argument("--step", type=float, default=0.03)
+
     pack = sub.add_parser("context-pack", help="Build a compact task context pack")
     add_common_options(pack)
     pack.add_argument("task")
@@ -150,6 +237,42 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(reflect_cmd)
     reflect_cmd.add_argument("--project", default="default")
 
+    policy = sub.add_parser("policy", help="Create, list, or retire typed governance policies")
+    add_common_options(policy)
+    policy.add_argument("action", choices=("add", "list", "retire"))
+    policy.add_argument("--project", default="default")
+    policy.add_argument("--id", type=int, dest="policy_id")
+    policy.add_argument("--kind", choices=("constraint", "failed_approach", "fragile_path", "required_check", "prohibited_repetition"))
+    policy.add_argument("--statement")
+    policy.add_argument("--effect", choices=("warn", "block"), default="warn")
+    policy.add_argument("--action-contains", default="")
+    policy.add_argument("--path-glob", default="")
+    policy.add_argument("--required-check", default="")
+    policy.add_argument("--pramana", choices=("pratyaksha", "sabda", "anumana", "smriti", "kalpana"), default="smriti")
+    policy.add_argument("--confidence", type=float, default=0.75)
+    policy.add_argument("--verification-status", choices=("unverified", "verified", "failed", "stale"), default="unverified")
+    policy.add_argument("--source-path")
+    policy.add_argument("--source-hash")
+    policy.add_argument("--verification-command")
+    policy.add_argument("--expires-at")
+    policy.add_argument("--non-overrideable", action="store_true")
+    policy.add_argument("--include-retired", action="store_true")
+    policy.add_argument("--reason")
+
+    preflight_cmd = sub.add_parser("preflight", help="Evaluate an intended action against project governance")
+    add_common_options(preflight_cmd)
+    preflight_cmd.add_argument("action")
+    preflight_cmd.add_argument("--project", default="default")
+    preflight_cmd.add_argument("--path")
+    preflight_cmd.add_argument("--check", action="append", default=[])
+    preflight_cmd.add_argument("--override-reason")
+    preflight_cmd.add_argument("--actor", default="operator")
+
+    receipts_cmd = sub.add_parser("governance-receipts", help="List governance override receipts")
+    add_common_options(receipts_cmd)
+    receipts_cmd.add_argument("--project", default="default")
+    receipts_cmd.add_argument("--limit", type=int, default=100)
+
     mcp_config = sub.add_parser("mcp-config", help="Generate an MCP host config snippet")
     add_common_options(mcp_config)
     mcp_config.add_argument("--project", default="default")
@@ -162,6 +285,19 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap.add_argument("--brain-dir", default=str(Path.home() / "Documents" / "Codex" / "brains"))
     bootstrap.add_argument("--write-agents", action="store_true")
     bootstrap.add_argument("--embedding-provider", choices=("none", "hash", "sentence-transformers"), default="hash")
+
+    start = sub.add_parser("start", help="Onboard a project and start its local brain in one command")
+    start.add_argument("path")
+    start.add_argument("--project")
+    start.add_argument("--brain-dir", default=str(Path.home() / "Documents" / "Codex" / "brains"))
+    start.add_argument("--target-agent", choices=tuple(sorted(SUPPORTED_TARGET_AGENTS)), default="universal")
+    start.add_argument("--write-agents", action="store_true", help="Add the Rta-Smriti bridge to project agent files")
+    start.add_argument("--embedding-provider", choices=("none", "hash", "sentence-transformers"), default="hash")
+    start.add_argument("--interval", type=float, default=2.0)
+    start.add_argument("--port", type=int, default=8765)
+    start.add_argument("--no-open", action="store_true")
+    start.add_argument("--no-watcher", action="store_true")
+    start.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Emit stable JSON")
 
     self_check_cmd = sub.add_parser("self-check", help="Verify that a project brain is ready to use")
     add_common_options(self_check_cmd)
@@ -188,6 +324,31 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard.add_argument("--host", choices=("127.0.0.1", "localhost"), default="127.0.0.1", help="Loopback host only")
     dashboard.add_argument("--port", type=int, default=8765)
     dashboard.add_argument("--no-open", action="store_true", help="Do not open the browser automatically")
+
+    console = sub.add_parser("console", help="Manage the terminal-independent operator console")
+    console.add_argument(
+        "action",
+        choices=("start", "open", "status", "restart", "stop", "login-enable", "login-disable", "login-status"),
+    )
+    console.add_argument("--brain-dir", default=str(Path.home() / "Documents" / "Codex" / "brains"))
+    console.add_argument("--db", default=None, help="Default brain DB for the opened console")
+    console.add_argument("--project", default=None, help="Default project for the opened console")
+    console.add_argument("--host", choices=("127.0.0.1", "localhost"), default="127.0.0.1")
+    console.add_argument("--port", type=int, default=8765)
+    console.add_argument("--no-open", action="store_true", help="Do not open the browser")
+    console.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Emit stable JSON")
+
+    console_worker = sub.add_parser("_console-worker", help=argparse.SUPPRESS)
+    console_worker.add_argument("--tool-root", required=True)
+    console_worker.add_argument("--brain-dir", required=True)
+    console_worker.add_argument("--default-db")
+    console_worker.add_argument("--default-project")
+    console_worker.add_argument("--host", required=True)
+    console_worker.add_argument("--port", type=int, required=True)
+    console_worker.add_argument("--state-file", required=True)
+    console_worker.add_argument("--stop-file", required=True)
+    console_worker.add_argument("--lock-file", required=True)
+    console_worker.add_argument("--token-file", required=True)
     return parser
 
 
@@ -198,6 +359,78 @@ def build_mcp_config(db_path: str, project: str, name: str) -> dict:
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "start":
+        try:
+            payload = onboard_project(
+                tool_root(),
+                Path(args.path),
+                brain_dir=Path(args.brain_dir),
+                project=args.project,
+                target_agent=args.target_agent,
+                write_agents=args.write_agents,
+                embedding_provider=args.embedding_provider,
+                watcher_interval=args.interval,
+                port=args.port,
+                open_browser=not args.no_open,
+                start_sync=not args.no_watcher,
+            )
+            emit(payload, args.json)
+            return 0 if payload.get("ready") else 1
+        except Exception as exc:
+            error = {"status": "error", "ready": False, "error": {"type": exc.__class__.__name__, "message": str(exc)}}
+            if getattr(args, "json", False):
+                print(json.dumps(error, indent=2, sort_keys=True), file=sys.stderr)
+            else:
+                print(f"error: {exc}", file=sys.stderr)
+            return 1
+    if args.command == "_console-worker":
+        return run_console_worker(
+            Path(args.tool_root),
+            Path(args.brain_dir),
+            Path(args.default_db) if args.default_db else None,
+            args.default_project,
+            args.host,
+            args.port,
+            Path(args.state_file),
+            Path(args.stop_file),
+            Path(args.lock_file),
+            Path(args.token_file),
+        )
+    if args.command == "console":
+        try:
+            brain_dir = Path(args.brain_dir)
+            if args.action == "login-status":
+                payload = autostart_status(brain_dir)
+            elif args.action == "login-enable":
+                payload = enable_autostart(tool_root(), brain_dir)
+            elif args.action == "login-disable":
+                payload = disable_autostart(brain_dir)
+            elif args.action == "status":
+                payload = console_status(brain_dir)
+            elif args.action == "open":
+                payload = open_console(brain_dir, launch_browser=not args.no_open)
+            elif args.action == "stop":
+                payload = stop_console(brain_dir)
+            else:
+                operation = restart_console if args.action == "restart" else start_console
+                payload = operation(
+                    tool_root(),
+                    brain_dir,
+                    default_db=Path(args.db) if args.db else None,
+                    default_project=args.project,
+                    host=args.host,
+                    port=args.port,
+                    open_browser=not args.no_open,
+                )
+            emit(payload, args.json)
+            return 0
+        except Exception as exc:
+            error = {"status": "error", "error": {"type": exc.__class__.__name__, "message": str(exc)}}
+            if getattr(args, "json", False):
+                print(json.dumps(error, indent=2, sort_keys=True), file=sys.stderr)
+            else:
+                print(f"error: {exc}", file=sys.stderr)
+            return 1
     if args.command == "dashboard":
         run_dashboard(
             tool_root(),
@@ -252,6 +485,7 @@ def main(argv=None) -> int:
             else:
                 print(f"error: {exc}", file=sys.stderr)
             return 1
+    exit_code = 0
     try:
         conn = connect(Path(args.db))
         with conn:
@@ -301,6 +535,67 @@ def main(argv=None) -> int:
                 payload = search(conn, args.query, project=args.project, limit=args.limit)
             elif args.command == "graph":
                 payload = graph(conn, project=args.project, limit=args.limit)
+            elif args.command == "graph-query":
+                payload = graph_query(
+                    conn, project=args.project, query_type=args.query_type,
+                    target=args.target, depth=args.depth, limit=args.limit,
+                )
+            elif args.command == "retrieval-diagnostics":
+                payload = retrieval_diagnostics(conn, args.query, project=args.project, limit=args.limit)
+            elif args.command == "benchmark":
+                payload = run_public_benchmark(
+                    Path(args.dataset), include_semantic=args.include_semantic,
+                    semantic_model=args.semantic_model,
+                )
+            elif args.command == "workspace":
+                if args.action == "list":
+                    payload = list_workspaces(conn)
+                elif not args.name:
+                    raise ValueError("workspace action requires --name")
+                elif args.action == "create":
+                    payload = create_workspace(conn, args.name, args.description)
+                elif args.action == "add":
+                    if not args.project:
+                        raise ValueError("workspace add requires --project")
+                    payload = add_project_to_workspace(
+                        conn, workspace=args.name, project=args.project, role=args.role, db_path=args.member_db,
+                    )
+                elif args.action == "search":
+                    if not args.query:
+                        raise ValueError("workspace search requires --query")
+                    payload = search_workspace(conn, workspace=args.name, query=args.query, limit_per_project=args.limit)
+                else:
+                    payload = get_workspace(conn, args.name)
+            elif args.command == "bundle-export":
+                payload = export_bundle(
+                    conn, Path(args.output), projects=args.projects,
+                    include=tuple(args.include or ("memories", "checkpoints", "policies")), redact=not args.no_redact,
+                    preview=args.preview,
+                )
+            elif args.command == "bundle-import":
+                payload = (
+                    inspect_bundle(Path(args.source), conn=conn)
+                    if args.preview else import_bundle(conn, Path(args.source), conflict=args.conflict)
+                )
+            elif args.command == "snapshot":
+                payload = (
+                    snapshot_create(Path(args.db), Path(args.path), key_path=Path(args.key))
+                    if args.action == "create" else snapshot_verify(Path(args.path), key_path=Path(args.key))
+                )
+            elif args.command == "git-hooks":
+                payload = (
+                    install_git_hooks(Path(args.root), db_path=Path(args.db), project=args.project)
+                    if args.action == "install" else uninstall_git_hooks(Path(args.root))
+                )
+            elif args.command == "memory-feedback":
+                payload = apply_memory_feedback(
+                    conn, project=args.project, memory_id=args.memory_id,
+                    outcome=args.outcome, evidence=args.evidence,
+                )
+            elif args.command == "memory-decay":
+                payload = run_conservative_decay(
+                    conn, project=args.project, minimum_age_days=args.minimum_age_days, step=args.step,
+                )
             elif args.command == "context-pack":
                 payload = build_context_pack(
                     conn, args.task, project=args.project, limit=args.limit, max_tokens=args.max_tokens
@@ -328,6 +623,50 @@ def main(argv=None) -> int:
                 payload = build_continuation_prompt(conn, project=args.project)
             elif args.command == "reflect":
                 payload = reflect(conn, project=args.project)
+            elif args.command == "policy":
+                if args.action == "list":
+                    payload = list_policies(conn, project=args.project, include_retired=args.include_retired)
+                elif args.action == "retire":
+                    if args.policy_id is None or not args.reason:
+                        raise ValueError("policy retire requires --id and --reason")
+                    payload = retire_policy(conn, project=args.project, policy_id=args.policy_id, reason=args.reason)
+                else:
+                    if not args.kind or not args.statement:
+                        raise ValueError("policy add requires --kind and --statement")
+                    payload = create_policy(
+                        conn,
+                        project=args.project,
+                        kind=args.kind,
+                        statement=args.statement,
+                        effect=args.effect,
+                        action_contains=args.action_contains,
+                        path_glob=args.path_glob,
+                        required_check=args.required_check,
+                        pramana=args.pramana,
+                        confidence=args.confidence,
+                        provenance={
+                            "verification_status": args.verification_status,
+                            "source_path": args.source_path,
+                            "source_hash": args.source_hash,
+                            "command": args.verification_command,
+                        },
+                        overrideable=not args.non_overrideable,
+                        expires_at=args.expires_at,
+                    )
+            elif args.command == "preflight":
+                payload = preflight(
+                    conn,
+                    project=args.project,
+                    action=args.action,
+                    path=args.path,
+                    completed_checks=args.check,
+                    override_reason=args.override_reason,
+                    actor=args.actor,
+                )
+                if payload["decision"] == "block":
+                    exit_code = 2
+            elif args.command == "governance-receipts":
+                payload = list_receipts(conn, project=args.project, limit=args.limit)
             elif args.command == "mcp-config":
                 payload = build_mcp_config(args.db, args.project, args.name)
             elif args.command == "bootstrap-project":
@@ -352,7 +691,7 @@ def main(argv=None) -> int:
                 parser.error(f"unknown command: {args.command}")
                 return 2
         emit(payload, args.json)
-        return 0
+        return exit_code
     except Exception as exc:
         error = {"status": "error", "error": {"type": exc.__class__.__name__, "message": str(exc)}}
         if getattr(args, "json", False):

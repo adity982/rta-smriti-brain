@@ -214,6 +214,13 @@ class RtaBrainBlueprintHardeningTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         self.assertTrue((root / "rta-smriti.spec").is_file())
         self.assertTrue((root / "scripts" / "build_binary.py").is_file())
+        self.assertTrue((root / "scripts" / "package_release_artifacts.py").is_file())
+        spec = (root / "rta-smriti.spec").read_text(encoding="utf-8")
+        self.assertIn('"data/*.json"', spec)
+        workflow = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        self.assertIn("python scripts/smoke_binary.py", workflow)
+        self.assertIn("python scripts/package_release_artifacts.py", workflow)
+        self.assertIn("SHA256SUMS", (root / "scripts" / "package_release_artifacts.py").read_text(encoding="utf-8"))
         metadata = (root / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn('binary = ["pyinstaller', metadata.lower())
 

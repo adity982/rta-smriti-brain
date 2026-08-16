@@ -57,8 +57,8 @@ img { display: block; max-width: 100%; }
 .heroProof span { display: grid; gap: 3px; padding-left: 12px; border-left: 1px solid rgba(94,234,212,.35); }
 .heroProof strong { color: #effbff; font-size: 19px; }
 .nextCue { position: absolute; z-index: 3; left: 50%; bottom: 20px; display: flex; align-items: center; gap: 6px; color: #89a0b3; font-size: 11px; transform: translateX(-50%) rotate(90deg); transform-origin: center; }
-section:not(.hero) { opacity: .45; transform: translateY(18px); transition: opacity .65s ease, transform .65s ease; }
-section.revealed { opacity: 1; transform: none; }
+section:not(.hero) { transform: translateY(18px); transition: transform .65s ease; }
+section.revealed { transform: none; }
 .problemBand, .architecture, .difference, .installSection { padding: 95px 0; border-bottom: 1px solid var(--line); }
 .problemGrid, .pramanaGrid, .installGrid { display: grid; grid-template-columns: .9fr 1.1fr; gap: 10%; align-items: start; }
 h2 { margin: 15px 0 0; font-size: clamp(35px, 4.4vw, 62px); line-height: 1.04; letter-spacing: 0; text-wrap: balance; }
@@ -96,7 +96,7 @@ h2 { margin: 15px 0 0; font-size: clamp(35px, 4.4vw, 62px); line-height: 1.04; l
 .pramanaResult p { margin: 6px 0 0; color: #93a9bc; line-height: 1.5; }
 .comparisonTable { border-top: 1px solid var(--line); }
 .comparisonHead, .comparisonRow { display: grid; grid-template-columns: 1fr 1fr 1.35fr; gap: 22px; align-items: center; min-height: 57px; padding-inline: 12px; border-bottom: 1px solid var(--line); }
-.comparisonHead { color: #61798d; font-size: 10px; font-weight: 850; text-transform: uppercase; }
+.comparisonHead { color: #8fa7b9; font-size: 10px; font-weight: 850; text-transform: uppercase; }
 .comparisonRow { color: #91a8ba; font-size: 13px; }
 .comparisonRow > span:first-child { color: #d8e7f2; font-weight: 700; }
 .highlightCell { display: inline-flex; gap: 7px; align-items: center; color: #c6faef; }

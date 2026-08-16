@@ -180,7 +180,7 @@ def upsert_agent_index(repo_path: Path, tool_root: Path, db_path: Path, project:
 
 
 def bootstrap_project(
-    conn: sqlite3.Connection,
+    _compatibility_conn: sqlite3.Connection | None,
     repo_path: Path,
     project: str,
     brain_dir: Path,
