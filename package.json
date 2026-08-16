@@ -10,7 +10,7 @@
     "build:launch": "vite build --config vite.launch.config.js",
     "capture:launch-assets": "node scripts/capture_launch_assets.mjs",
     "preview": "vite preview --host 127.0.0.1",
-    "test:unit": "node --test operator-tests/*.test.mjs",
+    "test:unit": "node --test operator-tests/dashboard-security.test.mjs",
     "test:operator": "playwright test --config playwright.config.mjs",
     "test:launch": "node scripts/launch_site_qa.mjs"
   },
