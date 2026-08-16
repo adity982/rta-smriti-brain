@@ -4,7 +4,7 @@
 
 **A local project brain for AI coding agents.**
 
-[Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second product demo](launch-assets/product-hunt/rta-smriti-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
+[Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second product demo](launch-assets/product-hunt/rta-smriti-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Public benchmark](docs/PUBLIC_BENCHMARK.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
 
 Rta-Smriti Brain turns a project repository, long agent threads, durable decisions, and evidence into a small local memory graph that Codex, Claude Code, Cursor, or any MCP-capable agent can reuse before doing work.
 
@@ -30,6 +30,12 @@ Rta-Smriti gives each project a memory that stays on your machine.
 - Watches active repositories with foreground or managed-background incremental sync and reuses a persistent SHA-256 cache for deep freshness checks.
 - Supports optional local hybrid retrieval through a built-in deterministic hash provider or an installed Sentence Transformers model.
 - Supports built-in regex parsing plus optional Tree-sitter and explicit LSP adapter commands.
+- Evaluates intended actions through an evidence-aware **Action Gate** that returns `allow`, `warn`, or `block` with short-lived decision receipts.
+- Explains retrieval provider, embedding coverage, freshness, latency, lexical/semantic rank, and source-hash provenance instead of hiding ranking decisions.
+- Traverses bounded dependency, dependent, impact, evidence, and relevance subgraphs with explicit relation filters, including approximate calls and test links.
+- Searches existing project brains through query-only local workspaces without merging or mutating their databases.
+- Previews and exports selective redacted memory bundles, stages verified imports before one atomic commit, and verifies authenticated private snapshots.
+- Records helpful or harmful memory outcomes and conservatively ages only eligible unverified inference or hypothesis records.
 - Keeps data local by default: no API keys, no telemetry, no cloud database.
 
 ## Why It Is Different
@@ -46,6 +52,9 @@ Rta-Smriti combines all three into a small, inspectable project brain:
 | Context pack | A compact, copyable brief for the next agent turn |
 | Continuation checkpoint | Structured state that tells the next agent what is done, what remains, and what not to repeat |
 | Pramana model | Evidence labels so observed facts, trusted docs, inference, memory, and hypotheses are not treated equally |
+| Action Gate | Pre-action checks that surface trusted constraints, required proof, fragile paths, and prohibited repetition |
+| Explainable intelligence | Retrieval diagnostics and bounded graph impact queries with evidence hashes and confidence |
+| Local workspaces | Search across explicitly selected project brains while preserving database isolation |
 | Local operator console | Visual graph, freshness, publish checks, bootstrap, and memory reflection |
 
 The core idea is simple: **memory should not only remember. It should help an agent decide what context deserves trust right now.**
@@ -101,40 +110,40 @@ optional extras, troubleshooting, and uninstall instructions.
 
 ## Quick Start
 
-Create one central brain directory, then bootstrap a project:
+Create one central brain directory, then onboard and open a project in one command. This detects the canonical Git root, creates or migrates the brain, indexes it, starts the background watcher and managed console, and opens an authorized browser session:
 
 ```powershell
 $BrainDir = "$env:USERPROFILE\Documents\Rta-Smriti\brains"
-& $RtaBrain --json bootstrap-project C:\path\to\my-project --project my-project --brain-dir $BrainDir --write-agents
-& $RtaBrain --db "$BrainDir\my-project.sqlite" context-pack "the task I want the agent to do" --project my-project
+& $RtaBrain start C:\path\to\my-project --project my-project --brain-dir $BrainDir --write-agents
 ```
 
 ```bash
 BrainDir="$HOME/.local/share/rta-smriti/brains"
-"$RtaBrain" --json bootstrap-project /path/to/my-project --project my-project --brain-dir "$BrainDir" --write-agents
-"$RtaBrain" --db "$BrainDir/my-project.sqlite" context-pack "the task I want the agent to do" --project my-project
+"$RtaBrain" start /path/to/my-project --project my-project --brain-dir "$BrainDir" --write-agents
 ```
 
 ## Dashboard
 
-Run the local operator console:
+The `start` command opens the managed console automatically. Later, use its lifecycle commands without keeping a terminal open:
 
 ```powershell
-& $RtaBrain dashboard --brain-dir $BrainDir
+& $RtaBrain console open --brain-dir $BrainDir
+& $RtaBrain console status --brain-dir $BrainDir --json
 ```
 
 ```bash
-"$RtaBrain" dashboard --brain-dir "$BrainDir"
+"$RtaBrain" console open --brain-dir "$BrainDir"
+"$RtaBrain" console status --brain-dir "$BrainDir" --json
 ```
 
-Keep this terminal open while using the dashboard. Open the complete URL printed
-by the command, including its one-session `#token=...` fragment. The dashboard is
-an explicit foreground operator surface; after a reboot, closed terminal, or
-`connection refused` message, rerun it and use the newly printed URL. Repository
-sync can run separately in the background from **Settings** or the `watcher`
-command and can be stopped explicitly at any time.
+The managed console survives terminal closure. `console open` retrieves the current
+session URL; `console restart` repairs stale state or a failed process; `console stop`
+ends it explicitly. Login startup is optional and owner-controlled through
+`console login-enable` / `console login-disable` on Windows, macOS, and Linux.
 
 The dashboard runs on `127.0.0.1` and includes:
+
+![Rta-Smriti v0.4 operator console with evidence graph and retrieval diagnostics](launch-assets/screenshots/operator-console-v0.4.png)
 
 - **Project switcher**: every local brain, readiness, file count, memory count
 - **Canonical-root and Git identity**: bound project root, repository root, branch, HEAD, dirty-file count, and duplicate-root warnings
@@ -147,10 +156,13 @@ The dashboard runs on `127.0.0.1` and includes:
 - **Types**: show/hide file, memory, docs, config, test, data, and artifact nodes
 - **Context-Pack Studio**: choose any supported or custom target agent, select a 2K/4K/8K/16K token budget, type a task, and generate a focused pack; pack text and receipt metadata remain in the current browser session only
 - **Evidence inspector**: open the optional detail panel for the selected node, must-know memories, and measured fresh/changed/missing/added/blocked source counts
-- **Incremental refresh**: update the selected repo index from the freshness control; unchanged projects use a fast stat manifest
+- **Incremental refresh**: update the selected repo index from the freshness control; filesystem events force a bounded content-hash check for touched paths, while unchanged projects use a fast stat manifest
 - **Indexing policy**: configure the fail-closed source-size cap, parser adapter, and optional local hybrid retrieval per project
 - **References and backlinks**: inspect why a node is connected and follow its visible relationships
-- **Memory ledger**: inspect stored memories and run reflection
+- **Action Gate**: evaluate a proposed action against trusted policies, required checks, expiry, scope, and provenance; owner overrides create durable receipts
+- **Intelligence**: explain retrieval and run bounded dependency, dependent, impact, evidence, or relevance queries
+- **Workspaces**: group independent local brains and search them together without copying or rebinding their repositories
+- **Memory ledger**: inspect stored memories, record helpful/harmful outcomes, and run conservative reflection
 - **Continue Work**: edit the structured checkpoint and copy a ready-to-use prompt for a new agent task
 - **Launch readiness**: repo files and publish checks
 - **Bootstrap flow**: create a new project brain from the UI
@@ -204,6 +216,16 @@ settings          Read or update a project's indexing and retrieval policy
 ingest-thread     Index a long thread, transcript, or handoff file
 search            Search memories and indexed files
 graph             Read the local entity graph
+graph-query       Traverse a bounded dependency, dependent, impact, evidence, or relevance subgraph
+retrieval-diagnostics Explain retrieval mode, coverage, rank components, freshness, and evidence
+benchmark         Run the packaged reproducible public benchmark
+workspace         Create, inspect, and search an isolated multi-brain workspace
+bundle-export     Preview or export selected memories, checkpoints, and policies with redaction
+bundle-import     Preview or atomically import a verified bundle with an explicit conflict policy
+snapshot          Create or verify an authenticated HMAC-SHA256 brain snapshot
+git-hooks         Opt in or out of the managed post-commit checkpoint hook
+memory-feedback   Record an operator-confirmed helpful, neutral, or harmful outcome
+memory-decay      Conservatively age eligible unverified inference and hypothesis memories
 context-pack      Build a focused task context pack
 stale-check       Check stat-manifest freshness; add --deep for SHA-256 verification
 checkpoint        Save structured continuation state for the next agent task
@@ -211,11 +233,13 @@ continue-prompt   Build a compact new-task prompt from root, Git, freshness, and
 reflect           Consolidate duplicate memories and flag simple contradictions
 mcp-config        Generate an MCP host config snippet
 bootstrap-project Create a brain, index a repo, and optionally write agent instructions
+start             Onboard a project and launch watcher plus managed console in one command
 self-check        Verify that a project brain is ready
 projects-list     List projects registered in a brain database
 install-local     Install native Windows or POSIX command wrappers
 doctor            Verify local brain health
 dashboard         Run the local operator console
+console           Start, open, inspect, restart, stop, or configure login startup
 publish-readiness Check whether the package is ready to publish
 ```
 
@@ -224,6 +248,15 @@ publish-readiness Check whether the package is ready to publish
 Rta-Smriti ships a stdio MCP server. Run `mcp-config` as shown above to generate
 the correct absolute `command` and `args` for the current operating system and
 Python environment; do not hand-edit a Windows path into a macOS or Linux host.
+
+The generated server is project-bound and read-only by default. Memory writes,
+canonical-repository ingestion, and thread ingestion require explicit startup
+capabilities: `--allow-memory-writes`, `--allow-repo-ingestion`, and
+`--allow-thread-ingestion`. Thread ingestion also requires one or more
+`--allow-thread-root` values; the selected file is consumed through the same
+descriptor-bound root check. Agent-authored memories are always stored as
+unverified `anumana` with confidence capped at `0.75`. Owner-only governance
+mutation, required-check attestation, and overrides are never exposed to MCP.
 
 Tools exposed:
 
@@ -234,10 +267,19 @@ Tools exposed:
 - `brain_ingest_repo`
 - `brain_ingest_thread`
 - `brain_repo_map`
+- `brain_graph_query`
+- `brain_retrieval_diagnostics`
+- `brain_workspace_list`
+- `brain_workspace_search`
 - `brain_stale_check`
 - `brain_checkpoint`
 - `brain_continuation_prompt`
 - `brain_reflect`
+- `brain_policy_add` (owner-only)
+- `brain_policy_list`
+- `brain_policy_retire` (owner-only)
+- `brain_preflight` (agents cannot attest checks or override)
+- `brain_governance_receipts`
 - `brain_doctor`
 
 ## Real-World Use Cases
@@ -249,6 +291,8 @@ Tools exposed:
 - **Refactors and migrations**: trace dependencies and retain the decisions that explain why boundaries exist.
 - **Release and security reviews**: pair live freshness checks with trusted constraints, evidence, and publish readiness.
 - **Multi-project operation**: switch between separate local brains without mixing one client, product, or codebase into another.
+- **Cross-repository change planning**: search an explicit workspace and inspect bounded impact links before touching a shared contract.
+- **Governed agent work**: stop a release, migration, or fragile-path change when required evidence is missing, while keeping overrides visible and attributable.
 - **Research and product work**: keep source-backed findings, hypotheses, and decisions distinguishable through pramana labels.
 
 The generated MCP configuration uses the active Python interpreter plus the
@@ -262,6 +306,7 @@ Rta-Smriti is local-first by design:
 - It does not require API keys.
 - It does not send repo content to a hosted service.
 - It stores project memory in local SQLite files.
+- Brain databases reject linked files, use private POSIX modes where applicable, and disable SQLite trusted schema while retaining FTS5.
 - It stores canvas layouts and the selected agent in browser local storage. Context-pack text and receipt metadata are session-only.
 - Its dashboard uses a per-launch capability token and rejects non-loopback binding, hostile Host headers, cross-port origins, hard-linked files, and database paths outside the configured brain directory.
 - It ignores common noisy folders such as `.git`, `node_modules`, `.venv`, `dist`, `build`, `.next`, and cache directories.
@@ -273,9 +318,10 @@ See [SECURITY.md](SECURITY.md) and [docs/PUBLISHING_PRIVACY.md](docs/PUBLISHING_
 
 Alpha, local-first, working developer tool.
 
-Verified:
+Verified in the current Windows release-candidate run; the same checked-in
+workflow defines Windows, Ubuntu, and macOS jobs that must pass after the
+owner-approved push:
 
-- Windows, macOS, and Linux verification in GitHub Actions
 - Python CLI
 - SQLite schema and FTS search
 - repo ingestion
@@ -290,6 +336,11 @@ Verified:
 - configurable fail-closed large-file policy
 - canonical-root protection and Git checkout awareness
 - structured checkpoints, claim provenance, and compact freshness receipts
+- managed console lifecycle, optional login startup, and one-command onboarding
+- evidence-aware Action Gate with hash-backed policies and short-lived decision receipts
+- retrieval diagnostics, bounded graph queries, and a packaged privacy-safe benchmark harness
+- isolated cross-brain workspaces, redacted selective bundles, and authenticated local snapshots
+- opt-in Git checkpoint hooks plus operator-confirmed reinforcement and conservative decay
 
 Intentional design constraints:
 
@@ -300,11 +351,16 @@ Intentional design constraints:
 
 Current alpha limitations:
 
-- Managed background sync is per project and user-started. It is not installed as a privileged operating-system service and does not auto-start after a reboot.
+- Managed sync and console processes are user-level, not privileged services. Login startup is optional and must be enabled explicitly.
 - Hybrid retrieval is dependency-free in the recommended bootstrap flow through the built-in hash provider. Sentence Transformers remains optional and requires a separately installed local package and model.
 - Auto parsing is the default: installed Tree-sitter grammars are used for supported languages, with deterministic regex fallback. LSP integration requires an explicitly configured local adapter command.
 - The first deep SHA-256 pass can still take several minutes on repositories with tens of thousands of files. Later checks reuse hashes when file size and modification time are unchanged.
+- Watchdog events content-hash each touched path even when size and timestamp appear unchanged. Polling-only workers force a periodic deep verification at least every five minutes, so same-stat changes may be detected on that cadence rather than immediately.
 - The per-file ingestion cap is configurable up to 16 MB. Files above the selected cap remain blocked and keep freshness fail-closed.
+- Call edges are approximate and use deterministic parsing fallbacks; they are impact hints, not compiler-perfect call graphs.
+- Authenticated snapshots use a local shared HMAC key. They detect tampering but are not public-key signatures, encrypted backups, or safe to publish.
+- Snapshot verification accepts at most a 64 MiB SQLite payload; legacy snapshot envelopes are capped at 16 MiB. Selective bundle inputs are capped at 25 MB and consumed through stable bounded reads.
+- The public benchmark is a small synthetic reproducibility and regression harness. Optional Sentence Transformers comparison is explicit and reports `not_requested` or `unavailable` honestly. It is not external proof of superiority over other memory systems.
 
 See [ROADMAP.md](ROADMAP.md) for planned improvements. Local-first operation and inspectable evidence remain non-negotiable.
 

@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import sqlite3
 from datetime import datetime, timezone
@@ -35,14 +36,67 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _is_reparse_point(path: Path) -> bool:
+    try:
+        attributes = int(getattr(path.lstat(), "st_file_attributes", 0))
+    except OSError:
+        return False
+    return bool(attributes & 0x400)
+
+
+def _prepare_database_path(db_path: Path) -> Path:
+    requested = Path(db_path).expanduser()
+    if requested.is_symlink():
+        raise ValueError(f"brain database must not be a linked file: {requested}")
+    resolved = requested.resolve()
+    parent = resolved.parent
+    parent_existed = parent.exists()
+    parent.mkdir(parents=True, exist_ok=True)
+    if parent.is_symlink() or _is_reparse_point(parent) or not parent.is_dir():
+        raise ValueError(f"brain database directory is not a safe directory: {parent}")
+    if os.name != "nt" and not parent_existed:
+        parent.chmod(0o700)
+
+    if not resolved.exists():
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        try:
+            descriptor = os.open(resolved, flags, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            os.close(descriptor)
+    try:
+        stat = resolved.lstat()
+    except OSError as exc:
+        raise ValueError(f"brain database is not accessible: {resolved}") from exc
+    if (
+        not resolved.is_file()
+        or resolved.is_symlink()
+        or _is_reparse_point(resolved)
+        or stat.st_nlink != 1
+    ):
+        raise ValueError(f"brain database must be an existing unlinked regular file: {resolved}")
+    if os.name != "nt":
+        resolved.chmod(0o600)
+    return resolved
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    database = _prepare_database_path(db_path)
+    conn = sqlite3.connect(str(database))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA trusted_schema = OFF")
+    if os.name != "nt":
+        for suffix in ("", "-wal", "-shm"):
+            sidecar = Path(str(database) + suffix)
+            if sidecar.exists() and sidecar.is_file() and not sidecar.is_symlink():
+                sidecar.chmod(0o600)
     return conn
 
 
@@ -150,6 +204,50 @@ def init_schema(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS governance_decisions (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            action_digest TEXT NOT NULL,
+            policy_digest TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            valid_until TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS workspaces (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS workspace_projects (
+            workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            role TEXT NOT NULL DEFAULT 'member',
+            added_at TEXT NOT NULL,
+            PRIMARY KEY(workspace_id, project_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS workspace_members (
+            workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            db_path TEXT NOT NULL,
+            project_name TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'member',
+            added_at TEXT NOT NULL,
+            PRIMARY KEY(workspace_id, db_path, project_name)
+        );
+
+        CREATE TABLE IF NOT EXISTS memory_feedback (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            memory_id INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+            outcome TEXT NOT NULL CHECK(outcome IN ('helpful', 'neutral', 'harmful')),
+            evidence TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS entities (
             id INTEGER PRIMARY KEY,
             project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -254,6 +352,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_checkpoints_project_updated ON checkpoints(project_id, updated_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_governance_policies_project_status ON governance_policies(project_id, status, id);
         CREATE INDEX IF NOT EXISTS idx_governance_receipts_project_created ON governance_receipts(project_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_governance_decisions_project_created ON governance_decisions(project_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_feedback_memory_created ON memory_feedback(memory_id, created_at DESC);
         """
     )
     project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
@@ -746,12 +846,13 @@ def _collect_json_strings(value) -> list[str]:
     return []
 
 
-def _read_thread_text(path: Path) -> str:
-    if path.stat().st_size > MAX_THREAD_BYTES:
-        raise ValueError(f"thread exceeds the {MAX_THREAD_BYTES // (1024 * 1024)} MB ingestion limit")
+def _read_thread_text(path: Path, *, root: Path | None = None) -> str:
+    raw = read_text(path, MAX_THREAD_BYTES, root=root)
+    if raw is None:
+        raise ValueError("thread input is linked, oversized, outside its root, or changed while being read")
     if path.suffix.lower() == ".jsonl":
         parts = []
-        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        for line in raw.splitlines():
             if not line.strip():
                 continue
             try:
@@ -761,7 +862,7 @@ def _read_thread_text(path: Path) -> str:
             else:
                 parts.extend(_collect_json_strings(payload))
         return "\n\n".join(part.strip() for part in parts if part and part.strip())
-    return path.read_text(encoding="utf-8", errors="ignore")
+    return raw
 
 
 def _candidate_memory_type(text: str) -> str | None:
@@ -775,12 +876,19 @@ def _candidate_memory_type(text: str) -> str | None:
     return None
 
 
-def ingest_thread(conn: sqlite3.Connection, path: Path, project: str = "default", title: str | None = None) -> dict:
+def ingest_thread(
+    conn: sqlite3.Connection,
+    path: Path,
+    project: str = "default",
+    title: str | None = None,
+    *,
+    root: Path | None = None,
+) -> dict:
     init_schema(conn)
     path = path.resolve()
     if not path.exists() or not path.is_file():
         raise ValueError(f"thread path does not exist or is not a file: {path}")
-    text = _read_thread_text(path)
+    text = _read_thread_text(path, root=root)
     thread_hash = sha256_text(text)
     project_id = ensure_project(conn, project)
     source_title = title or path.name
@@ -910,18 +1018,35 @@ def _configured_manifest_digest(file_digest: str, settings: dict, parser_registr
     }, sort_keys=True))
 
 
+def _changed_path_keys(root: Path, changed_paths) -> set[str]:
+    keys: set[str] = set()
+    for raw_path in changed_paths or ():
+        candidate = Path(raw_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        absolute = Path(os.path.abspath(candidate))
+        try:
+            absolute.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"changed path is outside the repository root: {absolute}") from exc
+        keys.add(os.path.normcase(str(absolute)))
+    return keys
+
+
 def _ingest_repo_impl(
     conn: sqlite3.Connection,
     root: Path,
     project: str = "default",
     force: bool = False,
     allow_root_rebind: bool = False,
+    changed_paths=None,
 ) -> dict:
     init_schema(conn)
     root = root.resolve()
     if not root.exists() or not root.is_dir():
         raise ValueError(f"repo path does not exist or is not a directory: {root}")
     project_id = ensure_project(conn, project, str(root), allow_root_rebind=allow_root_rebind)
+    changed_path_keys = _changed_path_keys(root, changed_paths)
     settings = get_project_settings(conn, project)
     max_file_bytes = int(settings["max_file_bytes"])
     parser_adapter = str(settings["parser_adapter"])
@@ -945,7 +1070,7 @@ def _ingest_repo_impl(
         ).fetchone()["count"])
         embedding_index_ready = expected == actual
     if (
-        not force and embedding_index_ready and prior_manifest
+        not force and not changed_path_keys and embedding_index_ready and prior_manifest
         and prior_manifest["digest"] == manifest_digest and int(prior_manifest["file_count"]) == len(path_stats)
     ):
         return {
@@ -974,6 +1099,7 @@ def _ingest_repo_impl(
     parser_warnings = []
     for path, stat in path_stats:
         path_key = str(path)
+        path_changed = os.path.normcase(path_key) in changed_path_keys
         seen_paths.add(path_key)
         row = existing.get(path_key)
         prior_metadata = {}
@@ -992,11 +1118,11 @@ def _ingest_repo_impl(
             parser_ready = indexed_parser == parser_adapter or (
                 parser_adapter == "auto" and str(indexed_parser).startswith("auto:")
             )
-            if not force and prior_metadata.get("mtime_ns") == stat.st_mtime_ns and prior_metadata.get("size") == stat.st_size and parser_ready and embedding_ready:
+            if not force and not path_changed and prior_metadata.get("mtime_ns") == stat.st_mtime_ns and prior_metadata.get("size") == stat.st_size and parser_ready and embedding_ready:
                 indexed_files += 1
                 unchanged_files += 1
                 continue
-            if not force and "mtime_ns" not in prior_metadata:
+            if not force and not path_changed and "mtime_ns" not in prior_metadata:
                 try:
                     indexed_at = datetime.fromisoformat(row["updated_at"]).timestamp()
                 except (TypeError, ValueError):
@@ -1005,7 +1131,7 @@ def _ingest_repo_impl(
                     indexed_files += 1
                     unchanged_files += 1
                     continue
-            text = read_text(path, max_bytes=max_file_bytes)
+            text = read_text(path, max_bytes=max_file_bytes, root=root)
             if not force and text is not None and sha256_text(text) == row["hash"] and parser_ready and embedding_ready:
                 if "mtime_ns" in prior_metadata:
                     metadata = {**prior_metadata, "mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
@@ -1065,6 +1191,10 @@ def _ingest_repo_impl(
             import_entity = ensure_entity(conn, project_id, "import", imported)
             if add_edge(conn, project_id, file_entity, "imports", import_entity, source_id=source_id):
                 edges += 1
+        for called in record.calls:
+            call_entity = ensure_entity(conn, project_id, "call", called)
+            if add_edge(conn, project_id, file_entity, "calls", call_entity, source_id=source_id, confidence=0.55):
+                edges += 1
         indexed_files += 1
         updated_files += 1
         conn.execute(
@@ -1083,8 +1213,35 @@ def _ingest_repo_impl(
         conn.execute("DELETE FROM file_hash_cache WHERE project_id = ? AND path = ?", (project_id, path_key))
         removed_files += 1
     if updated_files or removed_files:
+        call_rows = conn.execute(
+            """
+            SELECT e.from_entity_id AS file_id, e.source_id, c.canonical_key,
+                   s.id AS symbol_id, f.name AS file_name
+            FROM edges e
+            JOIN entities c ON c.id = e.to_entity_id AND c.type = 'call'
+            JOIN entities f ON f.id = e.from_entity_id AND f.type = 'file'
+            JOIN entities s ON s.project_id = e.project_id AND s.type = 'symbol'
+                AND s.canonical_key = c.canonical_key
+            WHERE e.project_id = ? AND e.relation = 'calls'
+            ORDER BY e.id, s.id
+            """,
+            (project_id,),
+        ).fetchall()
+        for call in call_rows:
+            normalized = str(call["file_name"]).casefold().replace("\\", "/")
+            is_test = (
+                normalized.startswith("test_") or "/test_" in normalized
+                or "/tests/" in f"/{normalized}" or ".test." in normalized or ".spec." in normalized
+            )
+            relation = "tests" if is_test else "calls"
+            confidence = 0.7 if is_test else 0.8
+            if add_edge(
+                conn, project_id, int(call["file_id"]), relation, int(call["symbol_id"]),
+                source_id=int(call["source_id"]), confidence=confidence,
+            ):
+                edges += 1
         conn.execute(
-            "DELETE FROM entities WHERE project_id = ? AND type IN ('file', 'symbol', 'import') "
+            "DELETE FROM entities WHERE project_id = ? AND type IN ('file', 'symbol', 'import', 'call') "
             "AND NOT EXISTS (SELECT 1 FROM edges WHERE from_entity_id = entities.id OR to_entity_id = entities.id)",
             (project_id,),
         )
@@ -1102,6 +1259,7 @@ def _ingest_repo_impl(
         "symbols": symbols, "edges": edges, "chunks": chunks, "embedded_chunks": embedded_chunks,
         "parser_adapter": parser_adapter, "embedding_provider": embedding_provider_name,
         "parser_warnings": parser_warnings[:100], "manifest_unchanged": False,
+        "verified_changed_paths": len(changed_path_keys),
     }
 
 
@@ -1111,6 +1269,7 @@ def ingest_repo(
     project: str = "default",
     force: bool = False,
     allow_root_rebind: bool = False,
+    changed_paths=None,
 ) -> dict:
     """Refresh a repository atomically so failed parses never leak a partial index."""
     try:
@@ -1120,6 +1279,7 @@ def ingest_repo(
             project=project,
             force=force,
             allow_root_rebind=allow_root_rebind,
+            changed_paths=changed_paths,
         )
     except Exception:
         conn.rollback()
@@ -1148,8 +1308,12 @@ def search(
     project: str | None = None,
     limit: int = 8,
     hybrid: bool | None = None,
+    *,
+    record_recall: bool = True,
+    _initialize: bool = True,
 ) -> dict:
-    init_schema(conn)
+    if _initialize:
+        init_schema(conn)
     query = str(query)[:10_000]
     limit = max(1, min(MAX_SEARCH_LIMIT, int(limit)))
     fts_query = query_to_fts(query)
@@ -1162,7 +1326,19 @@ def search(
                 "retrieval": {"mode": "fts", "provider": "none"},
             }
         project_id = int(row["id"])
-    settings = get_project_settings(conn, project) if project else dict(DEFAULT_PROJECT_SETTINGS)
+    if project and _initialize:
+        settings = get_project_settings(conn, project)
+    elif project_id is not None:
+        settings = dict(DEFAULT_PROJECT_SETTINGS)
+        for setting in conn.execute(
+            "SELECT key, value_json FROM project_settings WHERE project_id = ?", (project_id,),
+        ):
+            try:
+                settings[setting["key"]] = json.loads(setting["value_json"])
+            except json.JSONDecodeError:
+                continue
+    else:
+        settings = dict(DEFAULT_PROJECT_SETTINGS)
     provider_name = str(settings["embedding_provider"])
     use_hybrid = (provider_name != "none") if hybrid is None else bool(hybrid and provider_name != "none")
     project_count = int(conn.execute("SELECT COUNT(*) AS count FROM projects").fetchone()["count"])
@@ -1294,11 +1470,12 @@ def search(
             "semantic_weight": semantic_weight, "candidates": len(merged),
         }
     selected = {"memories": [item["id"] for item in memories], "chunks": [item["id"] for item in chunks]}
-    conn.execute(
-        "INSERT INTO recall_logs(project_id, query, selected_json, created_at) VALUES (?, ?, ?, ?)",
-        (project_id, query, json.dumps(selected), now_iso()),
-    )
-    conn.commit()
+    if record_recall:
+        conn.execute(
+            "INSERT INTO recall_logs(project_id, query, selected_json, created_at) VALUES (?, ?, ?, ?)",
+            (project_id, query, json.dumps(selected), now_iso()),
+        )
+        conn.commit()
     return {"status": "ok", "query": query, "memories": memories, "chunks": chunks, "retrieval": retrieval}
 
 
@@ -1447,6 +1624,130 @@ def graph(conn: sqlite3.Connection, project: str = "default", limit: int = 100) 
         extras = conn.execute("SELECT id, type, name, canonical_key FROM entities WHERE project_id = ? ORDER BY type, name LIMIT ?", (project_id, limit)).fetchall()
         nodes.extend(dict(row) for row in extras if int(row["id"]) not in excluded and len(nodes) < limit)
     return {"status": "ok", "project": project, "nodes": nodes, "edges": edges, "counts": {"nodes": len(nodes), "edges": len(edges)}}
+
+
+def graph_query(
+    conn: sqlite3.Connection,
+    *,
+    project: str = "default",
+    query_type: str = "impact",
+    target: str,
+    depth: int = 2,
+    limit: int = 100,
+) -> dict:
+    """Traverse a bounded, deterministic project subgraph around a named entity."""
+    init_schema(conn)
+    mode = str(query_type).strip().lower()
+    if mode not in {"dependencies", "dependents", "impact", "evidence", "relevance"}:
+        raise ValueError(f"unknown graph query type: {query_type}")
+    target_text = str(target).strip()
+    if not target_text:
+        raise ValueError("graph query target is required")
+    bounded_depth = max(0, min(4, int(depth)))
+    bounded_limit = max(1, min(MAX_GRAPH_LIMIT, int(limit)))
+    relation_filters = {
+        "dependencies": ("calls", "imports"),
+        "dependents": ("calls", "contains", "imports", "tests"),
+        "impact": ("calls", "contains", "imports", "tests"),
+        "evidence": ("contains", "mentions", "tests"),
+        "relevance": ("mentions",),
+    }
+    allowed_relations = relation_filters[mode]
+    project_row = conn.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()
+    if not project_row:
+        return {
+            "status": "ok", "project": project, "query_type": mode, "target": target_text,
+            "depth": bounded_depth, "relation_filter": list(allowed_relations),
+            "nodes": [], "edges": [], "truncated": False,
+        }
+    project_id = int(project_row["id"])
+    key = canonical(target_text)
+    escaped_target = target_text.replace("%", "\\%").replace("_", "\\_")
+    seed_rows = conn.execute(
+        """
+        SELECT id FROM entities
+        WHERE project_id = ? AND canonical_key = ?
+        ORDER BY type, name, id
+        LIMIT 25
+        """,
+        (project_id, key),
+    ).fetchall()
+    if not seed_rows:
+        seed_rows = conn.execute(
+            """
+            SELECT id FROM entities
+            WHERE project_id = ? AND name LIKE ? ESCAPE '\\'
+            ORDER BY type, name, id
+            LIMIT 25
+            """,
+            (project_id, f"%{escaped_target}%"),
+        ).fetchall()
+    frontier = {int(row["id"]) for row in seed_rows}
+    visited = set(frontier)
+    selected_edges: dict[int, dict] = {}
+    truncated = False
+    for _ in range(bounded_depth):
+        if not frontier or len(visited) >= bounded_limit:
+            break
+        placeholders = ",".join("?" for _ in frontier)
+        clauses = []
+        parameters: list[object] = [project_id]
+        if mode in {"dependencies", "impact", "relevance"}:
+            clauses.append(f"e.from_entity_id IN ({placeholders})")
+            parameters.extend(sorted(frontier))
+        if mode in {"dependents", "impact", "evidence", "relevance"}:
+            clauses.append(f"e.to_entity_id IN ({placeholders})")
+            parameters.extend(sorted(frontier))
+        rows = conn.execute(
+            f"""
+            SELECT e.id, e.from_entity_id AS from_id, f.name AS from_name,
+                   e.relation, e.to_entity_id AS to_id, t.name AS to_name,
+                   e.confidence, e.source_id, e.memory_id
+            FROM edges e
+            JOIN entities f ON f.id = e.from_entity_id
+            JOIN entities t ON t.id = e.to_entity_id
+            WHERE e.project_id = ? AND ({' OR '.join(clauses)})
+              AND e.relation IN ({','.join('?' for _ in allowed_relations)})
+            ORDER BY e.confidence DESC, e.id
+            LIMIT ?
+            """,
+            (*parameters, *allowed_relations, bounded_limit * 4),
+        ).fetchall()
+        next_frontier = set()
+        for row in rows:
+            edge = dict(row)
+            from_id, to_id = int(edge["from_id"]), int(edge["to_id"])
+            if mode == "dependencies" and from_id not in frontier:
+                continue
+            if mode in {"dependents", "evidence"} and to_id not in frontier:
+                continue
+            selected_edges[int(edge["id"])] = edge
+            neighbor = to_id if from_id in frontier else from_id
+            if neighbor not in visited:
+                if len(visited) >= bounded_limit:
+                    truncated = True
+                    break
+                visited.add(neighbor)
+                next_frontier.add(neighbor)
+        frontier = next_frontier
+    nodes = []
+    if visited:
+        ids = sorted(visited)[:bounded_limit]
+        placeholders = ",".join("?" for _ in ids)
+        nodes = [dict(row) for row in conn.execute(
+            f"SELECT id, type, name, canonical_key FROM entities WHERE project_id = ? AND id IN ({placeholders}) ORDER BY type, name, id",
+            (project_id, *ids),
+        )]
+    node_ids = {int(node["id"]) for node in nodes}
+    edges = [
+        edge for _, edge in sorted(selected_edges.items())
+        if int(edge["from_id"]) in node_ids and int(edge["to_id"]) in node_ids
+    ][:bounded_limit]
+    return {
+        "status": "ok", "project": project, "query_type": mode, "target": target_text,
+        "depth": bounded_depth, "relation_filter": list(allowed_relations), "nodes": nodes, "edges": edges,
+        "truncated": truncated or len(selected_edges) > bounded_limit,
+    }
 
 
 def indexed_freshness(conn: sqlite3.Connection, project: str = "default") -> dict:

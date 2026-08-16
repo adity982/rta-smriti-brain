@@ -1,8 +1,11 @@
+import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from rta_brain.autostart import autostart_status, disable_autostart, enable_autostart
+from rta_brain.autostart import _entry_text, autostart_status, disable_autostart, enable_autostart
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +24,7 @@ class AutostartTests(unittest.TestCase):
             entry = Path(enabled["entry_path"])
             self.assertTrue(entry.is_file())
             text = entry.read_text(encoding="utf-8")
-            self.assertIn("console start", text)
+            self.assertIn('"console" "start"', text)
             self.assertIn("--no-open", text)
             self.assertIn(str(brain_dir), text)
             self.assertTrue(autostart_status(brain_dir, platform_name="win32", home=home, environment={"APPDATA": str(appdata)})["enabled"])
@@ -79,6 +82,30 @@ class AutostartTests(unittest.TestCase):
                     environment={"APPDATA": str(appdata)},
                 )
             self.assertEqual(victim.read_text(encoding="utf-8"), "keep\n")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows cmd.exe behavior")
+    def test_windows_startup_entry_preserves_batch_metacharacters_without_injection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            recorder = root / "record args.py"
+            output = root / "captured.json"
+            injected = root / "injected.txt"
+            recorder.write_text(
+                "import json, pathlib, sys\n"
+                "pathlib.Path(sys.argv[1]).write_text(json.dumps(sys.argv[2:]), encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            adversarial = f"brain & echo owned>{injected} %PATH% ^ caret"
+            entry = root / "startup.cmd"
+            entry.write_text(
+                _entry_text("windows", [sys.executable, str(recorder), str(output), adversarial], "fixture"),
+                encoding="utf-8",
+            )
+
+            subprocess.run(["cmd.exe", "/d", "/v:off", "/c", str(entry)], check=True, cwd=root)
+
+            self.assertEqual(json.loads(output.read_text(encoding="utf-8")), [adversarial])
+            self.assertFalse(injected.exists(), "startup argument escaped into a second command")
 
 
 if __name__ == "__main__":

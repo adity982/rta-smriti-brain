@@ -4,6 +4,7 @@ import {
   Activity,
   ArrowLeft,
   BrainCircuit,
+  Boxes,
   CheckCircle2,
   ChevronRight,
   CircleDot,
@@ -21,6 +22,7 @@ import {
   FolderTree,
   GitBranch,
   GitPullRequest,
+  Gauge,
   HardDrive,
   Layers3,
   Map as MapIcon,
@@ -39,6 +41,8 @@ import {
   SlidersHorizontal,
   Sparkles,
   Table2,
+  ThumbsDown,
+  ThumbsUp,
   Zap,
 } from "lucide-react";
 import "./styles.css";
@@ -448,6 +452,8 @@ function App() {
   const [governance, setGovernance] = useState({ policies: [], receipts: [] });
   const [preflightDecision, setPreflightDecision] = useState(null);
   const [isGovernanceBusy, setIsGovernanceBusy] = useState(false);
+  const [intelligence, setIntelligence] = useState({ diagnostics: null, graph: null, workspaces: [] });
+  const [isIntelligenceBusy, setIsIntelligenceBusy] = useState(false);
 
   const selectedParams = useMemo(() => {
     if (!selectedProject) return null;
@@ -893,6 +899,97 @@ function App() {
     }
   }
 
+  async function loadWorkspaces() {
+    if (!selectedParams) return [];
+    const payload = await api(`/api/workspaces?${qs(selectedParams)}`);
+    setIntelligence((current) => ({ ...current, workspaces: payload.workspaces || [] }));
+    return payload.workspaces || [];
+  }
+
+  async function runRetrievalDiagnostics(query) {
+    if (!selectedParams || !query.trim()) return null;
+    setIsIntelligenceBusy(true);
+    try {
+      const payload = await api(`/api/retrieval-diagnostics?${qs({ ...selectedParams, query: query.trim(), limit: 8 })}`);
+      setIntelligence((current) => ({ ...current, diagnostics: payload }));
+      setMessage(`Retrieval explained in ${payload.latency_ms} ms.`);
+      return payload;
+    } catch (error) {
+      setMessage(`Retrieval diagnostics failed: ${error.message}`);
+      return null;
+    } finally {
+      setIsIntelligenceBusy(false);
+    }
+  }
+
+  async function runImpactQuery(target, queryType = "impact") {
+    if (!selectedParams || !target.trim()) return null;
+    setIsIntelligenceBusy(true);
+    try {
+      const payload = await api(`/api/graph-query?${qs({ ...selectedParams, target: target.trim(), type: queryType, depth: 3, limit: 100 })}`);
+      setIntelligence((current) => ({ ...current, graph: payload }));
+      setMessage(`${queryType} query found ${payload.nodes.length} nodes and ${payload.edges.length} relationships.`);
+      return payload;
+    } catch (error) {
+      setMessage(`Graph query failed: ${error.message}`);
+      return null;
+    } finally {
+      setIsIntelligenceBusy(false);
+    }
+  }
+
+  async function createProjectWorkspace(values) {
+    if (!selectedParams) return null;
+    setIsIntelligenceBusy(true);
+    try {
+      const payload = await api("/api/workspace", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, action: "create", ...values }),
+      });
+      await loadWorkspaces();
+      setMessage(`Workspace ${payload.workspace.name} created.`);
+      return payload;
+    } catch (error) {
+      setMessage(`Workspace could not be created: ${error.message}`);
+      return null;
+    } finally {
+      setIsIntelligenceBusy(false);
+    }
+  }
+
+  async function addWorkspaceMember(values) {
+    if (!selectedParams) return null;
+    setIsIntelligenceBusy(true);
+    try {
+      const payload = await api("/api/workspace", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, action: "add", ...values }),
+      });
+      await loadWorkspaces();
+      setMessage(`${values.project} added to ${values.name}.`);
+      return payload;
+    } catch (error) {
+      setMessage(`Workspace member could not be added: ${error.message}`);
+      return null;
+    } finally {
+      setIsIntelligenceBusy(false);
+    }
+  }
+
+  async function recordMemoryFeedback(memoryId, outcome) {
+    if (!selectedParams) return;
+    try {
+      await api("/api/memory-feedback", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, memory_id: memoryId, outcome, evidence: "operator-dashboard" }),
+      });
+      await loadProjectDetails(selectedProject);
+      setMessage(`Memory ${memoryId} marked ${outcome}.`);
+    } catch (error) {
+      setMessage(`Memory feedback failed: ${error.message}`);
+    }
+  }
+
   function addFileToTask(path) {
     if (task.includes(path)) {
       setMessage(`${path} is already in the task objective.`);
@@ -929,6 +1026,11 @@ function App() {
   function showGovernance() {
     showDrawer("governance");
     loadGovernance();
+  }
+
+  function showIntelligence() {
+    showDrawer("intelligence");
+    loadWorkspaces().catch((error) => setMessage(`Workspaces could not load: ${error.message}`));
   }
 
   function selectPrimaryNode(node, drawer = null) {
@@ -1104,6 +1206,7 @@ function App() {
               <span className="navGroupLabel">Tools</span>
               <button className={searchOpen ? "active" : ""} onClick={() => { setViewMode("graph"); setNavContext("search"); setSearchOpen(true); }}><Search size={17} /><span>Search</span></button>
               <button className={inspectorOpen && activeDrawer === "governance" ? "active" : ""} onClick={showGovernance}><ShieldAlert size={17} /><span>Action Gate</span><em>{governance.policies.length}</em></button>
+              <button className={inspectorOpen && activeDrawer === "intelligence" ? "active" : ""} onClick={showIntelligence}><Gauge size={17} /><span>Intelligence</span></button>
               <button className={inspectorOpen && activeDrawer === "memory" ? "active" : ""} onClick={() => showDrawer("memory")}><Database size={17} /><span>Memory Ledger</span></button>
               <button className={inspectorOpen && activeDrawer === "checkpoint" ? "active" : ""} onClick={() => showDrawer("checkpoint")}><Route size={17} /><span>Continue Work</span></button>
               <button className={inspectorOpen && activeDrawer === "receipts" ? "active" : ""} onClick={() => showDrawer("receipts")}><Sparkles size={17} /><span>Context Packs</span><em>{receipts.length}</em></button>
@@ -1249,6 +1352,9 @@ function App() {
             <button className={activeDrawer === "governance" ? "active" : ""} onClick={showGovernance}>
               <ShieldAlert size={15} /> Gate
             </button>
+            <button className={activeDrawer === "intelligence" ? "active" : ""} onClick={showIntelligence}>
+              <Gauge size={15} /> Intel
+            </button>
             <button className={activeDrawer === "memory" ? "active" : ""} onClick={() => showDrawer("memory")}>
               <MemoryStick size={15} /> Memory
             </button>
@@ -1298,7 +1404,21 @@ function App() {
               isBusy={isGovernanceBusy}
             />
           )}
-          {activeDrawer === "memory" && <MemoryLedger memories={memories} onReflect={reflect} />}
+          {activeDrawer === "memory" && <MemoryLedger memories={memories} onReflect={reflect} onFeedback={recordMemoryFeedback} />}
+          {activeDrawer === "intelligence" && (
+            <IntelligencePanel
+              project={selectedProject}
+              projects={projects}
+              task={task}
+              data={intelligence}
+              busy={isIntelligenceBusy}
+              onDiagnose={runRetrievalDiagnostics}
+              onGraphQuery={runImpactQuery}
+              onCreateWorkspace={createProjectWorkspace}
+              onAddMember={addWorkspaceMember}
+              onNotify={setMessage}
+            />
+          )}
           {activeDrawer === "checkpoint" && (
             <CheckpointPanel
               checkpoint={checkpoint}
@@ -2319,7 +2439,257 @@ function CheckpointPanel({ checkpoint, project, onSave, onCopy, isSaving }) {
   );
 }
 
-function MemoryLedger({ memories, onReflect }) {
+function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, onGraphQuery, onCreateWorkspace, onAddMember, onNotify }) {
+  const [tab, setTab] = useState("retrieval");
+  const [query, setQuery] = useState(task);
+  const [target, setTarget] = useState("");
+  const [queryType, setQueryType] = useState("impact");
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [selectedWorkspace, setSelectedWorkspace] = useState("");
+  const [memberKey, setMemberKey] = useState("");
+  const [workspaceQuery, setWorkspaceQuery] = useState("");
+  const [workspaceResults, setWorkspaceResults] = useState([]);
+  const [workspaceStatus, setWorkspaceStatus] = useState("");
+  const [bundlePath, setBundlePath] = useState("");
+  const [snapshotPath, setSnapshotPath] = useState("");
+  const [snapshotKeyPath, setSnapshotKeyPath] = useState("");
+  const [bundleConflict, setBundleConflict] = useState("rename");
+  const [bundleSections, setBundleSections] = useState({ memories: true, checkpoints: true, policies: true });
+  const [bundlePreview, setBundlePreview] = useState(null);
+  const [portabilityStatus, setPortabilityStatus] = useState("");
+  const [portabilityBusy, setPortabilityBusy] = useState(false);
+
+  useEffect(() => setQuery(task), [task]);
+  useEffect(() => {
+    if (!selectedWorkspace && data.workspaces?.length) setSelectedWorkspace(data.workspaces[0].name);
+  }, [data.workspaces, selectedWorkspace]);
+  useEffect(() => {
+    const base = String(project?.db_path || "brain.sqlite").replace(/\.sqlite$/i, "");
+    setBundlePath(`${base}.memory.rta.json`);
+    setSnapshotPath(`${base}.rta-snapshot`);
+    setSnapshotKeyPath(`${base}.snapshot.key`);
+    setBundlePreview(null);
+    setPortabilityStatus("");
+  }, [project?.db_path]);
+
+  const selectedMember = projects.find((item) => `${item.db_path}:${item.project}` === memberKey);
+  const diagnostics = data.diagnostics;
+  const graphResult = data.graph;
+
+  async function searchSelectedWorkspace() {
+    if (!project || !selectedWorkspace || !workspaceQuery.trim()) return;
+    try {
+      setWorkspaceStatus("Searching workspace...");
+      const payload = await api(`/api/workspace-search?${qs({
+        db_path: project.db_path, project: project.project, workspace: selectedWorkspace,
+        query: workspaceQuery.trim(), limit: 4,
+      })}`);
+      setWorkspaceResults(payload.results || []);
+      setWorkspaceStatus(`${payload.results?.length || 0} project brains searched.`);
+    } catch (error) {
+      setWorkspaceResults([]);
+      setWorkspaceStatus(error.message);
+    }
+  }
+
+  async function runBundle(action) {
+    if (!project || !bundlePath.trim()) return;
+    const selected = Object.entries(bundleSections).filter(([, enabled]) => enabled).map(([name]) => name);
+    if ((action === "export" || action === "preview-export") && !selected.length) {
+      setPortabilityStatus("Select at least one bundle section.");
+      return;
+    }
+    try {
+      setPortabilityBusy(true);
+      setPortabilityStatus(action.startsWith("preview") ? "Inspecting bundle..." : "Applying verified bundle operation...");
+      const payload = await api("/api/bundle", {
+        method: "POST",
+        body: JSON.stringify({
+          db_path: project.db_path,
+          project: project.project,
+          action,
+          path: bundlePath.trim(),
+          projects: [project.project],
+          include: selected,
+          redact: true,
+          conflict: bundleConflict,
+        }),
+      });
+      if (action.startsWith("preview")) {
+        setBundlePreview({ ...payload, operation: action });
+        setPortabilityStatus(`Preview ready: ${payload.counts?.memories || 0} memories, ${payload.counts?.checkpoints || 0} checkpoints, ${payload.counts?.policies || 0} policies.`);
+      } else {
+        setBundlePreview(null);
+        setPortabilityStatus(action === "export" ? "Redacted selective bundle written." : "Verified bundle imported through staging.");
+      }
+      onNotify?.(action.startsWith("preview") ? "Portability preview completed." : "Portability operation completed.");
+    } catch (error) {
+      setBundlePreview(null);
+      setPortabilityStatus(error.message);
+      onNotify?.(`Portability check failed: ${error.message}`);
+    } finally {
+      setPortabilityBusy(false);
+    }
+  }
+
+  async function runSnapshot(action) {
+    if (!project || !snapshotPath.trim() || !snapshotKeyPath.trim()) return;
+    try {
+      setPortabilityBusy(true);
+      const payload = await api("/api/snapshot", {
+        method: "POST",
+        body: JSON.stringify({
+          db_path: project.db_path,
+          project: project.project,
+          action,
+          path: snapshotPath.trim(),
+          key_path: snapshotKeyPath.trim(),
+        }),
+      });
+      setPortabilityStatus(action === "create" ? "Authenticated private snapshot created." : payload.valid ? "Snapshot signature and database digest verified." : `Snapshot invalid: ${payload.reason}`);
+    } catch (error) {
+      setPortabilityStatus(error.message);
+    } finally {
+      setPortabilityBusy(false);
+    }
+  }
+
+  async function runLocalControl(path, payload, success) {
+    if (!project) return;
+    try {
+      setPortabilityBusy(true);
+      const result = await api(path, {
+        method: "POST",
+        body: JSON.stringify({ db_path: project.db_path, project: project.project, ...payload }),
+      });
+      setPortabilityStatus(typeof success === "function" ? success(result) : success);
+    } catch (error) {
+      setPortabilityStatus(error.message);
+    } finally {
+      setPortabilityBusy(false);
+    }
+  }
+
+  return (
+    <div className="drawerContent intelligencePanel">
+      <div className="sectionHeader"><h2>Project Intelligence</h2><em>{project?.project || "No project"}</em></div>
+      <div className="intelligenceTabs" role="tablist">
+        <button className={tab === "retrieval" ? "active" : ""} onClick={() => setTab("retrieval")}><Gauge size={14} /> Retrieval</button>
+        <button className={tab === "impact" ? "active" : ""} onClick={() => setTab("impact")}><Network size={14} /> Impact</button>
+        <button className={tab === "workspaces" ? "active" : ""} onClick={() => setTab("workspaces")}><Boxes size={14} /> Workspaces</button>
+        <button className={tab === "portability" ? "active" : ""} onClick={() => setTab("portability")}><HardDrive size={14} /> Vault</button>
+      </div>
+
+      {tab === "retrieval" && (
+        <section className="intelligenceSection">
+          <label><span>Question to explain</span><textarea rows={3} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+          <button className="primarySmall" onClick={() => onDiagnose(query)} disabled={busy || !query.trim()}><Search size={15} /> Explain retrieval</button>
+          {diagnostics && (
+            <>
+              <div className="metricStrip">
+                <article><span>Mode</span><strong>{diagnostics.retrieval?.mode}</strong></article>
+                <article><span>Coverage</span><strong>{Math.round((diagnostics.index?.embedding_coverage || 0) * 100)}%</strong></article>
+                <article><span>Latency</span><strong>{diagnostics.latency_ms} ms</strong></article>
+              </div>
+              <div className="diagnosticResults">
+                {diagnostics.results?.map((item, index) => (
+                  <article key={`${item.path}-${index}`}>
+                    <div><strong>{item.path}</strong><em>#{item.ranking.position}</em></div>
+                    <span>lex {Number(item.ranking.lexical_score || 0).toFixed(3)} / sem {Number(item.ranking.semantic_score || 0).toFixed(3)} / hybrid {Number(item.ranking.hybrid_score || 0).toFixed(3)}</span>
+                    <small title={item.evidence.source_hash}>{item.evidence.verification_status}</small>
+                  </article>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
+      )}
+
+      {tab === "impact" && (
+        <section className="intelligenceSection">
+          <label><span>Symbol or file</span><input value={target} onChange={(event) => setTarget(event.target.value)} placeholder="helper or src/service.py" /></label>
+          <label><span>Question</span><select value={queryType} onChange={(event) => setQueryType(event.target.value)}><option value="impact">Change impact</option><option value="dependents">What depends on this?</option><option value="dependencies">What does this depend on?</option><option value="evidence">Supporting evidence</option><option value="relevance">Related knowledge</option></select></label>
+          <button className="primarySmall" onClick={() => onGraphQuery(target, queryType)} disabled={busy || !target.trim()}><Network size={15} /> Trace relationships</button>
+          {graphResult && (
+            <div className="impactResults">
+              <p><strong>{graphResult.nodes.length}</strong> nodes, <strong>{graphResult.edges.length}</strong> relationships{graphResult.truncated ? " (bounded result)" : ""}</p>
+              {graphResult.edges.slice(0, 12).map((edge) => <article key={edge.id}><span>{edge.from_name}</span><em>{edge.relation}</em><span>{edge.to_name}</span><small>{Math.round(edge.confidence * 100)}%</small></article>)}
+            </div>
+          )}
+        </section>
+      )}
+
+      {tab === "workspaces" && (
+        <section className="intelligenceSection">
+          <p className="drawerIntro">Group independently indexed brains for cross-repository recall without merging their roots or databases.</p>
+          <div className="workspaceList">
+            {data.workspaces?.map((workspace) => <button key={workspace.id} className={selectedWorkspace === workspace.name ? "active" : ""} onClick={() => setSelectedWorkspace(workspace.name)}><span>{workspace.name}</span><em>{workspace.project_count}</em></button>)}
+            {!data.workspaces?.length && <p className="emptyState">No workspaces in this brain yet.</p>}
+          </div>
+          <div className="workspaceAction">
+            <input value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} placeholder="Workspace name" />
+            <button onClick={async () => { const result = await onCreateWorkspace({ name: workspaceName.trim() }); if (result) { setSelectedWorkspace(workspaceName.trim()); setWorkspaceName(""); } }} disabled={busy || !workspaceName.trim()}><Plus size={14} /> Create</button>
+          </div>
+          <label><span>Member brain</span><select value={memberKey} onChange={(event) => setMemberKey(event.target.value)}><option value="">Choose a project</option>{projects.map((item) => <option key={`${item.db_path}:${item.project}`} value={`${item.db_path}:${item.project}`}>{item.project}</option>)}</select></label>
+          <button className="primarySmall" onClick={() => onAddMember({ name: selectedWorkspace, project: selectedMember.project, member_db_path: selectedMember.db_path, role: "member" })} disabled={busy || !selectedWorkspace || !selectedMember}><Plus size={15} /> Add to workspace</button>
+          <div className="workspaceAction">
+            <input value={workspaceQuery} onChange={(event) => setWorkspaceQuery(event.target.value)} placeholder="Search every member brain" />
+            <button onClick={searchSelectedWorkspace} disabled={!selectedWorkspace || !workspaceQuery.trim()}><Search size={14} /> Search</button>
+          </div>
+          {workspaceStatus && <p className="workspaceStatus" aria-live="polite">{workspaceStatus}</p>}
+          <div className="workspaceResults">
+            {workspaceResults.map((result) => (
+              <article key={result.project}>
+                <div><strong>{result.project}</strong><em>{result.retrieval?.mode}</em></div>
+                {[...(result.memories || []), ...(result.chunks || [])].slice(0, 3).map((item, index) => (
+                  <p key={`${item.id}-${index}`}><span>{item.path || item.type || "memory"}</span>{item.text}</p>
+                ))}
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {tab === "portability" && (
+        <section className="intelligenceSection portabilityPanel">
+          <p className="drawerIntro">Move selected memory without source code, authenticate a private brain copy, or opt into local lifecycle controls.</p>
+          <h3>Selective bundle</h3>
+          <label><span>Bundle path</span><input value={bundlePath} onChange={(event) => { setBundlePath(event.target.value); setBundlePreview(null); }} /></label>
+          <div className="bundleChecks">
+            {Object.keys(bundleSections).map((section) => <label key={section}><input type="checkbox" checked={bundleSections[section]} onChange={(event) => { setBundleSections({ ...bundleSections, [section]: event.target.checked }); setBundlePreview(null); }} /><span>{section}</span></label>)}
+          </div>
+          <label><span>Import conflict</span><select value={bundleConflict} onChange={(event) => { setBundleConflict(event.target.value); setBundlePreview(null); }}><option value="rename">Rename incoming project</option><option value="merge">Merge by project name</option><option value="fail">Fail on conflict</option></select></label>
+          <div className="portabilityActions">
+            <button onClick={() => runBundle("preview-export")} disabled={portabilityBusy}><Eye size={14} /> Preview export</button>
+            <button onClick={() => runBundle("export")} disabled={portabilityBusy || bundlePreview?.operation !== "preview-export"}><Download size={14} /> Export</button>
+            <button onClick={() => runBundle("preview-import")} disabled={portabilityBusy}><Eye size={14} /> Preview import</button>
+            <button onClick={() => runBundle("import")} disabled={portabilityBusy || bundlePreview?.operation !== "preview-import"}><Database size={14} /> Import</button>
+          </div>
+          {bundlePreview && <div className="portabilityReceipt"><strong>SHA-256 {bundlePreview.sha256?.slice(0, 12)}...</strong><span>{bundlePreview.redacted ? "Redaction verified" : "Unredacted"} / {bundlePreview.conflicts?.length || 0} conflicts</span>{bundlePreview.warnings?.map((warning) => <small key={warning}>{warning}</small>)}</div>}
+
+          <h3>Authenticated snapshot</h3>
+          <label><span>Private snapshot</span><input value={snapshotPath} onChange={(event) => setSnapshotPath(event.target.value)} /></label>
+          <label><span>Separate HMAC key</span><input value={snapshotKeyPath} onChange={(event) => setSnapshotKeyPath(event.target.value)} /></label>
+          <div className="portabilityActions two">
+            <button onClick={() => runSnapshot("create")} disabled={portabilityBusy}><HardDrive size={14} /> Create</button>
+            <button onClick={() => runSnapshot("verify")} disabled={portabilityBusy}><ShieldCheck size={14} /> Verify</button>
+          </div>
+          <p className="trustNote">Snapshots contain the complete local brain. HMAC verifies integrity; it does not encrypt the file.</p>
+
+          <h3>Local controls</h3>
+          <div className="portabilityActions">
+            <button onClick={() => runLocalControl("/api/git-hooks", { action: "install" }, "Managed post-commit checkpoint hook installed at the canonical root.")} disabled={portabilityBusy}><GitBranch size={14} /> Hook on</button>
+            <button onClick={() => runLocalControl("/api/git-hooks", { action: "uninstall" }, "Managed post-commit checkpoint hook removed.")} disabled={portabilityBusy}><GitBranch size={14} /> Hook off</button>
+            <button onClick={() => runLocalControl("/api/memory-decay", { minimum_age_days: 90, step: 0.03 }, (result) => `${result.decayed} eligible memories conservatively aged; ${result.protected_verified} verified records protected.`)} disabled={portabilityBusy}><MemoryStick size={14} /> Run decay</button>
+          </div>
+          {portabilityStatus && <p className="workspaceStatus" aria-live="polite">{portabilityStatus}</p>}
+        </section>
+      )}
+    </div>
+  );
+}
+
+function MemoryLedger({ memories, onReflect, onFeedback }) {
   const [filter, setFilter] = useState("all");
   const types = ["all", ...new Set(memories.map((memory) => memory.type).filter(Boolean))];
   const visible = filter === "all" ? memories : memories.filter((memory) => memory.type === filter);
@@ -2343,6 +2713,10 @@ function MemoryLedger({ memories, onReflect }) {
                 {memory.provenance.verification_status} / {memory.provenance.source_path || "source not recorded"}
               </small>
             )}
+            <div className="memoryFeedback" aria-label={`Feedback for memory ${memory.id}`}>
+              <button title="This memory helped" aria-label="Mark helpful" onClick={() => onFeedback(memory.id, "helpful")}><ThumbsUp size={13} /></button>
+              <button title="This memory was harmful or misleading" aria-label="Mark harmful" onClick={() => onFeedback(memory.id, "harmful")}><ThumbsDown size={13} /></button>
+            </div>
           </article>
         ))}
       </div>
@@ -2537,7 +2911,7 @@ function GovernancePanel({ project, governance, decision, onEvaluate, onCreate, 
           <label><span>Verification</span><select value={policy.verification_status} onChange={(event) => setPolicy({ ...policy, verification_status: event.target.value })}><option value="unverified">Unverified</option><option value="verified">Verified</option><option value="failed">Failed</option><option value="stale">Stale</option></select></label>
           <label><span>Evidence source</span><input value={policy.source_path} onChange={(event) => setPolicy({ ...policy, source_path: event.target.value })} placeholder="SECURITY.md" /></label>
           <label className="checkLabel"><input type="checkbox" checked={policy.overrideable} onChange={(event) => setPolicy({ ...policy, overrideable: event.target.checked })} /><span>Operator may override with a recorded reason</span></label>
-          <p className="trustNote">Blocking requires verified Pratyaksha or Sabda evidence at 80% confidence or higher.</p>
+          <p className="trustNote">Blocking requires hash-backed, verified Pratyaksha or Sabda evidence at 80% confidence or higher.</p>
           <button className="primarySmall" type="submit" disabled={isBusy || !policy.statement.trim()}><Plus size={16} /> Add policy</button>
         </form>
       </details>
@@ -2682,7 +3056,7 @@ function CommandPalette({ command, cliCommand, shellKind, brainDir, onClose, onC
   );
   const commands = [
     ["Copy context-pack command", command],
-    ["Open dashboard", `${cliCommand} dashboard --brain-dir ${defaultBrainDir}`],
+    ["Open managed console", `${cliCommand} console open --brain-dir ${defaultBrainDir}`],
     ["Check Rta-Smriti release", `${cliCommand} publish-readiness --json`],
   ];
   return (

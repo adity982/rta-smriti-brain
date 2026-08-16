@@ -15,10 +15,10 @@ def run_cli(*args):
     return subprocess.run([sys.executable, str(CLI), *args], text=True, capture_output=True, cwd=ROOT)
 
 
-def run_mcp(messages, db_path):
+def run_mcp(messages, db_path, *extra_args):
     body = "\n".join(json.dumps(message) for message in messages) + "\n"
     return subprocess.run(
-        [sys.executable, str(MCP), "--db", str(db_path), "--project", "demo"],
+        [sys.executable, str(MCP), "--db", str(db_path), "--project", "demo", *extra_args],
         input=body,
         text=True,
         capture_output=True,
@@ -126,6 +126,10 @@ class RtaBrainV2Tests(unittest.TestCase):
                     },
                 ],
                 db,
+                "--allow-memory-writes",
+                "--allow-thread-ingestion",
+                "--allow-thread-root",
+                str(Path(tmp)),
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             lines = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]

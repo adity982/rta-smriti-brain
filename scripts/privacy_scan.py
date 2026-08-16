@@ -1,27 +1,31 @@
 import argparse
+import hashlib
 import re
 import subprocess
 import sys
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-SECRET_PATTERNS = {
-    "aws-access-key": re.compile(rb"(?:AKIA|ASIA)[0-9A-Z]{16}"),
-    "github-token": re.compile(rb"gh[pousr]_[A-Za-z0-9_]{30,}"),
-    "private-key": re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-    "jwt": re.compile(rb"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
-    "assigned-secret": re.compile(rb"(?i)(?:api[_-]?key|secret[_-]?key|access[_-]?token|client[_-]?secret)\s*[:=]\s*['\"][^'\"\r\n]{12,}['\"]"),
-}
+from rta_brain.privacy import RELEASE_PATH_BYTE_PATTERNS, RELEASE_SECRET_BYTE_PATTERNS
 
-PATH_PATTERNS = {
-    "windows-user-path": re.compile(rb"(?i)[A-Z]:[\\/]Users[\\/][^\\/\x00\r\n]{1,100}[\\/]"),
-    "posix-user-path": re.compile(rb"/(?:Users|home)/[^/\x00\r\n]{1,100}/"),
-    "unc-path": re.compile(rb"\\\\[^\\/\x00\r\n]{1,253}\\[^\\/\x00\r\n]{1,100}\\"),
-}
+SECRET_PATTERNS = RELEASE_SECRET_BYTE_PATTERNS
+PATH_PATTERNS = RELEASE_PATH_BYTE_PATTERNS
 
 FORBIDDEN_SUFFIXES = {".db", ".key", ".log", ".pem", ".sqlite", ".sqlite-shm", ".sqlite-wal"}
 FORBIDDEN_NAMES = {".env"}
 MAX_SCAN_BYTES = 25 * 1024 * 1024
+
+KNOWN_PATH_DEFINITION_LINE_SHA256 = {
+    "scripts/privacy_scan.py": {
+        "a884a3e6b03becf8a2b72dd8d6bd42114ad0bd8e9daa9d59eda55fae9cc7ed29",
+    },
+    "rta_brain/privacy.py": {
+        "2f15cfdbb376945ca7e2e5b9c36bb3bf2a803eecfa28488eb32a2d807897de6d",
+    },
+}
 
 
 def path_scan_views(data: bytes) -> list[bytes]:
@@ -57,6 +61,18 @@ def is_placeholder_path(match: bytes) -> bool:
     return any(marker in lowered for marker in (b"<real-name>", b"<username>", b"%userprofile%", b"$env:userprofile", b"{username}", b"[username]"))
 
 
+def is_known_path_definition(relative: str, view: bytes, start: int, end: int) -> bool:
+    allowed = KNOWN_PATH_DEFINITION_LINE_SHA256.get(relative)
+    if not allowed:
+        return False
+    line_start = view.rfind(b"\n", 0, start) + 1
+    line_end = view.find(b"\n", end)
+    if line_end < 0:
+        line_end = len(view)
+    digest = hashlib.sha256(view[line_start:line_end].strip()).hexdigest()
+    return digest in allowed
+
+
 def candidate_files(root: Path) -> list[Path]:
     result = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
@@ -86,11 +102,20 @@ def scan(root: Path, deny_terms: list[str]) -> list[tuple[str, str]]:
             for match in pattern.finditer(data):
                 findings.append((relative, label))
                 break
-        if relative != "scripts/privacy_scan.py":
-            for label, pattern in PATH_PATTERNS.items():
-                matches = (match.group(0) for view in path_scan_views(data) for match in pattern.finditer(view))
-                if any(not is_placeholder_path(match) for match in matches):
-                    findings.append((relative, label))
+        for label, pattern in PATH_PATTERNS.items():
+            found = False
+            for view in path_scan_views(data):
+                for match in pattern.finditer(view):
+                    if is_placeholder_path(match.group(0)):
+                        continue
+                    if is_known_path_definition(relative, view, match.start(), match.end()):
+                        continue
+                    found = True
+                    break
+                if found:
+                    break
+            if found:
+                findings.append((relative, label))
     return findings
 
 

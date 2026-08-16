@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shlex
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -69,9 +67,28 @@ def _desktop_quote(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("`", "\\`") + '"'
 
 
+def _windows_batch_quote(value: str) -> str:
+    if any(character in value for character in ('\0', '\r', '\n', '"')):
+        raise ValueError("Windows startup arguments contain unsupported characters")
+    escaped = value.replace("%", "%%")
+    backslashes = 0
+    quoted = ['"']
+    for character in escaped:
+        if character == "\\":
+            backslashes += 1
+            continue
+        quoted.append("\\" * backslashes)
+        backslashes = 0
+        quoted.append(character)
+    quoted.append("\\" * (backslashes * 2))
+    quoted.append('"')
+    return "".join(quoted)
+
+
 def _entry_text(kind: str, parts: list[str], key: str) -> str:
     if kind == "windows":
-        return "@echo off\n" + subprocess.list2cmdline(parts) + "\n"
+        command = " ".join(_windows_batch_quote(part) for part in parts)
+        return "@echo off\nsetlocal DisableDelayedExpansion\n" + command + "\n"
     if kind == "macos":
         arguments = "\n".join(f"      <string>{escape(part)}</string>" for part in parts)
         return f"""<?xml version="1.0" encoding="UTF-8"?>

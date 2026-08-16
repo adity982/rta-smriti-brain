@@ -6,6 +6,7 @@ from pathlib import Path
 from . import __version__
 from .autostart import autostart_status, disable_autostart, enable_autostart
 from .context import build_context_pack, build_continuation_prompt
+from .benchmark import default_public_benchmark_path, run_public_benchmark
 from .console import publish_readiness, run_dashboard
 from .console_daemon import (
     console_status,
@@ -16,14 +17,19 @@ from .console_daemon import (
     stop_console,
 )
 from .db import (
-    connect, doctor, get_project_settings, graph, ingest_repo, ingest_thread, init_project, reflect,
+    connect, doctor, get_project_settings, graph, graph_query, ingest_repo, ingest_thread, init_project, reflect,
     remember, save_checkpoint, search, stale_check, update_project_settings,
 )
 from .governance import create_policy, list_policies, list_receipts, preflight, retire_policy
+from .diagnostics import retrieval_diagnostics
+from .hooks import install_git_hooks, uninstall_git_hooks
+from .lifecycle import apply_memory_feedback, run_conservative_decay
 from .onboarding import SUPPORTED_TARGET_AGENTS, onboard_project
+from .portability import export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_verify
 from .project import bootstrap_project, install_local, mcp_config_payload, projects_list, self_check
 from .watch import watch_repository
 from .watch_daemon import run_watcher_worker, start_watcher, stop_watcher, watcher_status
+from .workspaces import add_project_to_workspace, create_workspace, get_workspace, list_workspaces, search_workspace
 
 
 def default_db_path() -> Path:
@@ -128,6 +134,76 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(graph_cmd)
     graph_cmd.add_argument("--project", default="default")
     graph_cmd.add_argument("--limit", type=int, default=100)
+
+    graph_query_cmd = sub.add_parser("graph-query", help="Traverse dependencies, dependents, or impact around an entity")
+    add_common_options(graph_query_cmd)
+    graph_query_cmd.add_argument("target")
+    graph_query_cmd.add_argument("--project", default="default")
+    graph_query_cmd.add_argument("--type", dest="query_type", choices=("dependencies", "dependents", "impact", "evidence", "relevance"), default="impact")
+    graph_query_cmd.add_argument("--depth", type=int, default=2)
+    graph_query_cmd.add_argument("--limit", type=int, default=100)
+
+    diagnostics_cmd = sub.add_parser("retrieval-diagnostics", help="Explain retrieval mode, coverage, ranking, evidence, and freshness")
+    add_common_options(diagnostics_cmd)
+    diagnostics_cmd.add_argument("query")
+    diagnostics_cmd.add_argument("--project", default="default")
+    diagnostics_cmd.add_argument("--limit", type=int, default=8)
+
+    benchmark_cmd = sub.add_parser("benchmark", help="Run the reproducible public retrieval and safety benchmark")
+    add_common_options(benchmark_cmd)
+    benchmark_cmd.add_argument("--dataset", default=str(default_public_benchmark_path()))
+    benchmark_cmd.add_argument("--include-semantic", action="store_true")
+    benchmark_cmd.add_argument("--semantic-model", default="all-MiniLM-L6-v2")
+
+    workspace_cmd = sub.add_parser("workspace", help="Create and use a multi-project workspace")
+    add_common_options(workspace_cmd)
+    workspace_cmd.add_argument("action", choices=("create", "add", "show", "list", "search"))
+    workspace_cmd.add_argument("--name")
+    workspace_cmd.add_argument("--description", default="")
+    workspace_cmd.add_argument("--project")
+    workspace_cmd.add_argument("--member-db", help="Brain database containing the member project")
+    workspace_cmd.add_argument("--role", default="member")
+    workspace_cmd.add_argument("--query")
+    workspace_cmd.add_argument("--limit", type=int, default=4)
+
+    bundle_export = sub.add_parser("bundle-export", help="Export selected memories, checkpoints, and policies with redaction")
+    add_common_options(bundle_export)
+    bundle_export.add_argument("output")
+    bundle_export.add_argument("--project", action="append", dest="projects")
+    bundle_export.add_argument("--include", action="append", choices=("memories", "checkpoints", "policies"))
+    bundle_export.add_argument("--no-redact", action="store_true")
+    bundle_export.add_argument("--preview", action="store_true", help="Inspect the proposed bundle without writing it")
+
+    bundle_import = sub.add_parser("bundle-import", help="Verify and import a selective Rta-Smriti bundle")
+    add_common_options(bundle_import)
+    bundle_import.add_argument("source")
+    bundle_import.add_argument("--conflict", choices=("rename", "merge", "fail"), default="rename")
+    bundle_import.add_argument("--preview", action="store_true", help="Validate and report conflicts without changing the brain")
+
+    snapshot_cmd = sub.add_parser("snapshot", help="Create or verify an authenticated local brain snapshot")
+    add_common_options(snapshot_cmd)
+    snapshot_cmd.add_argument("action", choices=("create", "verify"))
+    snapshot_cmd.add_argument("path")
+    snapshot_cmd.add_argument("--key", required=True)
+
+    hooks_cmd = sub.add_parser("git-hooks", help="Opt in or out of managed Git checkpoint hooks")
+    add_common_options(hooks_cmd)
+    hooks_cmd.add_argument("action", choices=("install", "uninstall"))
+    hooks_cmd.add_argument("--root", default=str(Path.cwd()))
+    hooks_cmd.add_argument("--project", default="default")
+
+    feedback_cmd = sub.add_parser("memory-feedback", help="Record evidence-backed usefulness feedback for a memory")
+    add_common_options(feedback_cmd)
+    feedback_cmd.add_argument("memory_id", type=int)
+    feedback_cmd.add_argument("--project", default="default")
+    feedback_cmd.add_argument("--outcome", choices=("helpful", "neutral", "harmful"), required=True)
+    feedback_cmd.add_argument("--evidence", default="")
+
+    decay_cmd = sub.add_parser("memory-decay", help="Conservatively age unverified inference and hypothesis memories")
+    add_common_options(decay_cmd)
+    decay_cmd.add_argument("--project", default="default")
+    decay_cmd.add_argument("--minimum-age-days", type=int, default=90)
+    decay_cmd.add_argument("--step", type=float, default=0.03)
 
     pack = sub.add_parser("context-pack", help="Build a compact task context pack")
     add_common_options(pack)
@@ -459,6 +535,67 @@ def main(argv=None) -> int:
                 payload = search(conn, args.query, project=args.project, limit=args.limit)
             elif args.command == "graph":
                 payload = graph(conn, project=args.project, limit=args.limit)
+            elif args.command == "graph-query":
+                payload = graph_query(
+                    conn, project=args.project, query_type=args.query_type,
+                    target=args.target, depth=args.depth, limit=args.limit,
+                )
+            elif args.command == "retrieval-diagnostics":
+                payload = retrieval_diagnostics(conn, args.query, project=args.project, limit=args.limit)
+            elif args.command == "benchmark":
+                payload = run_public_benchmark(
+                    Path(args.dataset), include_semantic=args.include_semantic,
+                    semantic_model=args.semantic_model,
+                )
+            elif args.command == "workspace":
+                if args.action == "list":
+                    payload = list_workspaces(conn)
+                elif not args.name:
+                    raise ValueError("workspace action requires --name")
+                elif args.action == "create":
+                    payload = create_workspace(conn, args.name, args.description)
+                elif args.action == "add":
+                    if not args.project:
+                        raise ValueError("workspace add requires --project")
+                    payload = add_project_to_workspace(
+                        conn, workspace=args.name, project=args.project, role=args.role, db_path=args.member_db,
+                    )
+                elif args.action == "search":
+                    if not args.query:
+                        raise ValueError("workspace search requires --query")
+                    payload = search_workspace(conn, workspace=args.name, query=args.query, limit_per_project=args.limit)
+                else:
+                    payload = get_workspace(conn, args.name)
+            elif args.command == "bundle-export":
+                payload = export_bundle(
+                    conn, Path(args.output), projects=args.projects,
+                    include=tuple(args.include or ("memories", "checkpoints", "policies")), redact=not args.no_redact,
+                    preview=args.preview,
+                )
+            elif args.command == "bundle-import":
+                payload = (
+                    inspect_bundle(Path(args.source), conn=conn)
+                    if args.preview else import_bundle(conn, Path(args.source), conflict=args.conflict)
+                )
+            elif args.command == "snapshot":
+                payload = (
+                    snapshot_create(Path(args.db), Path(args.path), key_path=Path(args.key))
+                    if args.action == "create" else snapshot_verify(Path(args.path), key_path=Path(args.key))
+                )
+            elif args.command == "git-hooks":
+                payload = (
+                    install_git_hooks(Path(args.root), db_path=Path(args.db), project=args.project)
+                    if args.action == "install" else uninstall_git_hooks(Path(args.root))
+                )
+            elif args.command == "memory-feedback":
+                payload = apply_memory_feedback(
+                    conn, project=args.project, memory_id=args.memory_id,
+                    outcome=args.outcome, evidence=args.evidence,
+                )
+            elif args.command == "memory-decay":
+                payload = run_conservative_decay(
+                    conn, project=args.project, minimum_age_days=args.minimum_age_days, step=args.step,
+                )
             elif args.command == "context-pack":
                 payload = build_context_pack(
                     conn, args.task, project=args.project, limit=args.limit, max_tokens=args.max_tokens

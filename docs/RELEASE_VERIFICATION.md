@@ -1,18 +1,20 @@
 # Release Verification
 
-This page records the reproducible publication checks for the source currently
-available on `main`. It is evidence for the public repository, not a substitute
-for CI results or a formal GitHub Release.
+This page records the reproducible checks for the local release candidate. It
+is implementation evidence, not a substitute for green hosted CI, owner
+approval, or a formal GitHub Release.
 
 ## Publication State
 
 - Source version: `0.4.0-alpha` (`0.4.0a1` in Python package metadata)
-- Published branch: `main`
+- Local candidate branch: `release/unified-next`
+- Target publication branch: `main`
 - Formal `v0.4.0-alpha` Git tag: intentionally not created
 - Formal `v0.4.0-alpha` GitHub Release: intentionally not created
 - Latest historical tag: `v0.3.0-alpha`
 
-The v0.4 source is therefore a verified update on `main`, not a tagged release.
+No v0.4 source, tag, binary, or Release described by this candidate has been
+published yet. Publication remains an explicit owner gate.
 
 ## Verification Commands
 
@@ -23,7 +25,8 @@ npm run build
 npm run build:launch
 python -m unittest discover -s tests -v
 python -m compileall -q rta_brain tests scripts
-python scripts/build_installed_smoke.py
+python -m build --wheel
+python scripts/installed_distribution_smoke.py --wheel <wheel-path>
 python -m pip install ".[binary]"
 python scripts/build_binary.py
 python scripts/smoke_binary.py
@@ -45,39 +48,51 @@ gitleaks dir --redact --no-banner launch-site/public
 
 ## Current Verified Snapshot
 
-Verified locally on Windows on 2026-08-16 before publishing the cross-platform
-update. The same workflow runs on Windows, Ubuntu, and macOS in
-[GitHub Actions](https://github.com/sulabhdubey/rta-smriti-brain/actions/workflows/ci.yml).
+Verified locally on Windows on 2026-08-16 before publication. The checked-in
+workflow defines equivalent Windows, Ubuntu, and macOS jobs, but this exact
+candidate is not considered cross-platform verified until those hosted jobs
+run green after the owner-approved push.
 
 | Gate | Result |
 | --- | --- |
-| Python regression suite | 75 passed, 1 privilege-gated skip (76 total) |
+| Pytest regression suite | 167 passed, 4 platform/privilege skips, 513 subtests passed |
+| Unittest discovery | 171 tests passed, 4 platform/privilege skips |
 | Python bytecode compilation | Passed |
 | Operator console production build | Passed |
 | Launch-site production build | Passed |
 | Root npm dependency audit | 0 vulnerabilities |
 | Python project dependency audit | No known vulnerabilities reported by `pip-audit` |
 | Editable Python package dry-run | Resolved `rta-smriti-brain-0.4.0a1` |
-| Installed wheel first-run smoke | 17 checks passed, including managed watcher start, refresh, status, and stop from an unrelated working directory |
+| Installed wheel first-run smoke | 20 checks passed, including bootstrap, retrieval, wrappers, MCP, managed watcher lifecycle, and console lifecycle from an unrelated working directory |
 | Standalone Windows binary | Built from the versioned spec; CLI, SQLite/FTS, MCP dispatch, packaged dashboard assets, and managed background sync passed |
+| Windows executable SHA-256 | `57b0221c032a5e4b4110aeb2405b45ef8ad7a7cc2bd60f142a605dde2cd342ad` |
+| Universal wheel SHA-256 | `cbbdf07561977228ef864650ed554a7cd2129130af0e79e35a3f1170f6cf7f40` |
 | Operator browser workflow | Six local projects loaded; Graph, Files, Canvas, Bases, references, task handoff, copy actions, agent selection, context packs, release checks, bootstrap, settings, and watcher controls passed at desktop and 390 px; 0 console warnings or errors |
-| Publication privacy scan | Passed across 120 public candidates |
-| Built-in publish-readiness command | Structural gates passed; clean-tree gate confirmed after commit |
+| Publication privacy scan | Passed across 147 public candidates |
+| Public benchmark | Six synthetic documents and queries; lexical and dependency-free hash-hybrid regression gates passed; this is not superiority evidence |
+| Codex Security final diff scan | Complete, 35/35 review items, 0 findings (`ff1bbe20-368c-47b4-97ea-02924d455211`) |
+| Built-in publish-readiness command | Structural gates passed; the clean-tree gate is re-evaluated on the frozen candidate commit before owner approval |
 | Git whitespace validation | Passed |
 
-The Windows symlink-rejection test may skip when the current account cannot
-create symbolic links. A skip is reported explicitly rather than counted as a
-pass.
+The four skips are explicit platform or privilege conditions: Windows cannot
+exercise POSIX mode bits, and this account cannot create the symlinks used by
+three rejection tests. Hard-link, reparse-aware, descriptor-identity, and
+replace-during-read controls remain exercised on Windows.
 
 Hosted compatibility is accepted only when all three operating-system jobs are
 green. Each job performs the dashboard builds, privacy scan, Python regression
 suite, bytecode compilation, package-resolution check, clean-wheel install and
 first-run smoke, and built-in publish-readiness check.
 
-Gitleaks is an optional release-environment check and is not claimed in this
-snapshot. A fresh command-availability check on 2026-08-16 returned
-`GITLEAKS_UNAVAILABLE`. The bundled privacy scanner remains a required gate and
-passed; this page does not imply that the two tools are equivalent.
+Gitleaks, Bandit, Ruff, and Semgrep were unavailable in the current shell, so
+this page does not claim fresh results from any of them. The bundled privacy
+scanner, dependency audits, focused hardening tests, and Codex Security scan
+all passed; none is described as equivalent to an unavailable tool.
+
+The final Windows executable and universal wheel are staged under the ignored
+local release-artifact directory with a generated `SHA256SUMS.txt`; the manifest
+was recomputed and matched both files. macOS and Linux binaries must be produced
+and checksum-tested by the hosted matrix from the exact approved commit.
 
 ## Privacy Boundary
 

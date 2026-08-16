@@ -16,14 +16,19 @@ from urllib.parse import parse_qs, urlparse
 
 from .context import build_context_pack, build_continuation_prompt
 from .db import (
-    attach_memory_provenance, connect, get_project_settings, graph, ingest_repo, init_schema,
+    attach_memory_provenance, connect, get_project_settings, graph, graph_query, ingest_repo, init_schema,
     latest_checkpoint, reflect, remember, save_checkpoint, search, stale_check, update_project_settings,
 )
+from .diagnostics import retrieval_diagnostics
 from .parsers import ParserRegistry
 from .project import mcp_config_payload, runtime_shell, shell_cli_command, projects_list, self_check
 from .repository import canonical_root, canonical_root_key, repository_state, trusted_git_candidates
 from .governance import create_policy, list_policies, list_receipts, preflight, retire_policy
+from .hooks import install_git_hooks, uninstall_git_hooks
+from .lifecycle import apply_memory_feedback, run_conservative_decay
+from .portability import export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_verify
 from .watch_daemon import start_watcher, stop_watcher, watcher_status
+from .workspaces import add_project_to_workspace, create_workspace, get_workspace, list_workspaces, search_workspace
 
 
 @dataclass(frozen=True)
@@ -691,6 +696,46 @@ def make_handler(config: ConsoleConfig):
                     db_path = resolve_brain_db(config, q["db_path"])
                     self._json(mcp_config_payload(str(db_path), q["project"], q.get("name", "rta-smriti"), config.tool_root))
                     return
+                if parsed.path == "/api/graph-query":
+                    q = _query(self)
+                    conn = _open_db(resolve_brain_db(config, q["db_path"]))
+                    try:
+                        self._json(graph_query(
+                            conn, project=q["project"], query_type=q.get("type", "impact"),
+                            target=q["target"], depth=int(q.get("depth", "2")), limit=int(q.get("limit", "100")),
+                        ))
+                    finally:
+                        conn.close()
+                    return
+                if parsed.path == "/api/retrieval-diagnostics":
+                    q = _query(self)
+                    conn = _open_db(resolve_brain_db(config, q["db_path"]))
+                    try:
+                        self._json(retrieval_diagnostics(
+                            conn, q["query"], project=q["project"], limit=int(q.get("limit", "8")),
+                        ))
+                    finally:
+                        conn.close()
+                    return
+                if parsed.path == "/api/workspaces":
+                    q = _query(self)
+                    conn = _open_db(resolve_brain_db(config, q["db_path"]))
+                    try:
+                        self._json(get_workspace(conn, q["workspace"]) if q.get("workspace") else list_workspaces(conn))
+                    finally:
+                        conn.close()
+                    return
+                if parsed.path == "/api/workspace-search":
+                    q = _query(self)
+                    conn = _open_db(resolve_brain_db(config, q["db_path"]))
+                    try:
+                        self._json(search_workspace(
+                            conn, workspace=q["workspace"], query=q["query"],
+                            limit_per_project=int(q.get("limit", "4")),
+                        ))
+                    finally:
+                        conn.close()
+                    return
                 if parsed.path == "/api/governance":
                     q = _query(self)
                     conn = _open_db(resolve_brain_db(config, q["db_path"]))
@@ -903,6 +948,99 @@ def make_handler(config: ConsoleConfig):
                         self._json(result)
                     finally:
                         conn.close()
+                    return
+                if self.path == "/api/workspace":
+                    conn = _open_db(resolve_brain_db(config, payload["db_path"]))
+                    try:
+                        action = str(payload.get("action", "create")).strip().lower()
+                        if action == "create":
+                            result = create_workspace(conn, payload["name"], payload.get("description", ""))
+                        elif action == "add":
+                            result = add_project_to_workspace(
+                                conn, workspace=payload["name"], project=payload["project"], role=payload.get("role", "member"),
+                                db_path=resolve_brain_db(config, payload["member_db_path"]) if payload.get("member_db_path") else None,
+                            )
+                        else:
+                            raise ValueError("workspace action must be create or add")
+                        self._json(result)
+                    finally:
+                        conn.close()
+                    return
+                if self.path == "/api/memory-feedback":
+                    conn = _open_db(resolve_brain_db(config, payload["db_path"]))
+                    try:
+                        self._json(apply_memory_feedback(
+                            conn, project=payload["project"], memory_id=int(payload["memory_id"]),
+                            outcome=payload["outcome"], evidence=payload.get("evidence", ""),
+                        ))
+                    finally:
+                        conn.close()
+                    return
+                if self.path == "/api/memory-decay":
+                    conn = _open_db(resolve_brain_db(config, payload["db_path"]))
+                    try:
+                        self._json(run_conservative_decay(
+                            conn, project=payload["project"],
+                            minimum_age_days=int(payload.get("minimum_age_days", 90)), step=float(payload.get("step", 0.03)),
+                        ))
+                    finally:
+                        conn.close()
+                    return
+                if self.path == "/api/bundle":
+                    conn = _open_db(resolve_brain_db(config, payload["db_path"]))
+                    try:
+                        action = str(payload.get("action", "export")).strip().lower()
+                        if action == "export":
+                            result = export_bundle(
+                                conn, Path(payload["path"]), projects=payload.get("projects"),
+                                include=tuple(payload.get("include") or ("memories", "checkpoints", "policies")),
+                                redact=bool(payload.get("redact", True)),
+                            )
+                        elif action == "preview-export":
+                            result = export_bundle(
+                                conn, Path(payload["path"]), projects=payload.get("projects"),
+                                include=tuple(payload.get("include") or ("memories", "checkpoints", "policies")),
+                                redact=bool(payload.get("redact", True)), preview=True,
+                            )
+                        elif action == "preview-import":
+                            result = inspect_bundle(Path(payload["path"]), conn=conn)
+                        elif action == "import":
+                            result = import_bundle(conn, Path(payload["path"]), conflict=payload.get("conflict", "rename"))
+                        else:
+                            raise ValueError("bundle action must be export, preview-export, preview-import, or import")
+                        self._json(result)
+                    finally:
+                        conn.close()
+                    return
+                if self.path == "/api/snapshot":
+                    db_path = resolve_brain_db(config, payload["db_path"])
+                    action = str(payload.get("action", "create")).strip().lower()
+                    if action == "create":
+                        self._json(snapshot_create(db_path, Path(payload["path"]), key_path=Path(payload["key_path"])))
+                    elif action == "verify":
+                        self._json(snapshot_verify(Path(payload["path"]), key_path=Path(payload["key_path"])))
+                    else:
+                        raise ValueError("snapshot action must be create or verify")
+                    return
+                if self.path == "/api/git-hooks":
+                    action = str(payload.get("action", "install")).strip().lower()
+                    db_path = resolve_brain_db(config, payload["db_path"])
+                    conn = _open_db(db_path)
+                    try:
+                        row = conn.execute(
+                            "SELECT root_path FROM projects WHERE name = ?", (payload["project"],),
+                        ).fetchone()
+                    finally:
+                        conn.close()
+                    if not row or not row["root_path"]:
+                        raise ValueError("selected project has no canonical repository root")
+                    root = canonical_root(row["root_path"])
+                    if action == "install":
+                        self._json(install_git_hooks(root, db_path=db_path, project=payload["project"]))
+                    elif action == "uninstall":
+                        self._json(uninstall_git_hooks(root))
+                    else:
+                        raise ValueError("git-hooks action must be install or uninstall")
                     return
                 if self.path == "/api/bootstrap":
                     from .onboarding import onboard_project

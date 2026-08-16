@@ -74,7 +74,7 @@ class GovernanceTests(unittest.TestCase):
             required_check="unit-suite",
             pramana="sabda",
             confidence=1.0,
-            provenance={"verification_status": "verified", "source_path": "AGENTS.md"},
+            provenance={"verification_status": "verified", "source_path": "AGENTS.md", "source_hash": "policy-proof"},
         )
         missing = preflight(self.conn, project="demo", action="Commit release", completed_checks=[])
         satisfied = preflight(
@@ -83,6 +83,9 @@ class GovernanceTests(unittest.TestCase):
         self.assertEqual(missing["decision"], "block")
         self.assertEqual(satisfied["decision"], "allow")
         self.assertEqual(satisfied["satisfied_policy_ids"], [missing["matches"][0]["policy_id"]])
+        self.assertEqual(satisfied["completed_check_evidence"][0]["verification_status"], "owner_attested")
+        self.assertTrue(satisfied["decision_receipt"]["action_digest"])
+        self.assertTrue(satisfied["decision_receipt"]["policy_digest"])
 
     def test_path_scope_and_expiry_are_applied_deterministically(self):
         active = create_policy(
@@ -94,7 +97,7 @@ class GovernanceTests(unittest.TestCase):
             path_glob="migrations/*.sql",
             pramana="sabda",
             confidence=0.9,
-            provenance={"verification_status": "verified"},
+            provenance={"verification_status": "verified", "source_hash": "production-policy"},
         )["policy"]
         create_policy(
             self.conn,
@@ -106,7 +109,7 @@ class GovernanceTests(unittest.TestCase):
             expires_at="2000-01-01T00:00:00+00:00",
             pramana="pratyaksha",
             confidence=1.0,
-            provenance={"verification_status": "verified"},
+            provenance={"verification_status": "verified", "source_hash": "privacy-policy"},
         )
         matched = preflight(
             self.conn, project="demo", action="Edit migration", path="migrations/001.sql",
@@ -126,7 +129,7 @@ class GovernanceTests(unittest.TestCase):
             path_glob="src/prod/*",
             pramana="pratyaksha",
             confidence=1.0,
-            provenance={"verification_status": "verified"},
+            provenance={"verification_status": "verified", "source_hash": "production-edit-policy"},
         )["policy"]
         decision = preflight(
             self.conn,
@@ -170,7 +173,7 @@ class GovernanceTests(unittest.TestCase):
             action_contains="publish",
             pramana="pratyaksha",
             confidence=1.0,
-            provenance={"verification_status": "verified"},
+            provenance={"verification_status": "verified", "source_hash": "mcp-privacy-policy"},
         )
         server = RtaBrainMcpServer(Path(self.tempdir.name) / "brain.sqlite", "demo")
         tools = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]
@@ -206,6 +209,7 @@ class GovernanceTests(unittest.TestCase):
                 "--effect", "block", "--action-contains", "delete evidence",
                 "--pramana", "pratyaksha", "--confidence", "1",
                 "--verification-status", "verified",
+                "--source-hash", "cli-policy-proof",
             ],
             text=True, capture_output=True, cwd=ROOT,
         )

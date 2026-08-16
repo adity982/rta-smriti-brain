@@ -23,6 +23,7 @@ def main() -> int:
         raise FileNotFoundError(f"standalone executable is missing: {executable}")
     version = run(executable, "--version").stdout.strip()
     health = json.loads(run(executable, "--json", "doctor").stdout)
+    benchmark = json.loads(run(executable, "benchmark", "--json").stdout)
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         project = root / "project"
@@ -63,15 +64,46 @@ def main() -> int:
             stopped = json.loads(
                 run(executable, "--db", str(db_path), "--json", "watcher", "stop", "--project", "smoke").stdout
             )
+        managed_port = 0
+        managed = json.loads(
+            run(
+                executable, "console", "start", "--brain-dir", str(brains),
+                "--port", str(managed_port), "--no-open", "--json",
+            ).stdout
+        )
+        try:
+            managed_status = json.loads(
+                run(executable, "console", "status", "--brain-dir", str(brains), "--json").stdout
+            )
+            managed_open = json.loads(
+                run(
+                    executable, "console", "open", "--brain-dir", str(brains), "--no-open", "--json",
+                ).stdout
+            )
+        finally:
+            managed_stopped = json.loads(
+                run(executable, "console", "stop", "--brain-dir", str(brains), "--json").stdout
+            )
     if (
         "0.4.0a1" not in version
         or health.get("status") != "ok"
+        or not benchmark.get("corpus", {}).get("synthetic")
+        or set(benchmark.get("modes", {})) != {"no_memory", "lexical", "hash_hybrid", "optional_semantic"}
+        or benchmark.get("modes", {}).get("optional_semantic", {}).get("status") != "not_requested"
         or response.get("result") != {}
         or watcher.get("state") != "running"
         or stopped.get("state") != "stopped"
+        or managed.get("state") != "running"
+        or managed_status.get("state") != "running"
+        or "url" in managed_status
+        or "#token=" not in managed_open.get("url", "")
+        or managed_stopped.get("state") != "stopped"
     ):
         raise RuntimeError("standalone binary smoke contract failed")
-    print("Standalone binary smoke passed: CLI, SQLite/FTS, MCP dispatch, and background sync.")
+    print(
+        "Standalone binary smoke passed: CLI, SQLite/FTS, MCP dispatch, public benchmark, "
+        "background sync, and managed console lifecycle."
+    )
     return 0
 
 

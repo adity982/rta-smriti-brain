@@ -2632,7 +2632,7 @@ textarea:focus {
 
 .inspectorTabs {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .inspectorTabs button {
@@ -3163,6 +3163,311 @@ textarea:focus {
   font-size: 11px;
   line-height: 1.4;
 }
+
+.intelligencePanel .sectionHeader em {
+  color: var(--cyan);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.intelligenceTabs,
+.metricStrip {
+  display: grid;
+  gap: 6px;
+}
+
+.intelligenceTabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.metricStrip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+.intelligenceTabs {
+  margin-bottom: 14px;
+}
+
+.intelligenceTabs button {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, .035);
+  cursor: pointer;
+}
+
+.intelligenceTabs button.active {
+  color: #dffbff;
+  border-color: rgba(34, 211, 238, .46);
+  background: rgba(34, 211, 238, .1);
+}
+
+.intelligenceSection,
+.diagnosticResults,
+.impactResults,
+.workspaceList {
+  display: grid;
+  gap: 8px;
+}
+
+.intelligenceSection > label {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.metricStrip article,
+.diagnosticResults article,
+.impactResults article {
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .03);
+}
+
+.metricStrip span,
+.metricStrip strong,
+.diagnosticResults strong,
+.impactResults span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metricStrip span {
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.metricStrip strong {
+  font-size: 13px;
+}
+
+.diagnosticResults article > div,
+.impactResults article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.diagnosticResults span,
+.diagnosticResults small,
+.impactResults small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.impactResults article {
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+}
+
+.impactResults article em {
+  color: var(--amber);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.workspaceList button,
+.workspaceAction {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
+.workspaceList button {
+  min-height: 38px;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  text-align: left;
+  background: rgba(255, 255, 255, .03);
+  cursor: pointer;
+}
+
+.workspaceList button.active {
+  border-color: rgba(94, 234, 212, .45);
+  background: rgba(20, 184, 166, .1);
+}
+
+.workspaceList em {
+  color: var(--cyan);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.workspaceAction input {
+  min-width: 0;
+}
+
+.workspaceAction button,
+.memoryFeedback button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  background: rgba(255, 255, 255, .05);
+  cursor: pointer;
+}
+
+.workspaceStatus {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.workspaceResults {
+  display: grid;
+  gap: 7px;
+}
+
+.workspaceResults article {
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .025);
+}
+
+.workspaceResults article > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.workspaceResults article em {
+  color: var(--cyan);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.workspaceResults article p {
+  display: -webkit-box;
+  margin: 7px 0 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.workspaceResults article p span {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--text);
+  font-weight: 750;
+}
+
+.memoryFeedback {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.memoryFeedback button {
+  width: 29px;
+  height: 27px;
+}
+
+.memoryFeedback button:hover:first-child {
+  color: #86efac;
+  border-color: rgba(34, 197, 94, .45);
+}
+
+.memoryFeedback button:hover:last-child {
+  color: #fda4af;
+  border-color: rgba(251, 113, 133, .45);
+}
+
+.portabilityPanel h3 {
+  margin: 8px 0 0;
+  color: #dff6ff;
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.bundleChecks {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.bundleChecks label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: capitalize;
+}
+
+.portabilityActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.portabilityActions.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.portabilityActions button {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, .04);
+  cursor: pointer;
+}
+
+.portabilityActions button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+.portabilityReceipt {
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  border: 1px solid rgba(94, 234, 212, .28);
+  border-radius: 7px;
+  background: rgba(20, 184, 166, .07);
+}
+
+.portabilityReceipt strong,
+.portabilityReceipt span,
+.portabilityReceipt small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portabilityReceipt strong { font-size: 11px; }
+.portabilityReceipt span,
+.portabilityReceipt small { color: var(--muted); font-size: 10px; }
 
 @media (max-width: 520px) {
   .policyFieldPair,

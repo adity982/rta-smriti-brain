@@ -24,6 +24,12 @@ IMPORT_PATTERNS = (
     re.compile(r"^\s*import\s+.*?\s+from\s+['\"]([^'\"]+)['\"]", re.MULTILINE),
     re.compile(r"require\(['\"]([^'\"]+)['\"]\)"),
 )
+CALL_PATTERN = re.compile(r"\b([A-Za-z_$][A-Za-z0-9_$.]*)\s*\(")
+CALL_EXCLUSIONS = frozenset({
+    "and", "assert", "async", "await", "catch", "class", "def", "elif", "except",
+    "for", "function", "if", "lambda", "match", "new", "not", "or", "raise",
+    "return", "sizeof", "super", "switch", "throw", "try", "typeof", "while", "with",
+})
 
 TREE_SITTER_LANGUAGES = {
     ".py": "python",
@@ -59,6 +65,7 @@ TREE_SITTER_IMPORT_NODES = {
 class ParseResult:
     symbols: list[str] = field(default_factory=list)
     imports: list[str] = field(default_factory=list)
+    calls: list[str] = field(default_factory=list)
     parser: str = "regex"
     warnings: list[str] = field(default_factory=list)
 
@@ -75,7 +82,18 @@ class RegexParser:
     def parse(self, _path: Path, text: str) -> ParseResult:
         symbols = {match.group(1) for pattern in SYMBOL_PATTERNS for match in pattern.finditer(text)}
         imports = {match.group(1) for pattern in IMPORT_PATTERNS for match in pattern.finditer(text)}
-        return ParseResult(sorted(symbols, key=str.lower), sorted(imports, key=str.lower), self.name)
+        calls = {
+            match.group(1).split(".")[-1]
+            for match in CALL_PATTERN.finditer(text)
+            if match.group(1).casefold() not in CALL_EXCLUSIONS
+            and match.group(1).split(".")[-1] not in symbols
+        }
+        return ParseResult(
+            symbols=sorted(symbols, key=str.lower),
+            imports=sorted(imports, key=str.lower),
+            calls=sorted(calls, key=str.lower),
+            parser=self.name,
+        )
 
 
 class TreeSitterParser:
@@ -126,7 +144,13 @@ class TreeSitterParser:
                 visit(child)
 
         visit(tree.root_node)
-        return ParseResult(sorted(symbols, key=str.lower), sorted(imports, key=str.lower), self.name)
+        regex_calls = RegexParser().parse(path, text).calls
+        return ParseResult(
+            symbols=sorted(symbols, key=str.lower),
+            imports=sorted(imports, key=str.lower),
+            calls=regex_calls,
+            parser=self.name,
+        )
 
 
 class LspParser:
@@ -154,6 +178,10 @@ class LspParser:
         return ParseResult(
             symbols=sorted({str(item) for item in payload.get("symbols", [])}, key=str.lower),
             imports=sorted({str(item) for item in payload.get("imports", [])}, key=str.lower),
+            calls=sorted(
+                {str(item) for item in payload.get("calls", RegexParser().parse(path, text).calls)},
+                key=str.lower,
+            ),
             parser=self.name,
         )
 

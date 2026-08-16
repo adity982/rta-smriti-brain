@@ -1,7 +1,10 @@
 from PyInstaller.utils.hooks import collect_data_files
 
 
-datas = collect_data_files("rta_brain", includes=["static/*", "static/assets/*"])
+datas = collect_data_files(
+    "rta_brain",
+    includes=["static/*", "static/assets/*", "data/*.json"],
+)
 
 analysis = Analysis(
     ["rta-brain.py"],

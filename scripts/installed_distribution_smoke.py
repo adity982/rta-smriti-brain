@@ -200,6 +200,47 @@ def main() -> int:
         if wrapper_health["status"] != "ok":
             raise AssertionError("installed wrapper did not work outside its install directory")
 
+        benchmark = json.loads(run([str(cli), "benchmark", "--json"], root).stdout)
+        if not benchmark["corpus"]["synthetic"] or benchmark["corpus"]["queries"] < 1:
+            raise AssertionError("installed package did not expose the synthetic public benchmark")
+        if set(benchmark["modes"]) != {"no_memory", "lexical", "hash_hybrid", "optional_semantic"}:
+            raise AssertionError(f"installed benchmark modes are incomplete: {benchmark['modes']}")
+        if benchmark["modes"]["optional_semantic"]["status"] != "not_requested":
+            raise AssertionError("installed benchmark did not keep optional semantic retrieval opt-in")
+
+        managed_port = free_port()
+        managed = json.loads(
+            run(
+                [
+                    str(cli), "console", "start", "--brain-dir", str(brains),
+                    "--port", str(managed_port), "--no-open", "--json",
+                ],
+                root,
+            ).stdout
+        )
+        if managed["state"] != "running" or managed["port"] != managed_port:
+            raise AssertionError(f"installed managed console did not start: {managed}")
+        try:
+            managed_status = json.loads(
+                run([str(cli), "console", "status", "--brain-dir", str(brains), "--json"], root).stdout
+            )
+            if managed_status["state"] != "running" or "url" in managed_status:
+                raise AssertionError(f"managed console status is invalid or leaked capability data: {managed_status}")
+            managed_open = json.loads(
+                run(
+                    [str(cli), "console", "open", "--brain-dir", str(brains), "--no-open", "--json"],
+                    root,
+                ).stdout
+            )
+            if managed_open["port"] != managed_port or "#token=" not in managed_open["url"]:
+                raise AssertionError(f"managed console could not recover its authorized URL: {managed_open}")
+        finally:
+            managed_stopped = json.loads(
+                run([str(cli), "console", "stop", "--brain-dir", str(brains), "--json"], root).stdout
+            )
+        if managed_stopped["state"] != "stopped":
+            raise AssertionError(f"installed managed console did not stop: {managed_stopped}")
+
         port = free_port()
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
@@ -244,7 +285,7 @@ def main() -> int:
                 dashboard.kill()
                 dashboard.wait(timeout=5)
 
-        print(json.dumps({"status": "ok", "checks": 17}, sort_keys=True))
+        print(json.dumps({"status": "ok", "checks": 20}, sort_keys=True))
     return 0
 
 

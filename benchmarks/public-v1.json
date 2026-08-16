@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "name": "Rta-Smriti Public Retrieval Corpus v1",
+  "documents": [
+    {"path": "architecture/queue.md", "text": "The worker queue uses bounded backpressure, a retry budget, and dead-letter isolation."},
+    {"path": "security/privacy.md", "text": "Release privacy requires a secret scan, path redaction, and a clean publication manifest."},
+    {"path": "operations/recovery.md", "text": "Console recovery verifies process identity, rejects stale state, and retries an occupied loopback port."},
+    {"path": "retrieval/hybrid.md", "text": "Hybrid retrieval combines lexical BM25 rank with local vector similarity and reports both scores."},
+    {"path": "governance/preflight.md", "text": "A pre-action gate may allow, warn, or block; low-trust memories cannot independently block an action."},
+    {"path": "continuation/checkpoint.md", "text": "A structured checkpoint records objective, verified evidence, remaining gaps, next action, and prohibited repetition."}
+  ],
+  "queries": [
+    {"query": "bounded queue retry backpressure", "relevant_paths": ["architecture/queue.md"]},
+    {"query": "privacy scan path redaction", "relevant_paths": ["security/privacy.md"]},
+    {"query": "recover stale console occupied port", "relevant_paths": ["operations/recovery.md"]},
+    {"query": "BM25 local vector scores", "relevant_paths": ["retrieval/hybrid.md"]},
+    {"query": "low trust cannot block", "relevant_paths": ["governance/preflight.md"]},
+    {"query": "checkpoint remaining gaps next action", "relevant_paths": ["continuation/checkpoint.md"]}
+  ]
+}

@@ -56,16 +56,25 @@ BrainDir="$HOME/.local/share/rta-smriti/brains"
 
 ## Standalone Binaries
 
-The repository includes a reproducible PyInstaller specification. Tagged builds
-produce separate Windows, macOS, and Linux artifacts in GitHub Actions. Until a
-release publishes those artifacts, the virtual-environment installation above
-is the verified path.
+The repository includes a reproducible PyInstaller specification. The release
+workflow builds and smoke-tests separate Windows, macOS, and Linux artifacts,
+renames them with version/OS/architecture, and uploads a `SHA256SUMS.txt`
+manifest. A tagged release attaches those artifacts only after owner approval
+and green hosted jobs. Until that release exists, the virtual-environment
+installation above is the verified public path.
+
+The current candidate has local installed-wheel and standalone-binary proof on
+Windows. macOS and Linux artifact claims become current only after the exact
+candidate commit passes the hosted matrix; workflow presence alone is not
+reported as execution evidence.
 
 Maintainers can build the executable for the current operating system with:
 
 ```bash
 python -m pip install ".[binary]"
 python scripts/build_binary.py
+python scripts/smoke_binary.py
+python scripts/package_release_artifacts.py --include-wheel
 ```
 
 The result is `dist/rta-brain.exe` on Windows and `dist/rta-brain` on macOS or
@@ -73,27 +82,34 @@ Linux. Standalone artifacts intentionally contain the dependency-free parser,
 token estimator, FTS, and feature-hash retrieval path; optional ML and parser
 packages remain available through the Python installation.
 
+Verify a downloaded artifact against the `SHA256SUMS.txt` file shipped in the
+same release before running it. Alpha binaries are not platform code-signed, so
+Windows SmartScreen or macOS Gatekeeper may require an explicit local trust
+decision. Checksums prove file integrity against the release manifest; they do
+not establish publisher identity.
+
 ## First Project
 
 Windows:
 
 ```powershell
-& $RtaBrain --json bootstrap-project C:\path\to\project --project project-name --brain-dir $BrainDir --write-agents
-& $RtaBrain dashboard --brain-dir $BrainDir
+& $RtaBrain start C:\path\to\project --project project-name --brain-dir $BrainDir --write-agents
 ```
 
 macOS or Linux:
 
 ```bash
-"$RtaBrain" --json bootstrap-project /path/to/project --project project-name --brain-dir "$BrainDir" --write-agents
-"$RtaBrain" dashboard --brain-dir "$BrainDir"
+"$RtaBrain" start /path/to/project --project project-name --brain-dir "$BrainDir" --write-agents
 ```
 
-Keep the dashboard terminal open and open the complete printed URL, including
-its one-session `#token=...` fragment. The dashboard runs in the foreground.
-Per-project repository sync can run as a managed background process, but it is
-not installed as a login item or privileged system service and does not restart
-automatically after reboot.
+The command detects the canonical Git root, creates or migrates and indexes the
+brain, starts per-project repository sync and the managed loopback console, then
+opens an authorized browser. Both processes survive terminal closure.
+
+Use `rta-brain console open --brain-dir <path>` later. `console status`,
+`restart`, and `stop` expose and repair lifecycle state. Login startup is disabled
+by default; `console login-enable` adds a user-level Windows, macOS, or Linux
+registration and `console login-disable` removes it. Neither mode is privileged.
 
 ## Optional Local Capabilities
 
@@ -125,8 +141,9 @@ not required by an installed wheel.
 
 - **`python` or `python3` is not found:** install Python 3.11 or newer and open a new terminal.
 - **Virtual-environment creation fails on Linux:** install your distribution's Python `venv` package.
-- **`connection refused`:** rerun the foreground dashboard command and open its newly printed URL.
-- **The dashboard is unauthorized:** use the complete current URL, including `#token=...`.
+- **`connection refused`:** run `console status`, then `console restart`; use the URL returned by `console open`.
+- **The dashboard is unauthorized:** run `console open` so the current one-session capability reaches the browser.
+- **The requested port is occupied:** `console start` or `restart` selects an available loopback port and records it in status.
 - **A project identity mismatch appears:** verify that you selected the intended checkout; a different repository cannot be rebound over the existing brain.
 - **A project is blocked:** run `self-check --check-files`; blocked or changed files remain fail-closed until deliberately resolved.
 

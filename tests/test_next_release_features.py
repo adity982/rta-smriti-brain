@@ -1,5 +1,6 @@
 import importlib
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -140,6 +141,32 @@ class RtaBrainNextReleaseTests(unittest.TestCase):
                 self.assertTrue(normal["manifest_unchanged"])
                 self.assertFalse(forced["manifest_unchanged"])
                 self.assertEqual(forced["updated_files"], 1)
+            finally:
+                conn.close()
+
+    def test_event_scoped_ingestion_hashes_content_even_when_stats_are_restored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            source = root / "core.py"
+            source.write_text("VALUE = 1\n", encoding="utf-8")
+            conn = db.connect(Path(tmp) / "brain.sqlite")
+            try:
+                db.ingest_repo(conn, root, project="demo")
+                original = source.stat()
+                source.write_text("VALUE = 2\n", encoding="utf-8")
+                os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+
+                refreshed = db.ingest_repo(
+                    conn, root, project="demo", changed_paths=[source],
+                )
+                indexed = conn.execute(
+                    "SELECT hash FROM sources WHERE path = ?", (str(source.resolve()),),
+                ).fetchone()
+
+                self.assertEqual(refreshed["updated_files"], 1)
+                self.assertEqual(refreshed["verified_changed_paths"], 1)
+                self.assertEqual(indexed["hash"], db.sha256_text("VALUE = 2\n"))
             finally:
                 conn.close()
 

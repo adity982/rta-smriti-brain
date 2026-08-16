@@ -30,6 +30,8 @@ from .runtime_control import (
 
 _SPAWNED_PROCESSES: dict[str, subprocess.Popen] = {}
 _CONTENT_EVENT_TYPES = frozenset({"created", "modified", "deleted", "moved"})
+MAX_PENDING_CHANGED_PATHS = 50_000
+MIN_POLLING_DEEP_VERIFY_SECONDS = 300.0
 
 
 def _now_iso() -> str:
@@ -78,6 +80,34 @@ def _watchdog_event_requires_refresh(event, is_internal_event) -> bool:
         return False
     paths = [getattr(event, "src_path", None), getattr(event, "dest_path", None)]
     return any(path and not is_internal_event(path) for path in paths)
+
+
+def _normalized_event_path(path: str | Path) -> str:
+    return os.path.normcase(os.path.abspath(os.path.expanduser(os.fspath(path))))
+
+
+def _internal_event_filter(db_path: Path, control_path: Path):
+    database = _normalized_event_path(db_path)
+    control = _normalized_event_path(control_path)
+    sqlite_artifacts = {
+        database,
+        database + "-journal",
+        database + "-shm",
+        database + "-wal",
+    }
+
+    def is_internal(raw_path: str | None) -> bool:
+        if not raw_path:
+            return False
+        candidate = _normalized_event_path(raw_path)
+        if candidate in sqlite_artifacts:
+            return True
+        try:
+            return os.path.commonpath((candidate, control)) == control
+        except ValueError:
+            return False
+
+    return is_internal
 
 
 def _write_stop_request(path: Path) -> None:
@@ -252,9 +282,13 @@ def run_watcher_worker(
         raise RuntimeError("watcher launch lock does not match")
     stop_event = threading.Event()
     change_event = threading.Event()
+    pending_lock = threading.Lock()
+    pending_changes = {"paths": set(), "force_full": False}
     observer = None
     backend = "polling"
     counters = {"cycles": 0, "updated_files": 0, "removed_files": 0, "errors": 0}
+    deep_verify_interval = max(MIN_POLLING_DEEP_VERIFY_SECONDS, float(interval_seconds) * 30.0)
+    last_deep_verify = time.monotonic()
     state = {
         "project": project,
         "db_path": str(db_path.expanduser().resolve()),
@@ -264,6 +298,7 @@ def run_watcher_worker(
         "state": "starting",
         "backend": backend,
         "interval_seconds": float(interval_seconds),
+        "deep_verify_interval_seconds": deep_verify_interval,
         "started_at": _now_iso(),
         "heartbeat_at": _now_iso(),
         "last_cycle_at": None,
@@ -282,29 +317,27 @@ def run_watcher_worker(
             from watchdog.events import FileSystemEventHandler
             from watchdog.observers import Observer
 
-            database_path = db_path.expanduser().resolve()
-            database_files = {
-                database_path,
-                Path(str(database_path) + "-shm"),
-                Path(str(database_path) + "-wal"),
-            }
-            control_path = state_file.expanduser().resolve().parent
-
-            def is_internal_event(raw_path: str | None) -> bool:
-                if not raw_path:
-                    return False
-                candidate = Path(raw_path).expanduser().resolve()
-                if candidate in database_files:
-                    return True
-                try:
-                    candidate.relative_to(control_path)
-                    return True
-                except ValueError:
-                    return False
+            is_internal_event = _internal_event_filter(
+                db_path.expanduser().resolve(),
+                state_file.expanduser().resolve().parent,
+            )
 
             class Handler(FileSystemEventHandler):
                 def on_any_event(self, event) -> None:
                     if _watchdog_event_requires_refresh(event, is_internal_event):
+                        candidates = (
+                            getattr(event, "src_path", None),
+                            getattr(event, "dest_path", None),
+                        )
+                        with pending_lock:
+                            for candidate in candidates:
+                                if not candidate or is_internal_event(candidate):
+                                    continue
+                                if len(pending_changes["paths"]) >= MAX_PENDING_CHANGED_PATHS:
+                                    pending_changes["paths"].clear()
+                                    pending_changes["force_full"] = True
+                                    break
+                                pending_changes["paths"].add(_normalized_event_path(candidate))
                         change_event.set()
 
             observer = Observer()
@@ -319,18 +352,37 @@ def run_watcher_worker(
         should_index = True
         while not stop_event.is_set() and not _stop_requested(stop_file):
             if should_index:
+                with pending_lock:
+                    cycle_paths = tuple(pending_changes["paths"])
+                    force_cycle = bool(pending_changes["force_full"])
+                    pending_changes["paths"].clear()
+                    pending_changes["force_full"] = False
+                if backend == "polling" and time.monotonic() - last_deep_verify >= deep_verify_interval:
+                    force_cycle = True
                 try:
                     conn = connect(db_path)
                     try:
-                        result = ingest_repo(conn, root, project=project)
+                        result = ingest_repo(
+                            conn, root, project=project, force=force_cycle,
+                            changed_paths=cycle_paths,
+                        )
                     finally:
                         conn.close()
+                    if force_cycle:
+                        last_deep_verify = time.monotonic()
                     counters["cycles"] += 1
                     counters["updated_files"] += int(result.get("updated_files", 0))
                     counters["removed_files"] += int(result.get("removed_files", 0))
                     state["last_cycle_at"] = _now_iso()
                     state["last_error"] = None
                 except Exception as exc:
+                    with pending_lock:
+                        if not pending_changes["force_full"]:
+                            pending_changes["paths"].update(cycle_paths)
+                            if len(pending_changes["paths"]) > MAX_PENDING_CHANGED_PATHS:
+                                pending_changes["paths"].clear()
+                                pending_changes["force_full"] = True
+                        pending_changes["force_full"] = pending_changes["force_full"] or force_cycle
                     counters["errors"] += 1
                     state["last_error"] = f"{exc.__class__.__name__}: {exc}"
                 state.update(counters)

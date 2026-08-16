@@ -19,7 +19,7 @@ from rta_brain.console_daemon import (
     start_console,
     stop_console,
 )
-from rta_brain.db import connect, init_project
+from rta_brain.db import connect, ingest_repo, init_project, remember
 from rta_brain.runtime_control import (
     detached_process_kwargs,
     process_alive,
@@ -222,7 +222,7 @@ class ManagedConsoleTests(unittest.TestCase):
             "action_contains": "publish",
             "pramana": "pratyaksha",
             "confidence": 1.0,
-            "provenance": {"verification_status": "verified", "source_path": "SECURITY.md"},
+            "provenance": {"verification_status": "verified", "source_path": "SECURITY.md", "source_hash": "privacy-policy"},
         })
         policy_id = created["policy"]["id"]
 
@@ -253,6 +253,81 @@ class ManagedConsoleTests(unittest.TestCase):
             "reason": "Release policy replaced.",
         })
         self.assertEqual(retired["policy"]["status"], "retired")
+
+    def test_intelligence_workspace_and_feedback_apis_use_selected_brains(self):
+        api_root = Path(self.tempdir.name) / "api"
+        web_root = Path(self.tempdir.name) / "web"
+        api_root.mkdir()
+        web_root.mkdir()
+        (api_root / "service.py").write_text(
+            "def helper():\n    return 1\n\ndef run():\n    return helper()\n", encoding="utf-8",
+        )
+        (web_root / "README.md").write_text(
+            "The web client consumes the helper envelope.\n", encoding="utf-8",
+        )
+        api_db = self.brain_dir / "api.sqlite"
+        web_db = self.brain_dir / "web.sqlite"
+        api = connect(api_db)
+        try:
+            init_project(api, "api", str(api_root))
+            ingest_repo(api, api_root, project="api")
+            memory_id = remember(
+                api, "Helper changes require a focused test.", project="api",
+            )["memory"]["id"]
+        finally:
+            api.close()
+        web = connect(web_db)
+        try:
+            init_project(web, "web", str(web_root))
+            ingest_repo(web, web_root, project="web")
+        finally:
+            web.close()
+
+        started = start_console(ROOT, self.brain_dir, port=0, open_browser=False, startup_timeout=10.0)
+        token = started["url"].split("#token=", 1)[1]
+        base_url = f"http://127.0.0.1:{started['port']}"
+        headers = {"X-Rta-Smriti-Token": token, "Content-Type": "application/json"}
+
+        def get(path):
+            request = urllib.request.Request(base_url + path, headers={"X-Rta-Smriti-Token": token})
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        def post(path, payload):
+            request = urllib.request.Request(
+                base_url + path,
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        api_query = f"db_path={api_db}&project=api"
+        diagnostics = get(f"/api/retrieval-diagnostics?{api_query}&query=helper")
+        self.assertEqual(diagnostics["results"][0]["path"], "service.py")
+        impact = get(f"/api/graph-query?{api_query}&target=helper&type=impact&depth=2")
+        self.assertTrue(impact["nodes"])
+
+        created = post("/api/workspace", {
+            "db_path": str(api_db), "action": "create", "name": "product-stack",
+        })
+        self.assertEqual(created["workspace"]["name"], "product-stack")
+        for project, member_db in (("api", api_db), ("web", web_db)):
+            post("/api/workspace", {
+                "db_path": str(api_db), "action": "add", "name": "product-stack",
+                "project": project, "member_db_path": str(member_db),
+            })
+        workspace = get(
+            f"/api/workspace-search?{api_query}&workspace=product-stack&query=helper&limit=4"
+        )
+        self.assertEqual({item["project"] for item in workspace["results"]}, {"api", "web"})
+
+        feedback = post("/api/memory-feedback", {
+            "db_path": str(api_db), "project": "api", "memory_id": memory_id,
+            "outcome": "helpful", "evidence": "Operator confirmed during API test.",
+        })
+        self.assertEqual(feedback["outcome"], "helpful")
 
     def test_concurrent_starts_converge_on_one_verified_console(self):
         barrier = threading.Barrier(2)

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
 from .db import VALID_PRAMANA, init_schema, now_iso, validate_provenance
+from .ingest import read_text, sha256_text
 
 
 POLICY_KINDS = frozenset({
@@ -76,6 +78,48 @@ def _policy_dict(row) -> dict:
     return policy
 
 
+def validate_policy_input(
+    *,
+    kind: str,
+    statement: str,
+    effect: str = "warn",
+    action_contains: str = "",
+    path_glob: str = "",
+    required_check: str = "",
+    pramana: str = "smriti",
+    confidence: float = 0.75,
+    provenance: dict | None = None,
+    overrideable: bool = True,
+    expires_at: str | None = None,
+) -> dict:
+    """Validate and normalize portable policy fields without mutating a brain."""
+    selected_kind = str(kind).strip().lower()
+    selected_effect = str(effect).strip().lower()
+    selected_pramana = str(pramana).strip().lower()
+    if selected_kind not in POLICY_KINDS:
+        raise ValueError(f"unknown governance policy kind: {selected_kind}")
+    if selected_effect not in POLICY_EFFECTS:
+        raise ValueError("governance effect must be warn or block")
+    if selected_pramana not in VALID_PRAMANA:
+        raise ValueError(f"unknown pramana: {selected_pramana}")
+    selected_confidence = float(confidence)
+    if not 0 <= selected_confidence <= 1:
+        raise ValueError("confidence must be between 0 and 1")
+    return {
+        "kind": selected_kind,
+        "statement": _bounded_text(statement, "statement", maximum=8_000, required=True),
+        "effect": selected_effect,
+        "action_contains": _bounded_text(action_contains, "action_contains", maximum=1_000).casefold(),
+        "path_glob": _normalized_path_glob(path_glob),
+        "required_check": _bounded_text(required_check, "required_check", maximum=500).casefold(),
+        "pramana": selected_pramana,
+        "confidence": selected_confidence,
+        "provenance": validate_provenance(provenance),
+        "overrideable": bool(overrideable),
+        "expires_at": _normalized_expiry(expires_at),
+    }
+
+
 def create_policy(
     conn,
     *,
@@ -92,20 +136,28 @@ def create_policy(
     overrideable: bool = True,
     expires_at: str | None = None,
 ) -> dict:
-    selected_kind = str(kind).strip().lower()
-    selected_effect = str(effect).strip().lower()
-    selected_pramana = str(pramana).strip().lower()
-    if selected_kind not in POLICY_KINDS:
-        raise ValueError(f"unknown governance policy kind: {selected_kind}")
-    if selected_effect not in POLICY_EFFECTS:
-        raise ValueError("governance effect must be warn or block")
-    if selected_pramana not in VALID_PRAMANA:
-        raise ValueError(f"unknown pramana: {selected_pramana}")
-    selected_confidence = float(confidence)
-    if not 0 <= selected_confidence <= 1:
-        raise ValueError("confidence must be between 0 and 1")
-    normalized_provenance = validate_provenance(provenance)
+    validated = validate_policy_input(
+        kind=kind, statement=statement, effect=effect, action_contains=action_contains,
+        path_glob=path_glob, required_check=required_check, pramana=pramana,
+        confidence=confidence, provenance=provenance, overrideable=overrideable,
+        expires_at=expires_at,
+    )
     project_id = _project_id(conn, project)
+    normalized_provenance = validated["provenance"]
+    if normalized_provenance["verification_status"] == "verified" and not normalized_provenance["source_hash"]:
+        project_row = conn.execute("SELECT root_path FROM projects WHERE id = ?", (project_id,)).fetchone()
+        root = Path(project_row["root_path"]).resolve() if project_row and project_row["root_path"] else None
+        source = Path(str(normalized_provenance["source_path"] or ""))
+        if root and normalized_provenance["source_path"]:
+            try:
+                resolved = (root / source).resolve(strict=True) if not source.is_absolute() else source.resolve(strict=True)
+                resolved.relative_to(root)
+                source_text = read_text(resolved, max_bytes=16_000_000)
+                if source_text is not None:
+                    normalized_provenance["source_hash"] = sha256_text(source_text)
+                    normalized_provenance["source_path"] = resolved.relative_to(root).as_posix()
+            except (OSError, ValueError):
+                pass
     created_at = now_iso()
     with conn:
         cursor = conn.execute(
@@ -118,17 +170,17 @@ def create_policy(
             """,
             (
                 project_id,
-                selected_kind,
-                _bounded_text(statement, "statement", maximum=8_000, required=True),
-                selected_effect,
-                _bounded_text(action_contains, "action_contains", maximum=1_000).casefold(),
-                _normalized_path_glob(path_glob),
-                _bounded_text(required_check, "required_check", maximum=500).casefold(),
-                selected_pramana,
-                selected_confidence,
+                validated["kind"],
+                validated["statement"],
+                validated["effect"],
+                validated["action_contains"],
+                validated["path_glob"],
+                validated["required_check"],
+                validated["pramana"],
+                validated["confidence"],
                 json.dumps(normalized_provenance, sort_keys=True),
-                int(bool(overrideable)),
-                _normalized_expiry(expires_at),
+                int(validated["overrideable"]),
+                validated["expires_at"],
                 created_at,
             ),
         )
@@ -195,7 +247,12 @@ def _blocking_trust(policy: dict) -> bool:
         policy.get("pramana") in BLOCKING_PRAMANA
         and float(policy.get("confidence") or 0) >= 0.8
         and provenance.get("verification_status") == "verified"
+        and bool(provenance.get("source_hash"))
     )
+
+
+def _digest(value) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def _receipt_dict(row) -> dict:
@@ -221,10 +278,20 @@ def preflight(
         raise ValueError("completed_checks must be a list")
     if len(completed_checks or []) > 100:
         raise ValueError("completed_checks exceeds 100 entries")
-    checks = {
-        _bounded_text(check, "completed check", maximum=500, required=True).casefold()
-        for check in (completed_checks or [])
-    }
+    check_evidence = []
+    for check in completed_checks or []:
+        if isinstance(check, str):
+            check_evidence.append({
+                "name": _bounded_text(check, "completed check", maximum=500, required=True).casefold(),
+                "verification_status": "owner_attested",
+            })
+        elif isinstance(check, dict):
+            name = _bounded_text(check.get("name"), "completed check name", maximum=500, required=True).casefold()
+            provenance = validate_provenance(check.get("provenance"))
+            check_evidence.append({"name": name, "verification_status": provenance["verification_status"], "provenance": provenance})
+        else:
+            raise ValueError("each completed check must be a name or evidence object")
+    checks = {item["name"] for item in check_evidence}
     policies = list_policies(conn, project=project)["policies"]
     matches = []
     satisfied = []
@@ -269,7 +336,7 @@ def preflight(
             "allow_with_override" if initial_decision in {"block", "warn"} else "allow"
         )
         project_id = _project_id(conn, project)
-        evidence = {"matches": matches, "completed_checks": sorted(checks), "satisfied_policy_ids": sorted(satisfied)}
+        evidence = {"matches": matches, "completed_checks": check_evidence, "satisfied_policy_ids": sorted(satisfied)}
         with conn:
             cursor = conn.execute(
                 """
@@ -288,6 +355,30 @@ def preflight(
             receipt_id = int(cursor.lastrowid)
         row = conn.execute("SELECT * FROM governance_receipts WHERE id = ?", (receipt_id,)).fetchone()
         receipt = _receipt_dict(row)
+    policy_digest = _digest([
+        {key: value for key, value in policy.items() if key not in {"created_at", "retired_at"}}
+        for policy in policies if not _is_expired(policy)
+    ])
+    action_digest = _digest({"action": action_text, "path": path_text, "completed_checks": check_evidence})
+    created_at = now_iso()
+    valid_until = (datetime.now(timezone.utc) + timedelta(minutes=5)).replace(microsecond=0).isoformat()
+    project_id = _project_id(conn, project)
+    with conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO governance_decisions(project_id, action_digest, policy_digest, decision, valid_until, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (project_id, action_digest, policy_digest, final_decision, valid_until, created_at),
+        )
+        conn.execute(
+            "DELETE FROM governance_decisions WHERE project_id = ? AND id NOT IN (SELECT id FROM governance_decisions WHERE project_id = ? ORDER BY id DESC LIMIT 1000)",
+            (project_id, project_id),
+        )
+    decision_receipt = {
+        "id": int(cursor.lastrowid), "action_digest": action_digest, "policy_digest": policy_digest,
+        "decision": final_decision, "created_at": created_at, "valid_until": valid_until,
+    }
     return {
         "status": "ok",
         "project": project,
@@ -297,8 +388,10 @@ def preflight(
         "decision": final_decision,
         "matches": matches,
         "completed_checks": sorted(checks),
+        "completed_check_evidence": check_evidence,
         "satisfied_policy_ids": sorted(satisfied),
         "override_receipt": receipt,
+        "decision_receipt": decision_receipt,
     }
 
 

@@ -54,4 +54,7 @@ rta-brain-mcp = "rta_brain.mcp_server:main"
 packages = ["rta_brain"]
 
 [tool.setuptools.package-data]
-rta_brain = ["static/*", "static/assets/*"]
+rta_brain = ["data/*.json", "static/*", "static/assets/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

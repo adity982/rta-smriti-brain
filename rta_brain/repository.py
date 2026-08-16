@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -45,23 +46,131 @@ def trusted_git_candidates() -> list[Path]:
     return candidates
 
 
-def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str] | None:
-    candidates = trusted_git_candidates()
-    if not candidates:
-        return None
-    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+def _git_environment() -> dict[str, str]:
+    environment = {
+        key: value for key, value in os.environ.items()
+        if not key.upper().startswith("GIT_")
+    }
+    environment.update({
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_PAGER": "cat",
+        "GIT_EXTERNAL_DIFF": "",
+        "GCM_INTERACTIVE": "Never",
+        "PAGER": "cat",
+    })
+    return environment
+
+
+def _configured_command_keys(
+    git: Path, root: Path, environment: dict[str, str],
+) -> set[str] | None:
     try:
-        return subprocess.run(
-            [str(candidates[0]), "-C", str(root), *args],
+        result = subprocess.run(
+            [
+                str(git), "--no-pager", "-C", str(root), "config", "--null", "--name-only",
+                "--get-regexp", r"^(filter\..*\.(clean|process|required)|diff\..*\.(command|textconv))$",
+            ],
             text=True,
             capture_output=True,
-            timeout=8,
+            timeout=5,
             check=False,
-            creationflags=creationflags,
-            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"},
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            env=environment,
         )
     except (OSError, subprocess.SubprocessError):
         return None
+    if result.returncode not in (0, 1):
+        return None
+    return {key.strip() for key in result.stdout.split("\0") if key.strip()}
+
+
+def _disabled_executable_config(keys: set[str]) -> list[str]:
+    drivers: set[tuple[str, str]] = set()
+    for key in keys:
+        match = re.fullmatch(
+            r"(filter|diff)\.(.+)\.(clean|process|required|command|textconv)",
+            key,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            drivers.add((match.group(1).lower(), match.group(2)))
+    options: list[str] = []
+    for kind, driver in sorted(drivers):
+        if kind == "filter":
+            options.extend([
+                "-c", f"filter.{driver}.clean=",
+                "-c", f"filter.{driver}.process=",
+                "-c", f"filter.{driver}.required=false",
+            ])
+        else:
+            options.extend([
+                "-c", f"diff.{driver}.command=",
+                "-c", f"diff.{driver}.textconv=",
+            ])
+    return options
+
+
+def _git_command(
+    git: Path,
+    root: Path,
+    args: tuple[str, ...],
+    *,
+    hooks_path: Path,
+    disable_hooks: bool,
+    environment: dict[str, str],
+) -> list[str]:
+    command = [
+        str(git), "--no-pager",
+        "-c", "core.fsmonitor=false",
+        "-c", "diff.external=",
+        "-c", "core.pager=cat",
+        "-c", "pager.status=false",
+        "-c", "pager.config=false",
+        "-c", "interactive.singleKey=false",
+    ]
+    if disable_hooks:
+        command.extend(["-c", f"core.hooksPath={hooks_path}"])
+    command_keys = _configured_command_keys(git, root, environment)
+    if command_keys is None:
+        raise ValueError("Git executable configuration could not be inspected safely")
+    command.extend(_disabled_executable_config(command_keys))
+    command.extend(["-C", str(root), *args])
+    return command
+
+
+def run_git_inspection(
+    root: Path,
+    *args: str,
+) -> subprocess.CompletedProcess[str] | None:
+    """Run trusted Git with repository-controlled executable features disabled."""
+    candidates = trusted_git_candidates()
+    if not candidates:
+        return None
+    resolved = Path(root).expanduser().resolve()
+    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    environment = _git_environment()
+    with tempfile.TemporaryDirectory(prefix="rta-smriti-git-hooks-") as empty_hooks:
+        try:
+            command = _git_command(
+                candidates[0], resolved, tuple(args), hooks_path=Path(empty_hooks),
+                disable_hooks=True, environment=environment,
+            )
+            return subprocess.run(
+                command,
+                text=True,
+                capture_output=True,
+                timeout=8,
+                check=False,
+                creationflags=creationflags,
+                env=environment,
+            )
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return None
+
+
+def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str] | None:
+    return run_git_inspection(root, *args)
 
 
 def _stdout(root: Path, *args: str) -> str:
@@ -99,6 +208,46 @@ def _git_layout(root: Path) -> tuple[Path, Path, Path] | None:
                 common_dir = common_dir.resolve()
         return candidate_root.resolve(), git_dir, common_dir
     return None
+
+
+def verified_git_layout(root: Path) -> tuple[Path, Path, Path] | None:
+    """Return native Git paths only when trusted Git reports the same layout."""
+    layout = _git_layout(Path(root).expanduser().resolve())
+    if not layout:
+        return None
+    repository_root, git_dir, common_dir = layout
+    result = run_git_inspection(
+        repository_root,
+        "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir",
+    )
+    if not result or result.returncode != 0:
+        return None
+    values = [Path(value).expanduser().resolve() for value in result.stdout.splitlines() if value.strip()]
+    if len(values) != 3:
+        return None
+    reported = tuple(canonical_root_key(value) for value in values)
+    expected = tuple(canonical_root_key(value) for value in layout)
+    return layout if reported == expected else None
+
+
+def configured_hooks_path(root: Path, common_dir: Path) -> Path | None:
+    """Read core.hooksPath as data while the inspection process uses disabled hooks."""
+    resolved_root = Path(root).expanduser().resolve()
+    result = run_git_inspection(
+        resolved_root, "config", "--null", "--path", "--get-all", "core.hooksPath",
+    )
+    if not result or result.returncode != 0:
+        return None
+    values = [value for value in result.stdout.split("\0") if value]
+    if not values:
+        return None
+    configured_values = values[:-1]
+    if not configured_values:
+        return common_dir.resolve() / "hooks"
+    configured = Path(configured_values[-1]).expanduser()
+    if not configured.is_absolute():
+        configured = resolved_root / configured
+    return configured.resolve()
 
 
 def _read_ref(common_dir: Path, ref_name: str) -> str | None:
