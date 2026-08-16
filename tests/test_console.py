@@ -7,7 +7,7 @@ from os import chdir, getcwd
 from pathlib import Path
 from unittest.mock import patch
 
-from rta_brain.console import ConsoleConfig, _trusted_git_candidates, dashboard_snapshot, is_authorized_request, is_local_origin, publish_readiness, read_file_preview, read_file_tree, read_memories, resolve_brain_db, resolve_static_asset, run_dashboard, scan_brain_databases
+from rta_brain.console import ConsoleConfig, _trusted_git_candidates, create_dashboard_server, dashboard_snapshot, is_authorized_request, is_local_origin, publish_readiness, read_file_preview, read_file_tree, read_memories, resolve_brain_db, resolve_static_asset, run_dashboard, scan_brain_databases
 from rta_brain.db import connect, graph, ingest_repo, init_project, remember
 from rta_brain.ingest import walk_repo
 
@@ -225,6 +225,19 @@ class RtaBrainConsoleTests(unittest.TestCase):
         ), patch("builtins.print"):
             payload = run_dashboard(ROOT, Path(tmp), port=0, open_browser=False)
         self.assertIn("http://127.0.0.1:43123/", payload["url"])
+
+    def test_loopback_bind_does_not_perform_reverse_dns_lookup(self):
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "socket.getfqdn", side_effect=AssertionError("reverse DNS must not run")
+        ):
+            server, _config, url = create_dashboard_server(
+                ROOT, Path(tmp), host="127.0.0.1", port=0
+            )
+        try:
+            self.assertEqual(server.server_name, "127.0.0.1")
+            self.assertRegex(url, r"^http://127\.0\.0\.1:\d+/")
+        finally:
+            server.server_close()
 
     def test_repo_ingestion_rejects_hard_linked_files(self):
         with tempfile.TemporaryDirectory() as tmp:

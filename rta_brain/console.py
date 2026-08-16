@@ -12,6 +12,7 @@ import webbrowser
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 from urllib.parse import parse_qs, urlparse
 
 from .context import build_context_pack, build_continuation_prompt
@@ -1081,6 +1082,13 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
         self._worker_condition = threading.Condition()
         self._active_workers = 0
         super().__init__(*args, **kwargs)
+
+    def server_bind(self) -> None:
+        # The host is already constrained to a literal loopback address.
+        # Avoid HTTPServer's reverse-DNS lookup, which can block startup.
+        TCPServer.server_bind(self)
+        self.server_name = str(self.server_address[0])
+        self.server_port = int(self.server_address[1])
 
     def process_request(self, request, client_address) -> None:
         if not self._worker_slots.acquire(blocking=False):
