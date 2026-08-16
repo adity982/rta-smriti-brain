@@ -217,6 +217,34 @@ def _is_reparse_point(file_stat) -> bool:
     return bool(marker and getattr(file_stat, "st_file_attributes", 0) & marker)
 
 
+def _lexical_root_for_candidate(root: Path, candidate: Path) -> Path:
+    requested_root = root.expanduser().absolute()
+    candidate = candidate.expanduser().absolute()
+    root_stat = requested_root.lstat()
+    if stat_module.S_ISLNK(root_stat.st_mode) or _is_reparse_point(root_stat):
+        raise ValueError(f"linked repository root rejected: {requested_root}")
+    try:
+        candidate.relative_to(requested_root)
+        return requested_root
+    except ValueError:
+        if os.name != "nt":
+            raise
+
+    for ancestor in (candidate, *candidate.parents):
+        try:
+            ancestor_stat = ancestor.lstat()
+        except OSError:
+            continue
+        if stat_module.S_ISLNK(ancestor_stat.st_mode) or _is_reparse_point(ancestor_stat):
+            raise ValueError(f"linked path ancestor rejected: {ancestor}")
+        try:
+            if os.path.samefile(ancestor, requested_root):
+                return ancestor
+        except OSError:
+            continue
+    raise ValueError(f"path is outside the repository root: {candidate}")
+
+
 def _capture_path_chain(root: Path, candidate: Path) -> tuple[tuple[Path, tuple[int, int, int]], ...]:
     relative = candidate.relative_to(root)
     paths = [root]
@@ -269,12 +297,15 @@ def _read_verified_text(path: Path, max_bytes: int, root: Path | None = None) ->
         source_lstat = source.lstat()
         if stat_module.S_ISLNK(source_lstat.st_mode) or _is_reparse_point(source_lstat):
             return None
-        canonical_root = root.expanduser().resolve(strict=True) if root is not None else None
+        requested_root = root.expanduser().absolute() if root is not None else None
+        canonical_root = requested_root.resolve(strict=True) if requested_root is not None else None
         if canonical_root is not None:
             if not canonical_root.is_dir():
                 return None
-            lexical_chain = _capture_path_chain(canonical_root, source)
+            lexical_root = _lexical_root_for_candidate(requested_root, source)
+            lexical_chain = _capture_path_chain(lexical_root, source)
         else:
+            lexical_root = None
             lexical_chain = None
         candidate = source.resolve(strict=True)
         if canonical_root is not None:
@@ -325,7 +356,7 @@ def _read_verified_text(path: Path, max_bytes: int, root: Path | None = None) ->
             os.close(descriptor)
 
         if canonical_root is not None:
-            if _capture_path_chain(canonical_root, source) != lexical_chain:
+            if _capture_path_chain(lexical_root, source) != lexical_chain:
                 return None
             after_chain = _capture_path_chain(canonical_root, candidate)
             if after_chain != before_chain:

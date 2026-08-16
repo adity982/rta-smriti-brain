@@ -26,7 +26,7 @@ class AutostartTests(unittest.TestCase):
             text = entry.read_text(encoding="utf-8")
             self.assertIn('"console" "start"', text)
             self.assertIn("--no-open", text)
-            self.assertIn(str(brain_dir), text)
+            self.assertIn(str(brain_dir.resolve()), text)
             self.assertTrue(autostart_status(brain_dir, platform_name="win32", home=home, environment={"APPDATA": str(appdata)})["enabled"])
             disabled = disable_autostart(brain_dir, platform_name="win32", home=home, environment={"APPDATA": str(appdata)})
             self.assertFalse(disabled["enabled"])

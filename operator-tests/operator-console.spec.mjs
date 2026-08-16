@@ -244,7 +244,7 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await operatorNavigation.getByRole("button", { name: /^Action Gate/ }).click();
     await page.getByLabel("Intended action").fill("Publish release");
     await page.getByRole("button", { name: "Evaluate action", exact: true }).click();
-    await expect(page.getByText("block", { exact: true })).toBeVisible();
+    await expect(page.locator(".gateDecision strong")).toHaveText("block");
     await page.getByLabel("Override reason").fill("Operator-approved fixture override");
     await page.getByRole("button", { name: "Record override receipt", exact: true }).click();
     await expect(page.getByText("Operator-approved fixture override", { exact: true })).toBeVisible();

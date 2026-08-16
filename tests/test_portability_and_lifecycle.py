@@ -624,7 +624,7 @@ class PortabilityAndLifecycleTests(unittest.TestCase):
             with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", str(executable)):
                 installed = install_git_hooks(root, db_path=root / "brain.sqlite", project="demo")
             script = Path(installed["hook_path"]).read_text(encoding="utf-8")
-            self.assertIn(str(executable).replace("\\", "/"), script)
+            self.assertIn(str(executable.resolve()).replace("\\", "/"), script)
             self.assertNotIn("-m rta_brain.cli", script)
 
     def test_git_hook_rejects_external_core_hooks_path(self):

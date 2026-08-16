@@ -6,7 +6,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .embeddings import cosine_similarity, create_provider
-from .ingest import build_file_record, chunk_text, extract_terms, read_text, sha256_text, walk_repo
+from .ingest import (
+    _lexical_root_for_candidate,
+    build_file_record,
+    chunk_text,
+    extract_terms,
+    read_text,
+    sha256_text,
+    walk_repo,
+)
 from .parsers import ParserRegistry
 from .repository import canonical_root, repository_identity, same_root
 
@@ -1024,7 +1032,12 @@ def _changed_path_keys(root: Path, changed_paths) -> set[str]:
         candidate = Path(raw_path).expanduser()
         if not candidate.is_absolute():
             candidate = root / candidate
-        absolute = Path(os.path.abspath(candidate))
+        lexical_absolute = Path(os.path.abspath(candidate))
+        try:
+            _lexical_root_for_candidate(root, lexical_absolute)
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"changed path is outside the repository root: {lexical_absolute}") from exc
+        absolute = lexical_absolute.resolve(strict=False)
         try:
             absolute.relative_to(root)
         except ValueError as exc:

@@ -170,6 +170,33 @@ class RtaBrainNextReleaseTests(unittest.TestCase):
             finally:
                 conn.close()
 
+    def test_event_scoped_ingestion_rejects_an_external_link_into_the_repository(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            outside = Path(tmp) / "outside"
+            root.mkdir()
+            outside.mkdir()
+            source = root / "core.py"
+            source.write_text("VALUE = 1\n", encoding="utf-8")
+            linked_root = outside / "repo-link"
+            try:
+                linked_root.symlink_to(root, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"directory symlink creation unavailable: {exc}")
+
+            conn = db.connect(Path(tmp) / "brain.sqlite")
+            try:
+                db.ingest_repo(conn, root, project="demo")
+                with self.assertRaisesRegex(ValueError, "outside the repository root"):
+                    db.ingest_repo(
+                        conn,
+                        root,
+                        project="demo",
+                        changed_paths=[linked_root / source.name],
+                    )
+            finally:
+                conn.close()
+
     def test_parser_registry_and_lsp_adapter_are_pluggable(self):
         parsers = importlib.import_module("rta_brain.parsers")
         self.assertTrue(hasattr(parsers, "ParserRegistry"), "parser registry is missing")
