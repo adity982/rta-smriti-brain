@@ -13,6 +13,7 @@ from rta_brain.parsers import ParserRegistry
 from rta_brain.watch_daemon import (
     _internal_event_filter,
     _process_alive,
+    _worker_command as watcher_worker_command,
     _watchdog_event_requires_refresh,
     start_watcher,
     stop_watcher,
@@ -158,6 +159,22 @@ class RtaBrainResilienceTests(unittest.TestCase):
 
 
 class RtaBrainWatchDaemonTests(unittest.TestCase):
+    def test_source_watcher_worker_uses_the_minimal_entry_point(self):
+        database = Path("brain.sqlite")
+        command = watcher_worker_command(
+            database,
+            Path("repository"),
+            "demo",
+            {
+                "state": Path("state.json"),
+                "stop": Path("stop.request"),
+                "lock": Path("launch.lock"),
+            },
+            2.0,
+        )
+        self.assertIn("rta_brain.watch_worker", command)
+        self.assertNotIn("rta_brain.cli", command)
+
     def test_watchdog_ignores_file_access_events_but_keeps_content_changes(self):
         class Event:
             is_directory = False

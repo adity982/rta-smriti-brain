@@ -14,6 +14,7 @@ from .db import (
     connect, doctor, graph, graph_query, ingest_repo, ingest_thread, reflect, remember, remember_many,
     save_checkpoint, search, stale_check,
 )
+from .ingest import _lexical_root_for_candidate
 from .diagnostics import retrieval_diagnostics
 from .governance import create_policy, list_policies, list_receipts, preflight, retire_policy
 from .workspaces import get_workspace, list_workspaces, search_workspace
@@ -315,20 +316,9 @@ def _path_is_link_or_reparse(path: Path) -> bool:
     return stat.S_ISLNK(details.st_mode) or bool(reparse_flag and file_attributes & reparse_flag)
 
 
-def _contains_link_or_reparse(path: Path) -> bool:
-    current = path
-    while True:
-        if current.exists() or current.is_symlink():
-            if _path_is_link_or_reparse(current):
-                return True
-        if current.parent == current:
-            return False
-        current = current.parent
-
-
 def _canonical_thread_root(path: Path) -> Path:
     candidate = path.expanduser().absolute()
-    if _contains_link_or_reparse(candidate):
+    if _path_is_link_or_reparse(candidate):
         raise ValueError(f"thread root contains a link or reparse point: {candidate}")
     resolved = candidate.resolve(strict=True)
     if not resolved.is_dir():
@@ -341,8 +331,6 @@ def _confined_thread_path(path: Path, allowed_roots: tuple[Path, ...]) -> tuple[
     if not candidate.is_absolute():
         raise ValueError("thread path must be absolute")
     lexical = candidate.absolute()
-    if _contains_link_or_reparse(lexical):
-        raise ValueError(f"thread path contains a link or reparse point: {lexical}")
     try:
         resolved = lexical.resolve(strict=True)
     except OSError as exc:
@@ -353,6 +341,10 @@ def _confined_thread_path(path: Path, allowed_roots: tuple[Path, ...]) -> tuple[
     )
     if matched_root is None:
         raise ValueError(f"thread path is outside configured thread roots: {resolved}")
+    try:
+        _lexical_root_for_candidate(matched_root, lexical)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"thread path contains a link or reparse point: {lexical}") from exc
     details = resolved.lstat()
     if not stat.S_ISREG(details.st_mode):
         raise ValueError(f"thread path is not a regular file: {resolved}")

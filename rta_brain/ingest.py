@@ -220,15 +220,21 @@ def _is_reparse_point(file_stat) -> bool:
 def _lexical_root_for_candidate(root: Path, candidate: Path) -> Path:
     requested_root = root.expanduser().absolute()
     candidate = candidate.expanduser().absolute()
-    root_stat = requested_root.lstat()
-    if stat_module.S_ISLNK(root_stat.st_mode) or _is_reparse_point(root_stat):
-        raise ValueError(f"linked repository root rejected: {requested_root}")
     try:
         candidate.relative_to(requested_root)
-        return requested_root
     except ValueError:
-        if os.name != "nt":
-            raise
+        pass
+    else:
+        for ancestor in (candidate, *candidate.parents):
+            try:
+                ancestor_stat = ancestor.lstat()
+            except OSError:
+                continue
+            if stat_module.S_ISLNK(ancestor_stat.st_mode) or _is_reparse_point(ancestor_stat):
+                raise ValueError(f"linked path ancestor rejected: {ancestor}")
+            if ancestor == requested_root:
+                return requested_root
+        raise ValueError(f"path is outside the repository root: {candidate}")
 
     for ancestor in (candidate, *candidate.parents):
         try:

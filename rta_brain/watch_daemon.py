@@ -159,7 +159,14 @@ def _worker_command(db_path: Path, root: Path, project: str, paths: dict[str, Pa
     ]
     if getattr(sys, "frozen", False):
         return [str(Path(sys.executable).resolve()), "--db", str(db_path), *suffix]
-    return [str(Path(sys.executable).resolve()), "-m", "rta_brain.cli", "--db", str(db_path), *suffix]
+    return [
+        str(Path(sys.executable).resolve()),
+        "-m",
+        "rta_brain.watch_worker",
+        "--db",
+        str(db_path),
+        *suffix[1:],
+    ]
 
 
 def start_watcher(

@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from rta_brain.console_daemon import (
+    _worker_command,
     console_paths,
     console_status,
     open_console,
@@ -32,6 +33,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RuntimeControlTests(unittest.TestCase):
+    def test_source_console_worker_uses_the_minimal_entry_point(self):
+        command = _worker_command(
+            ROOT,
+            Path("brains"),
+            None,
+            None,
+            "127.0.0.1",
+            0,
+            {
+                "state": Path("state.json"),
+                "stop": Path("stop.request"),
+                "lock": Path("launch.lock"),
+                "token": Path("capability.secret"),
+            },
+        )
+        self.assertIn("rta_brain.console_worker", command)
+        self.assertNotIn("rta_brain.cli", command)
+
     def test_json_state_write_is_atomic_and_round_trips(self):
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp) / "control" / "state.json"

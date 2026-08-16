@@ -118,7 +118,12 @@ def _worker_command(
         suffix.extend(("--default-project", default_project))
     if getattr(sys, "frozen", False):
         return [str(Path(sys.executable).resolve()), *suffix]
-    return [str(Path(sys.executable).resolve()), "-m", "rta_brain.cli", *suffix]
+    return [
+        str(Path(sys.executable).resolve()),
+        "-m",
+        "rta_brain.console_worker",
+        *suffix[1:],
+    ]
 
 
 def _authorized_result(state: dict, paths: dict[str, Path]) -> dict:

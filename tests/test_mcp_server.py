@@ -33,6 +33,32 @@ def responses(stdout):
 
 
 class RtaBrainMcpTests(unittest.TestCase):
+    def test_thread_root_accepts_a_trusted_parent_alias(self):
+        if os.name == "nt":
+            self.skipTest("parent alias coverage uses POSIX symlink support")
+        with tempfile.TemporaryDirectory() as tmp:
+            real_parent = Path(tmp) / "real"
+            real_parent.mkdir()
+            root = real_parent / "allowed"
+            root.mkdir()
+            thread = root / "thread.md"
+            thread.write_text("Decision: preserve canonical identity.\n", encoding="utf-8")
+            alias_parent = Path(tmp) / "alias"
+            alias_parent.symlink_to(real_parent, target_is_directory=True)
+
+            server = RtaBrainMcpServer(
+                Path(tmp) / "brain.sqlite",
+                "demo",
+                allow_thread_ingestion=True,
+                allowed_thread_roots=(alias_parent / "allowed",),
+            )
+            with patch("rta_brain.mcp_server.ingest_thread", return_value={"status": "ok"}):
+                result = server.call_tool(
+                    "brain_ingest_thread",
+                    {"path": str(alias_parent / "allowed" / thread.name)},
+                )
+            self.assertEqual(result["structuredContent"]["status"], "ok")
+
     def test_initialize_and_list_tools(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "brain.sqlite"
