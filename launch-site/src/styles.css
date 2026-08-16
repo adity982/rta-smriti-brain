@@ -53,6 +53,10 @@ img { display: block; max-width: 100%; }
 .primaryAction { color: #021415; background: var(--teal); box-shadow: 0 13px 36px rgba(94,234,212,.15); }
 .secondaryAction { color: #e4f3ff; border: 1px solid rgba(255,255,255,.2); background: rgba(5,12,18,.78); }
 .primaryAction:hover, .secondaryAction:hover { transform: translateY(-1px); }
+.launchConversation { display: inline-flex; align-items: center; align-self: flex-start; gap: 7px; margin-top: 15px; color: #b9ccd9; font-size: 12px; }
+.launchConversation svg:first-child { color: var(--teal); }
+.launchConversation span { color: var(--teal); font-weight: 750; }
+.launchConversation:hover { color: white; }
 .heroProof { display: flex; gap: 27px; margin-top: 38px; color: #8ea6b9; font-size: 11px; }
 .heroProof span { display: grid; gap: 3px; padding-left: 12px; border-left: 1px solid rgba(94,234,212,.35); }
 .heroProof strong { color: #effbff; font-size: 19px; }

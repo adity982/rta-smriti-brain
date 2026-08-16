@@ -15,6 +15,7 @@ import {
   GitBranch,
   LockKeyhole,
   Menu,
+  MessageCircle,
   Network,
   Play,
   Search,
@@ -27,6 +28,7 @@ import {
 import "./styles.css";
 
 const repositoryUrl = import.meta.env.VITE_REPOSITORY_URL || "https://github.com/sulabhdubey/rta-smriti-brain";
+const productHuntUrl = "https://www.producthunt.com/products/rta-smriti-brain?launch=rta-smriti-brain&utm_source=website&utm_medium=referral&utm_campaign=v040_launch";
 
 const installCommand = "python -m pip install .";
 const agents = ["Codex", "Claude Code", "Cursor", "Copilot", "Gemini CLI", "Aider", "Cline", "Any MCP agent"];
@@ -85,6 +87,7 @@ function Hero() {
           <a className="primaryAction" href="#install"><TerminalSquare size={18} /> Get started <ArrowRight size={17} /></a>
           <a className="secondaryAction" href="#demo"><Play size={17} /> Watch the product</a>
         </div>
+        <a className="launchConversation" href={productHuntUrl}><MessageCircle size={15} /> Live on Product Hunt <span>Join the conversation</span><ExternalLink size={13} /></a>
         <div className="heroProof" aria-label="Product proof points">
           <span><strong>6</strong> synthetic benchmark queries</span>
           <span><strong>10,000</strong> synthetic files profiled</span>
@@ -287,7 +290,7 @@ function Install() {
 
 function Footer() {
   return (
-    <footer><div className="shell footerGrid"><Brand compact /><p>Project memory that stays with the project.</p><div><a href="#install">Install</a><a href="#difference">Security & privacy</a><a href="./LICENSE.txt">MIT License</a>{repositoryUrl && <a href={repositoryUrl}>Get source <ExternalLink size={13} /></a>}</div></div></footer>
+    <footer><div className="shell footerGrid"><Brand compact /><p>Project memory that stays with the project.</p><div><a href="#install">Install</a><a href="#difference">Security & privacy</a><a href="./LICENSE.txt">MIT License</a><a href={productHuntUrl}>Product Hunt <ExternalLink size={13} /></a>{repositoryUrl && <a href={repositoryUrl}>Get source <ExternalLink size={13} /></a>}</div></div></footer>
   );
 }
 
