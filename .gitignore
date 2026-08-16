@@ -5,6 +5,7 @@ __pycache__/
 *.sqlite-wal
 .rta-smriti/
 .rta-smriti-daemons/
+.worktrees/
 .tmp-daemon-debug-*/
 *.log
 *.out
