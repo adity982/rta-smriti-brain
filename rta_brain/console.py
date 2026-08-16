@@ -3,14 +3,13 @@ import ipaddress
 import json
 import mimetypes
 import secrets
-import socket
 import sqlite3
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from dataclasses import dataclass, field
-from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -21,7 +20,7 @@ from .db import (
     latest_checkpoint, reflect, remember, save_checkpoint, search, stale_check, update_project_settings,
 )
 from .parsers import ParserRegistry
-from .project import bootstrap_project, mcp_config_payload, runtime_shell, shell_cli_command, projects_list, self_check
+from .project import mcp_config_payload, runtime_shell, shell_cli_command, projects_list, self_check
 from .repository import canonical_root, canonical_root_key, repository_state, trusted_git_candidates
 from .watch_daemon import start_watcher, stop_watcher, watcher_status
 
@@ -33,12 +32,12 @@ class ConsoleConfig:
     default_db: Path | None = None
     default_project: str | None = None
     capability_token: str = field(default_factory=lambda: secrets.token_urlsafe(32), repr=False)
+    instance_id: str | None = None
 
 
 MAX_REQUEST_BYTES = 1_048_576
 MAX_TREE_ITEMS = 500
 MAX_FILE_PREVIEW_CHARS = 20_000
-CAPABILITY_COOKIE = "rta_smriti_cap"
 
 
 def _trusted_git_candidates() -> list[Path]:
@@ -526,24 +525,7 @@ def is_local_request(handler: BaseHTTPRequestHandler) -> bool:
 
 
 def _request_capability(handler: BaseHTTPRequestHandler) -> str:
-    supplied = handler.headers.get("X-Rta-Smriti-Token") or ""
-    if supplied:
-        return supplied
-    raw_cookie = handler.headers.get("Cookie") or ""
-    if not raw_cookie:
-        return ""
-    try:
-        cookies = SimpleCookie()
-        cookies.load(raw_cookie)
-        morsel = cookies.get(CAPABILITY_COOKIE)
-        return morsel.value if morsel else ""
-    except Exception:
-        return ""
-
-
-def is_authorized_header_request(handler: BaseHTTPRequestHandler, config: ConsoleConfig) -> bool:
-    supplied = handler.headers.get("X-Rta-Smriti-Token") or ""
-    return bool(supplied) and hmac.compare_digest(supplied, config.capability_token)
+    return handler.headers.get("X-Rta-Smriti-Token") or ""
 
 
 def is_authorized_request(handler: BaseHTTPRequestHandler, config: ConsoleConfig) -> bool:
@@ -578,8 +560,6 @@ def make_handler(config: ConsoleConfig):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self._security_headers()
-            if status < 400 and is_local_request(self) and is_local_origin(self) and is_authorized_header_request(self, config):
-                self.send_header("Set-Cookie", f"{CAPABILITY_COOKIE}={config.capability_token}; HttpOnly; SameSite=Strict; Path=/")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -607,6 +587,9 @@ def make_handler(config: ConsoleConfig):
                     return
                 if parsed.path.startswith("/api/") and (not is_authorized_request(self, config) or not is_local_origin(self)):
                     self._json({"status": "error", "error": {"type": "Forbidden", "message": "valid local capability required"}}, status=403)
+                    return
+                if parsed.path == "/api/runtime-health":
+                    self._json({"status": "ok", "instance_id": config.instance_id})
                     return
                 if parsed.path == "/api/health":
                     self._json(dashboard_snapshot(config))
@@ -847,22 +830,22 @@ def make_handler(config: ConsoleConfig):
                     )
                     return
                 if self.path == "/api/bootstrap":
-                    config.brain_dir.mkdir(parents=True, exist_ok=True)
-                    conn = _open_db(resolve_brain_db(config, config.brain_dir / "_dashboard.sqlite", must_exist=False))
-                    try:
-                        self._json(
-                            bootstrap_project(
-                                conn,
-                                Path(payload["path"]),
-                                payload["project"],
-                                config.brain_dir,
-                                bool(payload.get("write_agents", False)),
-                                config.tool_root,
-                                embedding_provider=payload.get("embedding_provider", "hash"),
-                            )
+                    from .onboarding import onboard_project
+
+                    self._json(
+                        onboard_project(
+                            config.tool_root,
+                            Path(payload["path"]),
+                            brain_dir=config.brain_dir,
+                            project=payload.get("project"),
+                            target_agent=payload.get("target_agent", "universal"),
+                            write_agents=bool(payload.get("write_agents", False)),
+                            embedding_provider=payload.get("embedding_provider", "hash"),
+                            watcher_interval=float(payload.get("interval", 2.0)),
+                            open_browser=False,
+                            manage_console=False,
                         )
-                    finally:
-                        conn.close()
+                    )
                     return
                 self._json({"status": "error", "error": {"type": "NotFound", "message": self.path}}, status=404)
             except (KeyError, ValueError, json.JSONDecodeError) as exc:
@@ -882,15 +865,22 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, *args, max_workers: int = 16, **kwargs):
         self._worker_slots = threading.BoundedSemaphore(max_workers)
+        self._worker_condition = threading.Condition()
+        self._active_workers = 0
         super().__init__(*args, **kwargs)
 
     def process_request(self, request, client_address) -> None:
         if not self._worker_slots.acquire(blocking=False):
             request.close()
             return
+        with self._worker_condition:
+            self._active_workers += 1
         try:
             super().process_request(request, client_address)
         except Exception:
+            with self._worker_condition:
+                self._active_workers -= 1
+                self._worker_condition.notify_all()
             self._worker_slots.release()
             raise
 
@@ -898,18 +888,66 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
         try:
             super().process_request_thread(request, client_address)
         finally:
+            with self._worker_condition:
+                self._active_workers -= 1
+                self._worker_condition.notify_all()
             self._worker_slots.release()
 
+    def wait_for_idle(self, timeout: float) -> bool:
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        with self._worker_condition:
+            while self._active_workers:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._worker_condition.wait(timeout=remaining)
+        return True
 
-def _find_port(host: str, preferred: int) -> int:
-    for port in range(preferred, preferred + 50):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            try:
-                sock.bind((host, port))
-            except OSError:
-                continue
-            return port
-    raise OSError(f"no available port found from {preferred} to {preferred + 49}")
+
+def create_dashboard_server(
+    tool_root: Path,
+    brain_dir: Path,
+    default_db: Path | None = None,
+    default_project: str | None = None,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    capability_token: str | None = None,
+    instance_id: str | None = None,
+) -> tuple[BoundedThreadingHTTPServer, ConsoleConfig, str]:
+    """Bind a loopback console and return the server, config, and authorized URL."""
+    if host not in {"127.0.0.1", "localhost"}:
+        raise ValueError("dashboard host must be loopback-only")
+    preferred_port = int(port)
+    if not 0 <= preferred_port <= 65_535:
+        raise ValueError("dashboard port must be between 0 and 65,535")
+    config_options = {
+        "tool_root": tool_root.resolve(),
+        "brain_dir": brain_dir.expanduser().resolve(),
+        "default_db": default_db.expanduser().resolve() if default_db else None,
+        "default_project": default_project,
+        "instance_id": instance_id,
+    }
+    if capability_token is not None:
+        config_options["capability_token"] = capability_token
+    config = ConsoleConfig(**config_options)
+    candidates = (0,) if preferred_port == 0 else range(preferred_port, min(preferred_port + 50, 65_536))
+    last_error = None
+    server = None
+    for candidate in candidates:
+        try:
+            server = BoundedThreadingHTTPServer((host, candidate), make_handler(config))
+            break
+        except OSError as exc:
+            last_error = exc
+    if server is None:
+        if last_error is not None:
+            raise OSError(
+                f"no available dashboard port found from {preferred_port} "
+                f"to {min(preferred_port + 49, 65_535)}"
+            ) from last_error
+        raise OSError("dashboard could not bind a loopback port")
+    selected_port = int(server.server_address[1])
+    return server, config, f"http://{host}:{selected_port}/#token={config.capability_token}"
 
 
 def run_dashboard(
@@ -921,19 +959,14 @@ def run_dashboard(
     port: int = 8765,
     open_browser: bool = True,
 ) -> dict:
-    if host not in {"127.0.0.1", "localhost", "::1"}:
-        raise ValueError("dashboard host must be loopback-only")
-    selected_port = _find_port(host, int(port))
-    config = ConsoleConfig(
-        tool_root=tool_root.resolve(),
-        brain_dir=brain_dir.expanduser().resolve(),
-        default_db=default_db.expanduser().resolve() if default_db else None,
+    server, _config, url = create_dashboard_server(
+        tool_root,
+        brain_dir,
+        default_db=default_db,
         default_project=default_project,
+        host=host,
+        port=port,
     )
-    server = BoundedThreadingHTTPServer((host, selected_port), make_handler(config))
-    selected_port = int(server.server_address[1])
-    base_url = f"http://{host}:{selected_port}/"
-    url = f"{base_url}#token={config.capability_token}"
     if open_browser:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     print(f"Rta-Smriti Operator Console: {url}")

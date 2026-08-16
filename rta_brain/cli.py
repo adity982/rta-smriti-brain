@@ -4,12 +4,22 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .autostart import autostart_status, disable_autostart, enable_autostart
 from .context import build_context_pack, build_continuation_prompt
 from .console import publish_readiness, run_dashboard
+from .console_daemon import (
+    console_status,
+    open_console,
+    restart_console,
+    run_console_worker,
+    start_console,
+    stop_console,
+)
 from .db import (
     connect, doctor, get_project_settings, graph, ingest_repo, ingest_thread, init_project, reflect,
     remember, save_checkpoint, search, stale_check, update_project_settings,
 )
+from .onboarding import SUPPORTED_TARGET_AGENTS, onboard_project
 from .project import bootstrap_project, install_local, mcp_config_payload, projects_list, self_check
 from .watch import watch_repository
 from .watch_daemon import run_watcher_worker, start_watcher, stop_watcher, watcher_status
@@ -163,6 +173,19 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap.add_argument("--write-agents", action="store_true")
     bootstrap.add_argument("--embedding-provider", choices=("none", "hash", "sentence-transformers"), default="hash")
 
+    start = sub.add_parser("start", help="Onboard a project and start its local brain in one command")
+    start.add_argument("path")
+    start.add_argument("--project")
+    start.add_argument("--brain-dir", default=str(Path.home() / "Documents" / "Codex" / "brains"))
+    start.add_argument("--target-agent", choices=tuple(sorted(SUPPORTED_TARGET_AGENTS)), default="universal")
+    start.add_argument("--write-agents", action="store_true", help="Add the Rta-Smriti bridge to project agent files")
+    start.add_argument("--embedding-provider", choices=("none", "hash", "sentence-transformers"), default="hash")
+    start.add_argument("--interval", type=float, default=2.0)
+    start.add_argument("--port", type=int, default=8765)
+    start.add_argument("--no-open", action="store_true")
+    start.add_argument("--no-watcher", action="store_true")
+    start.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Emit stable JSON")
+
     self_check_cmd = sub.add_parser("self-check", help="Verify that a project brain is ready to use")
     add_common_options(self_check_cmd)
     self_check_cmd.add_argument("--project", default="default")
@@ -188,6 +211,31 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard.add_argument("--host", choices=("127.0.0.1", "localhost"), default="127.0.0.1", help="Loopback host only")
     dashboard.add_argument("--port", type=int, default=8765)
     dashboard.add_argument("--no-open", action="store_true", help="Do not open the browser automatically")
+
+    console = sub.add_parser("console", help="Manage the terminal-independent operator console")
+    console.add_argument(
+        "action",
+        choices=("start", "open", "status", "restart", "stop", "login-enable", "login-disable", "login-status"),
+    )
+    console.add_argument("--brain-dir", default=str(Path.home() / "Documents" / "Codex" / "brains"))
+    console.add_argument("--db", default=None, help="Default brain DB for the opened console")
+    console.add_argument("--project", default=None, help="Default project for the opened console")
+    console.add_argument("--host", choices=("127.0.0.1", "localhost"), default="127.0.0.1")
+    console.add_argument("--port", type=int, default=8765)
+    console.add_argument("--no-open", action="store_true", help="Do not open the browser")
+    console.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Emit stable JSON")
+
+    console_worker = sub.add_parser("_console-worker", help=argparse.SUPPRESS)
+    console_worker.add_argument("--tool-root", required=True)
+    console_worker.add_argument("--brain-dir", required=True)
+    console_worker.add_argument("--default-db")
+    console_worker.add_argument("--default-project")
+    console_worker.add_argument("--host", required=True)
+    console_worker.add_argument("--port", type=int, required=True)
+    console_worker.add_argument("--state-file", required=True)
+    console_worker.add_argument("--stop-file", required=True)
+    console_worker.add_argument("--lock-file", required=True)
+    console_worker.add_argument("--token-file", required=True)
     return parser
 
 
@@ -198,6 +246,78 @@ def build_mcp_config(db_path: str, project: str, name: str) -> dict:
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "start":
+        try:
+            payload = onboard_project(
+                tool_root(),
+                Path(args.path),
+                brain_dir=Path(args.brain_dir),
+                project=args.project,
+                target_agent=args.target_agent,
+                write_agents=args.write_agents,
+                embedding_provider=args.embedding_provider,
+                watcher_interval=args.interval,
+                port=args.port,
+                open_browser=not args.no_open,
+                start_sync=not args.no_watcher,
+            )
+            emit(payload, args.json)
+            return 0 if payload.get("ready") else 1
+        except Exception as exc:
+            error = {"status": "error", "ready": False, "error": {"type": exc.__class__.__name__, "message": str(exc)}}
+            if getattr(args, "json", False):
+                print(json.dumps(error, indent=2, sort_keys=True), file=sys.stderr)
+            else:
+                print(f"error: {exc}", file=sys.stderr)
+            return 1
+    if args.command == "_console-worker":
+        return run_console_worker(
+            Path(args.tool_root),
+            Path(args.brain_dir),
+            Path(args.default_db) if args.default_db else None,
+            args.default_project,
+            args.host,
+            args.port,
+            Path(args.state_file),
+            Path(args.stop_file),
+            Path(args.lock_file),
+            Path(args.token_file),
+        )
+    if args.command == "console":
+        try:
+            brain_dir = Path(args.brain_dir)
+            if args.action == "login-status":
+                payload = autostart_status(brain_dir)
+            elif args.action == "login-enable":
+                payload = enable_autostart(tool_root(), brain_dir)
+            elif args.action == "login-disable":
+                payload = disable_autostart(brain_dir)
+            elif args.action == "status":
+                payload = console_status(brain_dir)
+            elif args.action == "open":
+                payload = open_console(brain_dir, launch_browser=not args.no_open)
+            elif args.action == "stop":
+                payload = stop_console(brain_dir)
+            else:
+                operation = restart_console if args.action == "restart" else start_console
+                payload = operation(
+                    tool_root(),
+                    brain_dir,
+                    default_db=Path(args.db) if args.db else None,
+                    default_project=args.project,
+                    host=args.host,
+                    port=args.port,
+                    open_browser=not args.no_open,
+                )
+            emit(payload, args.json)
+            return 0
+        except Exception as exc:
+            error = {"status": "error", "error": {"type": exc.__class__.__name__, "message": str(exc)}}
+            if getattr(args, "json", False):
+                print(json.dumps(error, indent=2, sort_keys=True), file=sys.stderr)
+            else:
+                print(f"error: {exc}", file=sys.stderr)
+            return 1
     if args.command == "dashboard":
         run_dashboard(
             tool_root(),

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import signal
 import subprocess
@@ -11,10 +10,22 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
 from .db import connect, ingest_repo
+from .runtime_control import (
+    clear_control_files,
+    detached_process_kwargs,
+    is_safe_regular_file,
+    now_iso,
+    open_log,
+    prepare_control_dir,
+    process_alive,
+    read_json,
+    stop_requested,
+    write_json,
+    write_stop_request,
+)
 
 
 _SPAWNED_PROCESSES: dict[str, subprocess.Popen] = {}
@@ -22,7 +33,7 @@ _CONTENT_EVENT_TYPES = frozenset({"created", "modified", "deleted", "moved"})
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return now_iso()
 
 
 def _slug(value: str) -> str:
@@ -44,49 +55,19 @@ def watcher_paths(db_path: Path, project: str) -> dict[str, Path]:
 
 
 def _prepare_control_dir(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-    if path.is_symlink() or not path.is_dir():
-        raise ValueError(f"watcher control directory is not a safe directory: {path}")
+    prepare_control_dir(path, label="watcher")
 
 
 def _write_json(path: Path, payload: dict) -> None:
-    _prepare_control_dir(path.parent)
-    if path.exists() and (path.is_symlink() or path.stat().st_nlink > 1):
-        raise ValueError(f"refusing linked watcher state: {path}")
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
-    try:
-        with temporary.open("x", encoding="utf-8", newline="\n") as stream:
-            json.dump(payload, stream, indent=2, sort_keys=True)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        for attempt in range(40):
-            try:
-                os.replace(temporary, path)
-                break
-            except PermissionError:
-                if attempt == 39:
-                    raise
-                time.sleep(0.025)
-    finally:
-        temporary.unlink(missing_ok=True)
+    write_json(path, payload, label="watcher state")
 
 
 def _read_json(path: Path) -> dict | None:
-    if not path.is_file() or path.is_symlink() or path.stat().st_nlink > 1:
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return payload if isinstance(payload, dict) else None
+    return read_json(path)
 
 
 def _is_safe_regular_file(path: Path) -> bool:
-    try:
-        return path.is_file() and not path.is_symlink() and path.stat().st_nlink == 1
-    except OSError:
-        return False
+    return is_safe_regular_file(path)
 
 
 def _watchdog_event_requires_refresh(event, is_internal_event) -> bool:
@@ -100,62 +81,19 @@ def _watchdog_event_requires_refresh(event, is_internal_event) -> bool:
 
 
 def _write_stop_request(path: Path) -> None:
-    _prepare_control_dir(path.parent)
-    try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        if not _is_safe_regular_file(path):
-            raise ValueError(f"refusing linked watcher stop file: {path}")
-        return
-    with os.fdopen(descriptor, "w", encoding="ascii", newline="\n") as stream:
-        stream.write("stop\n")
+    write_stop_request(path, label="watcher")
 
 
 def _stop_requested(path: Path) -> bool:
-    if not path.exists():
-        return False
-    if not _is_safe_regular_file(path):
-        raise ValueError(f"refusing linked watcher stop file: {path}")
-    return True
+    return stop_requested(path, label="watcher")
 
 
 def _open_log(path: Path):
-    _prepare_control_dir(path.parent)
-    if path.exists() and not _is_safe_regular_file(path):
-        raise ValueError(f"refusing linked watcher log: {path}")
-    descriptor = os.open(path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
-    return os.fdopen(descriptor, "a", encoding="utf-8", buffering=1)
+    return open_log(path, label="watcher")
 
 
 def _process_alive(pid: int | None) -> bool:
-    if not pid or int(pid) <= 0:
-        return False
-    if os.name == "nt":
-        import ctypes
-        from ctypes import wintypes
-
-        process_query_limited_information = 0x1000
-        still_active = 259
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel32.OpenProcess.restype = wintypes.HANDLE
-        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
-        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel32.CloseHandle.restype = wintypes.BOOL
-        handle = kernel32.OpenProcess(process_query_limited_information, False, int(pid))
-        if not handle:
-            return False
-        try:
-            exit_code = wintypes.DWORD()
-            return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))) and exit_code.value == still_active
-        finally:
-            kernel32.CloseHandle(handle)
-    try:
-        os.kill(int(pid), 0)
-    except (OSError, ValueError):
-        return False
-    return True
+    return process_alive(pid)
 
 
 def watcher_status(db_path: Path, project: str) -> dict:
@@ -176,10 +114,7 @@ def watcher_status(db_path: Path, project: str) -> dict:
 
 
 def _clear_stale_control(paths: dict[str, Path]) -> None:
-    for key in ("state", "stop", "lock"):
-        path = paths[key]
-        if path.exists() and not path.is_symlink() and path.stat().st_nlink == 1:
-            path.unlink(missing_ok=True)
+    clear_control_files(paths, ("state", "stop", "lock"))
 
 
 def _worker_command(db_path: Path, root: Path, project: str, paths: dict[str, Path], interval: float) -> list[str]:
@@ -228,11 +163,7 @@ def start_watcher(
     with os.fdopen(descriptor, "w", encoding="ascii", newline="\n") as stream:
         stream.write(token_hash + "\n")
     env = {**os.environ, "RTA_SMIRTI_WATCH_TOKEN": secrets_token}
-    creationflags = 0
-    kwargs = {"start_new_session": True}
-    if os.name == "nt":
-        creationflags = 0x00000008 | 0x00000200 | 0x08000000
-        kwargs = {}
+    spawn_options = detached_process_kwargs()
     try:
         log_stream = _open_log(paths["log"])
     except Exception:
@@ -247,8 +178,7 @@ def start_watcher(
             stderr=log_stream,
             close_fds=True,
             env=env,
-            creationflags=creationflags,
-            **kwargs,
+            **spawn_options,
         )
     except Exception:
         paths["lock"].unlink(missing_ok=True)

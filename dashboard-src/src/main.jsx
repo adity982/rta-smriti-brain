@@ -2292,11 +2292,12 @@ function BootstrapPanel({ onDone, shellKind }) {
   const [output, setOutput] = useState("");
   const [writeAgents, setWriteAgents] = useState(false);
   const [embeddingProvider, setEmbeddingProvider] = useState("hash");
+  const [targetAgent, setTargetAgent] = useState("universal");
   const [isBootstrapping, setIsBootstrapping] = useState(false);
 
   async function bootstrap() {
-    if (!path.trim() || !project.trim()) {
-      setOutput("Enter a project folder and project name.");
+    if (!path.trim()) {
+      setOutput("Enter a project folder.");
       return;
     }
     try {
@@ -2304,9 +2305,20 @@ function BootstrapPanel({ onDone, shellKind }) {
       setOutput("Building local brain...");
       const payload = await api("/api/bootstrap", {
         method: "POST",
-        body: JSON.stringify({ path, project, write_agents: writeAgents, embedding_provider: embeddingProvider }),
+        body: JSON.stringify({
+          path,
+          project: project.trim() || null,
+          target_agent: targetAgent,
+          write_agents: writeAgents,
+          embedding_provider: embeddingProvider,
+        }),
       });
-      setOutput(`Brain ready: ${payload.project}\nIndexed files: ${payload.ingest.indexed_files}\nDatabase: ${displayPath(payload.db_path)}${payload.agent_index_file ? `\nAgent bridge: ${displayPath(payload.agent_index_file)}` : ""}`);
+      const stageText = (payload.stages || []).map((stage) => `${stage.state === "complete" ? "OK" : "BLOCKED"}  ${stage.name}: ${stage.detail}`).join("\n");
+      if (!payload.ready) {
+        setOutput(`Setup needs attention at ${payload.error?.stage || "verification"}: ${payload.error?.message || "unknown error"}\n\n${stageText}\n\nResume: ${payload.recovery_commands?.resume || "rerun setup"}`);
+        return;
+      }
+      setOutput(`Brain ready: ${payload.project}\nIndexed files: ${payload.bootstrap?.ingest?.indexed_files || 0}\nDatabase: ${displayPath(payload.db_path)}\n\n${stageText}${payload.bootstrap?.agent_index_file ? `\n\nAgent bridge: ${displayPath(payload.bootstrap.agent_index_file)}` : ""}`);
       await onDone();
     } catch (error) {
       setOutput(`Bootstrap failed: ${error.message}`);
@@ -2328,7 +2340,13 @@ function BootstrapPanel({ onDone, shellKind }) {
         </label>
       <label>
         <span>Project Name</span>
-        <input value={project} onChange={(event) => setProject(event.target.value)} placeholder="my-project" />
+        <input value={project} onChange={(event) => setProject(event.target.value)} placeholder="Derived from folder when blank" />
+      </label>
+      <label>
+        <span>Target Agent</span>
+        <select value={targetAgent} onChange={(event) => setTargetAgent(event.target.value)}>
+          {targetAgents.map((agent) => <option key={agent.value} value={agent.value}>{agent.label}</option>)}
+        </select>
       </label>
       <label>
         <span>Retrieval</span>
@@ -2342,7 +2360,7 @@ function BootstrapPanel({ onDone, shellKind }) {
         <span>Write the optional AGENTS.md bridge into this project</span>
       </label>
       <button className="primarySmall" onClick={bootstrap} disabled={isBootstrapping}>
-        <Rocket size={16} /> {isBootstrapping ? "Building..." : "Build Local Brain"}
+        <Rocket size={16} /> {isBootstrapping ? "Starting..." : "Set Up & Start"}
       </button>
       {output && <pre className="miniOutput">{output}</pre>}
     </div>

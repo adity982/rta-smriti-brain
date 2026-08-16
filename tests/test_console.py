@@ -184,7 +184,7 @@ class RtaBrainConsoleTests(unittest.TestCase):
         self.assertFalse(is_authorized_request(Handler({"X-Rta-Smriti-Token": "wrong-token"}), config))
         self.assertTrue(is_authorized_request(Handler({"X-Rta-Smriti-Token": "correct-token"}), config))
         self.assertFalse(is_authorized_request(Handler({"Cookie": "rta_smriti_cap=wrong-token"}), config))
-        self.assertTrue(is_authorized_request(Handler({"Cookie": "theme=dark; rta_smriti_cap=correct-token"}), config))
+        self.assertFalse(is_authorized_request(Handler({"Cookie": "theme=dark; rta_smriti_cap=correct-token"}), config))
         self.assertFalse(is_authorized_request(Handler({"X-Rta-Smriti-Token": "wrong-token", "Cookie": "rta_smriti_cap=correct-token"}), config))
 
     def test_console_confines_databases_and_host_to_loopback(self):
@@ -222,7 +222,7 @@ class RtaBrainConsoleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp, patch(
             "rta_brain.console.BoundedThreadingHTTPServer", FakeServer
-        ), patch("rta_brain.console._find_port", return_value=0), patch("builtins.print"):
+        ), patch("builtins.print"):
             payload = run_dashboard(ROOT, Path(tmp), port=0, open_browser=False)
         self.assertIn("http://127.0.0.1:43123/", payload["url"])
 
