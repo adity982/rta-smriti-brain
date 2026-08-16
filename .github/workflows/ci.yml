@@ -57,6 +57,9 @@ jobs:
       - name: Run rendered operator acceptance
         if: matrix.python == '3.11'
         run: npm run test:operator
+      - name: Run launch-site operator acceptance
+        if: matrix.python == '3.11'
+        run: npm run test:launch
       - name: Run packaged public benchmark
         run: python -m rta_brain.cli benchmark --json > public-benchmark-result.json
       - name: Run bounded synthetic performance probe

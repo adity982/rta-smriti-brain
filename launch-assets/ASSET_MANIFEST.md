@@ -10,8 +10,10 @@
 | `product-hunt/rta-smriti-launch-demo.mp4` | 1920x1080, 60s | Product Hunt / YouTube launch video |
 | `product-hunt/rta-smriti-launch-poster.png` | 1920x1080 | Video poster |
 | `screenshots/operator-console-v0.4.png` | 1440x900 | Current synthetic desktop operator console |
+| `screenshots/operator-files-v0.4.png` | 1440x900 | Current synthetic file explorer and task-selection workflow |
 | `screenshots/operator-console-mobile-v0.4.png` | 390x844 | Current synthetic mobile layout proof |
 | `social/github-social-preview.png` | 1280x640 | GitHub and social preview |
-| `source/launch-key-art-final.png` | 16:9 | Final cinematic art source |
+| `source/launch-art-direction.png` | 1440x900 | Current synthetic launch-art reference |
+| `source/launch-key-art-final.png` | 1440x900 | Current synthetic cinematic art source |
 
-All shipped product screens use synthetic fixture repositories and masked `%USERPROFILE%` paths.
+All shipped product screens use synthetic fixture repositories and masked `%USERPROFILE%` paths. Product metrics use only the public synthetic benchmark and performance fixture.

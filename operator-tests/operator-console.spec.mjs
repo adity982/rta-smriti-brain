@@ -7,6 +7,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const captureLaunchAssets = process.env.RTA_CAPTURE_LAUNCH_ASSETS === "1";
+
+async function captureLaunchScreenshot(page, name) {
+  if (!captureLaunchAssets) return;
+  await page.screenshot({
+    path: path.join(root, "launch-assets", "screenshots", name),
+    animations: "disabled",
+  });
+}
 
 function startFixtureServer(tempRoot) {
   const python = process.env.PYTHON || (process.platform === "win32" ? "python" : "python3");
@@ -115,6 +124,7 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect(page).toHaveTitle("Rta-Smriti Brain");
     await expect(page.getByText("operator-demo", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("Brain Status: Healthy", { exact: true })).toBeVisible();
+    await captureLaunchScreenshot(page, "operator-console-v0.4.png");
     const operatorNavigation = page.getByRole("navigation", { name: "Operator console navigation" });
 
     const navigation = [
@@ -227,6 +237,9 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await page.getByRole("button", { name: /README\.md/ }).first().click();
     await page.getByRole("button", { name: "Add to Task", exact: true }).click();
     await expect(page.getByLabel("Objective")).toContainText("Relevant file: README.md");
+    await page.locator(".inspectorTabs").getByRole("button", { name: "Evidence", exact: true }).click();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await captureLaunchScreenshot(page, "operator-files-v0.4.png");
 
     await operatorNavigation.getByRole("button", { name: /^Action Gate/ }).click();
     await page.getByLabel("Intended action").fill("Publish release");
@@ -322,6 +335,9 @@ test("real operator can inspect, govern, continue, and move a project brain", as
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.getByText("Brain Status: Healthy", { exact: true })).toBeVisible();
+    await reloadedNavigation.getByRole("button", { name: "Graph", exact: true }).click();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await captureLaunchScreenshot(page, "operator-console-mobile-v0.4.png");
     await reloadedNavigation.getByRole("button", { name: "Canvas", exact: true }).click();
     const mobileCanvas = page.getByRole("region", { name: "Spatial project canvas" });
     await expect(mobileCanvas.locator(".canvasCard").first()).toBeVisible();

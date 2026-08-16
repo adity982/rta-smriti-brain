@@ -75,10 +75,11 @@ run green after the owner-approved push.
 | Manual operator browser workflow | Six local projects loaded; Graph, Files, Canvas, Bases, references, task handoff, agent selection, context packs, release checks, bootstrap, settings, and watcher controls passed at desktop and 390 px |
 | Accessibility repair | Intelligence and Bases tabs expose tab semantics and roving keyboard focus; Bases exposes table, row-group, row, header, and cell relationships; exactly one route is current; toolbar toggles expose state; graph search and workspace fields have names; status changes are live; modal focus is trapped/restored; keyboard Canvas inspection focuses and reveals the mobile inspector; normal-mode WCAG scans passed every destination; mobile Canvas cards had zero overlaps |
 | Performance and resource probe | Sanitized synthetic baselines passed at 100, 1,000, and 10,000 files; the committed JSON reports indexing, deep freshness, search/context-pack p95, SQLite size, and traced peak memory without hostnames or absolute paths |
-| Publication privacy scan | Passed across 160 public candidates |
+| Publication privacy scan | Passed across 163 public candidates, including the refreshed website, screenshots, gallery, poster, and video |
+| Launch-site operator acceptance | Built-site Playwright journey passed at desktop and 390 px: product and evidence tabs, mobile navigation, media metadata, local asset links, horizontal overflow, WCAG axe scans, and console/page errors |
 | Public benchmark | Six synthetic documents and queries; lexical and dependency-free hash-hybrid regression gates passed; this is not superiority evidence |
 | Codex Security remediation scan | A frozen pre-fix snapshot reviewed 18 changed runtime artifacts across eight threat surfaces and reproduced one low-severity stale-selection issue (`bf16b280-16e1-4d67-8d2a-08e7f83fab4e`). The issue is fixed and covered by a failing-then-passing rendered test. This scan is remediation evidence, not the final clean-tree gate |
-| Codex Security final source/runtime scan | Must run against the frozen candidate commit with zero open findings before owner approval |
+| Codex Security exact-commit gate | The previous release-candidate commit `259bba6` passed an immutable 17-artifact, eight-surface scan with zero findings. The final asset-refresh commit must independently pass the same zero-finding gate before owner approval |
 | Built-in publish-readiness command | Structural gates passed; the clean-tree gate is re-evaluated on the frozen candidate commit before owner approval |
 | Git whitespace validation | Passed |
 
@@ -96,6 +97,11 @@ Gitleaks, Bandit, Ruff, and Semgrep were unavailable in the current shell, so
 this page does not claim fresh results from any of them. The bundled privacy
 scanner, dependency audits, focused hardening tests, and Codex Security scan
 all passed; none is described as equivalent to an unavailable tool.
+
+Launch screenshots, gallery images, poster, and video were regenerated from the
+current synthetic fixture and launch source. Product Hunt and website video and
+poster copies match byte-for-byte; private-project scale claims are not accepted
+as launch evidence.
 
 The final Windows executable and universal wheel are staged under the ignored
 local release-artifact directory with a generated `SHA256SUMS.txt`; the manifest

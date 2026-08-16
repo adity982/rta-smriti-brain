@@ -28,7 +28,7 @@ import "./styles.css";
 
 const repositoryUrl = import.meta.env.VITE_REPOSITORY_URL || "https://github.com/sulabhdubey/rta-smriti-brain";
 
-const installCommand = "pip install -e .";
+const installCommand = "python -m pip install .";
 const agents = ["Codex", "Claude Code", "Cursor", "Copilot", "Gemini CLI", "Aider", "Cline", "Any MCP agent"];
 const pramana = {
   pratyaksha: ["Observed", "Code, tests, files, and tool output", "#5eead4"],
@@ -86,8 +86,8 @@ function Hero() {
           <a className="secondaryAction" href="#demo"><Play size={17} /> Watch the product</a>
         </div>
         <div className="heroProof" aria-label="Product proof points">
-          <span><strong>6</strong> project brains tested</span>
-          <span><strong>26,482</strong> files in largest test</span>
+          <span><strong>6</strong> synthetic benchmark queries</span>
+          <span><strong>10,000</strong> synthetic files profiled</span>
           <span><strong>0</strong> cloud accounts required</span>
         </div>
       </div>
@@ -204,9 +204,9 @@ function PramanaSection() {
         </div>
         <div className="pramanaControl">
           <div className="pramanaTabs" role="tablist" aria-label="Pramana evidence classes">
-            {Object.keys(pramana).map((key) => <button key={key} aria-selected={active === key} onClick={() => setActive(key)}>{key}</button>)}
+            {Object.keys(pramana).map((key) => <button key={key} id={`pramana-tab-${key}`} role="tab" aria-controls="pramana-panel" aria-selected={active === key} onClick={() => setActive(key)}>{key}</button>)}
           </div>
-          <div className="pramanaResult" style={{ "--pramana-color": color }}>
+          <div className="pramanaResult" id="pramana-panel" role="tabpanel" aria-labelledby={`pramana-tab-${active}`} style={{ "--pramana-color": color }}>
             <CircleDot size={28} />
             <span><strong>{label}</strong><p>{copy}</p></span>
           </div>
@@ -232,8 +232,8 @@ function Difference() {
           <p>The product combines repository structure, durable human knowledge, session handoffs, evidence strength, and agent-ready output.</p>
         </div>
         <div className="comparisonTable" role="table" aria-label="Rta-Smriti comparison">
-          <div className="comparisonHead" role="row"><span>Category</span><span>Usually stops at</span><span>Rta-Smriti adds</span></div>
-          {rows.map((row) => <div className="comparisonRow" role="row" key={row[0]}>{row.map((cell, i) => <span key={cell} className={i === 2 ? "highlightCell" : ""}>{i === 2 && <Check size={15} />}{cell}</span>)}</div>)}
+          <div className="comparisonHead" role="row"><span role="columnheader">Category</span><span role="columnheader">Usually stops at</span><span role="columnheader">Rta-Smriti adds</span></div>
+          {rows.map((row) => <div className="comparisonRow" role="row" key={row[0]}>{row.map((cell, i) => <span role="cell" key={cell} className={i === 2 ? "highlightCell" : ""}>{i === 2 && <Check size={15} />}{cell}</span>)}</div>)}
         </div>
       </div>
     </section>
@@ -241,7 +241,7 @@ function Difference() {
 }
 
 function AgentRail() {
-  return <section className="agentRail"><div className="shell"><span>ONE BRAIN</span><div>{agents.map((agent) => <strong key={agent}>{agent}</strong>)}</div><span>ANY AGENT</span></div></section>;
+  return <section className="agentRail"><div className="shell"><span>ONE BRAIN</span><div tabIndex="0" aria-label="Supported coding agents">{agents.map((agent) => <strong key={agent}>{agent}</strong>)}</div><span>ANY AGENT</span></div></section>;
 }
 
 function Demo() {
@@ -305,7 +305,7 @@ const assetContent = {
   "gallery-1": ["Your AI starts with project memory.", "Repo evidence, durable decisions, and long-session handoffs — compiled locally for the next task.", "dashboard"],
   "gallery-2": ["One brain. Any agent.", "Codex · Claude Code · Cursor · Copilot · Gemini CLI · Aider · Cline · MCP", "agents"],
   "gallery-3": ["Evidence, not vibes.", "Observed facts, trusted instructions, inferences, memories, and hypotheses stay meaningfully different.", "pramana"],
-  "gallery-4": ["26,482 files. One focused pack.", "Bounded local retrieval turns a large repository into the context your next agent task actually needs.", "performance"],
+  "gallery-4": ["10,000 synthetic files. One focused pack.", "A public, reproducible performance fixture exercises bounded local retrieval without exposing a private repository.", "performance"],
 };
 
 function AssetBoard({ name }) {
@@ -319,7 +319,7 @@ function AssetBoard({ name }) {
       {content[2] === "dashboard" && <img src="./assets/dashboard-hero.png" alt="" />}
       {content[2] === "agents" && <div className="assetAgentOrbit"><BrainCircuit />{agents.slice(0, 7).map((agent, i) => <span key={agent} style={{ "--i": i }}>{agent}</span>)}</div>}
       {content[2] === "pramana" && <div className="assetPramana">{Object.entries(pramana).map(([key, value]) => <span key={key} style={{ "--color": value[2] }}><i />{key}<small>{value[0]}</small></span>)}</div>}
-      {content[2] === "performance" && <div className="assetMetric"><span><strong>26,482</strong>indexed files</span><ArrowRight /><span><strong>1</strong>task-specific pack</span></div>}
+      {content[2] === "performance" && <div className="assetMetric"><span><strong>10,000</strong>synthetic files</span><ArrowRight /><span><strong>1</strong>task-specific pack</span></div>}
       <div className="assetFooter"><span>Private SQLite · FTS5 · Graph · MCP</span><strong>rta-smriti</strong></div>
     </div>
   );

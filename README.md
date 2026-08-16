@@ -164,7 +164,7 @@ The dashboard runs on `127.0.0.1` and includes:
 - **Workspaces**: group independent local brains and search them together without copying or rebinding their repositories
 - **Memory ledger**: inspect stored memories, record helpful/harmful outcomes, and run conservative reflection
 - **Continue Work**: edit the structured checkpoint and copy a ready-to-use prompt for a new agent task
-- **Launch readiness**: repo files and publish checks
+- **Rta-Smriti Release**: source-checkout files and GitHub publication checks; it does not assess the selected private project
 - **Bootstrap flow**: create a new project brain from the UI
 - **Command palette**: copy common commands into your agent chat
 
