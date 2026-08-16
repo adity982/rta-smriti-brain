@@ -19,6 +19,7 @@ from rta_brain.console_daemon import (
     start_console,
     stop_console,
 )
+from rta_brain.db import connect, init_project
 from rta_brain.runtime_control import (
     detached_process_kwargs,
     process_alive,
@@ -172,6 +173,86 @@ class ManagedConsoleTests(unittest.TestCase):
             )
         self.assertEqual(caught.exception.code, 403)
         caught.exception.close()
+
+    def test_console_rejects_non_object_json_without_internal_error(self):
+        started = start_console(ROOT, self.brain_dir, port=0, open_browser=False, startup_timeout=10.0)
+        token = started["url"].split("#token=", 1)[1]
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{started['port']}/api/preflight",
+            data=b"[]",
+            headers={"X-Rta-Smriti-Token": token, "Content-Type": "application/json"},
+            method="POST",
+        )
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request, timeout=5)
+        self.assertEqual(caught.exception.code, 400)
+        payload = json.loads(caught.exception.read().decode("utf-8"))
+        self.assertEqual(payload["error"]["type"], "ValueError")
+        caught.exception.close()
+
+    def test_governance_api_supports_policy_preflight_override_and_retirement(self):
+        db_path = self.brain_dir / "demo.sqlite"
+        conn = connect(db_path)
+        try:
+            init_project(conn, "demo", self.tempdir.name)
+        finally:
+            conn.close()
+        started = start_console(ROOT, self.brain_dir, port=0, open_browser=False, startup_timeout=10.0)
+        token = started["url"].split("#token=", 1)[1]
+        base_url = f"http://127.0.0.1:{started['port']}"
+        headers = {"X-Rta-Smriti-Token": token, "Content-Type": "application/json"}
+
+        def post(path, payload):
+            request = urllib.request.Request(
+                base_url + path,
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        project_ref = {"db_path": str(db_path), "project": "demo"}
+        created = post("/api/governance-policy", {
+            **project_ref,
+            "action": "create",
+            "kind": "constraint",
+            "statement": "Do not publish without privacy proof.",
+            "effect": "block",
+            "action_contains": "publish",
+            "pramana": "pratyaksha",
+            "confidence": 1.0,
+            "provenance": {"verification_status": "verified", "source_path": "SECURITY.md"},
+        })
+        policy_id = created["policy"]["id"]
+
+        request = urllib.request.Request(
+            f"{base_url}/api/governance?db_path={db_path}&project=demo",
+            headers={"X-Rta-Smriti-Token": token},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            governance = json.loads(response.read().decode("utf-8"))
+        self.assertEqual([item["id"] for item in governance["policies"]], [policy_id])
+        self.assertEqual(governance["receipts"], [])
+
+        blocked = post("/api/preflight", {**project_ref, "action": "Publish release"})
+        self.assertEqual(blocked["decision"], "block")
+        overridden = post("/api/preflight", {
+            **project_ref,
+            "action": "Publish release",
+            "override_reason": "Owner approved this exact publication.",
+            "actor": "operator",
+        })
+        self.assertEqual(overridden["decision"], "allow_with_override")
+        self.assertIsNotNone(overridden["override_receipt"])
+
+        retired = post("/api/governance-policy", {
+            **project_ref,
+            "action": "retire",
+            "policy_id": policy_id,
+            "reason": "Release policy replaced.",
+        })
+        self.assertEqual(retired["policy"]["status"], "retired")
 
     def test_concurrent_starts_converge_on_one_verified_console(self):
         barrier = threading.Barrier(2)

@@ -19,6 +19,7 @@ from .db import (
     connect, doctor, get_project_settings, graph, ingest_repo, ingest_thread, init_project, reflect,
     remember, save_checkpoint, search, stale_check, update_project_settings,
 )
+from .governance import create_policy, list_policies, list_receipts, preflight, retire_policy
 from .onboarding import SUPPORTED_TARGET_AGENTS, onboard_project
 from .project import bootstrap_project, install_local, mcp_config_payload, projects_list, self_check
 from .watch import watch_repository
@@ -159,6 +160,42 @@ def build_parser() -> argparse.ArgumentParser:
     reflect_cmd = sub.add_parser("reflect", help="Consolidate duplicate memories and flag contradictions")
     add_common_options(reflect_cmd)
     reflect_cmd.add_argument("--project", default="default")
+
+    policy = sub.add_parser("policy", help="Create, list, or retire typed governance policies")
+    add_common_options(policy)
+    policy.add_argument("action", choices=("add", "list", "retire"))
+    policy.add_argument("--project", default="default")
+    policy.add_argument("--id", type=int, dest="policy_id")
+    policy.add_argument("--kind", choices=("constraint", "failed_approach", "fragile_path", "required_check", "prohibited_repetition"))
+    policy.add_argument("--statement")
+    policy.add_argument("--effect", choices=("warn", "block"), default="warn")
+    policy.add_argument("--action-contains", default="")
+    policy.add_argument("--path-glob", default="")
+    policy.add_argument("--required-check", default="")
+    policy.add_argument("--pramana", choices=("pratyaksha", "sabda", "anumana", "smriti", "kalpana"), default="smriti")
+    policy.add_argument("--confidence", type=float, default=0.75)
+    policy.add_argument("--verification-status", choices=("unverified", "verified", "failed", "stale"), default="unverified")
+    policy.add_argument("--source-path")
+    policy.add_argument("--source-hash")
+    policy.add_argument("--verification-command")
+    policy.add_argument("--expires-at")
+    policy.add_argument("--non-overrideable", action="store_true")
+    policy.add_argument("--include-retired", action="store_true")
+    policy.add_argument("--reason")
+
+    preflight_cmd = sub.add_parser("preflight", help="Evaluate an intended action against project governance")
+    add_common_options(preflight_cmd)
+    preflight_cmd.add_argument("action")
+    preflight_cmd.add_argument("--project", default="default")
+    preflight_cmd.add_argument("--path")
+    preflight_cmd.add_argument("--check", action="append", default=[])
+    preflight_cmd.add_argument("--override-reason")
+    preflight_cmd.add_argument("--actor", default="operator")
+
+    receipts_cmd = sub.add_parser("governance-receipts", help="List governance override receipts")
+    add_common_options(receipts_cmd)
+    receipts_cmd.add_argument("--project", default="default")
+    receipts_cmd.add_argument("--limit", type=int, default=100)
 
     mcp_config = sub.add_parser("mcp-config", help="Generate an MCP host config snippet")
     add_common_options(mcp_config)
@@ -372,6 +409,7 @@ def main(argv=None) -> int:
             else:
                 print(f"error: {exc}", file=sys.stderr)
             return 1
+    exit_code = 0
     try:
         conn = connect(Path(args.db))
         with conn:
@@ -448,6 +486,50 @@ def main(argv=None) -> int:
                 payload = build_continuation_prompt(conn, project=args.project)
             elif args.command == "reflect":
                 payload = reflect(conn, project=args.project)
+            elif args.command == "policy":
+                if args.action == "list":
+                    payload = list_policies(conn, project=args.project, include_retired=args.include_retired)
+                elif args.action == "retire":
+                    if args.policy_id is None or not args.reason:
+                        raise ValueError("policy retire requires --id and --reason")
+                    payload = retire_policy(conn, project=args.project, policy_id=args.policy_id, reason=args.reason)
+                else:
+                    if not args.kind or not args.statement:
+                        raise ValueError("policy add requires --kind and --statement")
+                    payload = create_policy(
+                        conn,
+                        project=args.project,
+                        kind=args.kind,
+                        statement=args.statement,
+                        effect=args.effect,
+                        action_contains=args.action_contains,
+                        path_glob=args.path_glob,
+                        required_check=args.required_check,
+                        pramana=args.pramana,
+                        confidence=args.confidence,
+                        provenance={
+                            "verification_status": args.verification_status,
+                            "source_path": args.source_path,
+                            "source_hash": args.source_hash,
+                            "command": args.verification_command,
+                        },
+                        overrideable=not args.non_overrideable,
+                        expires_at=args.expires_at,
+                    )
+            elif args.command == "preflight":
+                payload = preflight(
+                    conn,
+                    project=args.project,
+                    action=args.action,
+                    path=args.path,
+                    completed_checks=args.check,
+                    override_reason=args.override_reason,
+                    actor=args.actor,
+                )
+                if payload["decision"] == "block":
+                    exit_code = 2
+            elif args.command == "governance-receipts":
+                payload = list_receipts(conn, project=args.project, limit=args.limit)
             elif args.command == "mcp-config":
                 payload = build_mcp_config(args.db, args.project, args.name)
             elif args.command == "bootstrap-project":
@@ -472,7 +554,7 @@ def main(argv=None) -> int:
                 parser.error(f"unknown command: {args.command}")
                 return 2
         emit(payload, args.json)
-        return 0
+        return exit_code
     except Exception as exc:
         error = {"status": "error", "error": {"type": exc.__class__.__name__, "message": str(exc)}}
         if getattr(args, "json", False):

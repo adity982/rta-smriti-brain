@@ -22,6 +22,7 @@ from .db import (
 from .parsers import ParserRegistry
 from .project import mcp_config_payload, runtime_shell, shell_cli_command, projects_list, self_check
 from .repository import canonical_root, canonical_root_key, repository_state, trusted_git_candidates
+from .governance import create_policy, list_policies, list_receipts, preflight, retire_policy
 from .watch_daemon import start_watcher, stop_watcher, watcher_status
 
 
@@ -482,7 +483,10 @@ def _read_body(handler: BaseHTTPRequestHandler) -> dict:
     if length > MAX_REQUEST_BYTES:
         raise ValueError("request body exceeds the 1 MB limit")
     raw = handler.rfile.read(length).decode("utf-8")
-    return json.loads(raw) if raw.strip() else {}
+    payload = json.loads(raw) if raw.strip() else {}
+    if not isinstance(payload, dict):
+        raise ValueError("JSON request body must be an object")
+    return payload
 
 
 def _query(handler: BaseHTTPRequestHandler) -> dict[str, str]:
@@ -687,6 +691,29 @@ def make_handler(config: ConsoleConfig):
                     db_path = resolve_brain_db(config, q["db_path"])
                     self._json(mcp_config_payload(str(db_path), q["project"], q.get("name", "rta-smriti"), config.tool_root))
                     return
+                if parsed.path == "/api/governance":
+                    q = _query(self)
+                    conn = _open_db(resolve_brain_db(config, q["db_path"]))
+                    try:
+                        policies = list_policies(
+                            conn,
+                            project=q["project"],
+                            include_retired=q.get("include_retired", "").lower() in {"1", "true", "yes"},
+                        )
+                        receipts = list_receipts(
+                            conn,
+                            project=q["project"],
+                            limit=int(q.get("limit", "50")),
+                        )
+                        self._json({
+                            "status": "ok",
+                            "project": q["project"],
+                            "policies": policies["policies"],
+                            "receipts": receipts["receipts"],
+                        })
+                    finally:
+                        conn.close()
+                    return
                 if parsed.path == "/api/publish-readiness":
                     self._json(publish_readiness(config.tool_root))
                     return
@@ -828,6 +855,54 @@ def make_handler(config: ConsoleConfig):
                             interval_seconds=float(payload.get("interval", 2.0)),
                         )
                     )
+                    return
+                if self.path == "/api/preflight":
+                    conn = _open_db(resolve_brain_db(config, payload["db_path"]))
+                    try:
+                        self._json(preflight(
+                            conn,
+                            project=payload["project"],
+                            action=payload["action"],
+                            path=payload.get("path"),
+                            completed_checks=payload.get("completed_checks") or [],
+                            override_reason=payload.get("override_reason"),
+                            actor=payload.get("actor", "operator"),
+                        ))
+                    finally:
+                        conn.close()
+                    return
+                if self.path == "/api/governance-policy":
+                    conn = _open_db(resolve_brain_db(config, payload["db_path"]))
+                    try:
+                        policy_action = str(payload.get("action", "create")).strip().lower()
+                        if policy_action == "retire":
+                            result = retire_policy(
+                                conn,
+                                project=payload["project"],
+                                policy_id=int(payload["policy_id"]),
+                                reason=payload["reason"],
+                            )
+                        elif policy_action == "create":
+                            result = create_policy(
+                                conn,
+                                project=payload["project"],
+                                kind=payload["kind"],
+                                statement=payload["statement"],
+                                effect=payload.get("effect", "warn"),
+                                action_contains=payload.get("action_contains", ""),
+                                path_glob=payload.get("path_glob", ""),
+                                required_check=payload.get("required_check", ""),
+                                pramana=payload.get("pramana", "smriti"),
+                                confidence=float(payload.get("confidence", 0.75)),
+                                provenance=payload.get("provenance"),
+                                overrideable=bool(payload.get("overrideable", True)),
+                                expires_at=payload.get("expires_at"),
+                            )
+                        else:
+                            raise ValueError("governance policy action must be create or retire")
+                        self._json(result)
+                    finally:
+                        conn.close()
                     return
                 if self.path == "/api/bootstrap":
                     from .onboarding import onboard_project

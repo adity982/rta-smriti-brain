@@ -12,6 +12,7 @@ from .db import (
     connect, doctor, graph, ingest_repo, ingest_thread, reflect, remember, remember_many,
     save_checkpoint, search, stale_check,
 )
+from .governance import create_policy, list_policies, list_receipts, preflight, retire_policy
 
 
 def tool_schema(name: str, description: str, properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
@@ -154,11 +155,59 @@ TOOLS = [
         {"project": {"type": "string", "description": "Project memory bank name."}},
     ),
     tool_schema(
+        "brain_policy_add",
+        "Create a typed, provenance-bearing pre-action governance policy.",
+        {
+            "project": {"type": "string"},
+            "kind": {"type": "string", "enum": ["constraint", "failed_approach", "fragile_path", "required_check", "prohibited_repetition"]},
+            "statement": {"type": "string"},
+            "effect": {"type": "string", "enum": ["warn", "block"], "default": "warn"},
+            "action_contains": {"type": "string"},
+            "path_glob": {"type": "string"},
+            "required_check": {"type": "string"},
+            "pramana": {"type": "string", "enum": ["pratyaksha", "sabda", "anumana", "smriti", "kalpana"]},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "provenance": {"type": "object"},
+            "overrideable": {"type": "boolean"},
+            "expires_at": {"type": "string"},
+        },
+        ["kind", "statement"],
+    ),
+    tool_schema(
+        "brain_policy_list",
+        "List active or retired governance policies for a project.",
+        {"project": {"type": "string"}, "include_retired": {"type": "boolean", "default": False}},
+    ),
+    tool_schema(
+        "brain_policy_retire",
+        "Explicitly retire an active governance policy.",
+        {"project": {"type": "string"}, "policy_id": {"type": "integer"}, "reason": {"type": "string"}},
+        ["policy_id", "reason"],
+    ),
+    tool_schema(
+        "brain_preflight",
+        "Return allow, warn, or block before an action; overrides create receipts.",
+        {
+            "project": {"type": "string"},
+            "action": {"type": "string"},
+            "path": {"type": "string"},
+        },
+        ["action"],
+    ),
+    tool_schema(
+        "brain_governance_receipts",
+        "List immutable governance override receipts.",
+        {"project": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 500}},
+    ),
+    tool_schema(
         "brain_doctor",
         "Return Rta-Smriti brain health and count information.",
         {},
     ),
 ]
+
+OWNER_ONLY_GOVERNANCE_TOOLS = {"brain_policy_add", "brain_policy_retire"}
+AGENT_TOOLS = [tool for tool in TOOLS if tool["name"] not in OWNER_ONLY_GOVERNANCE_TOOLS]
 
 MAX_MCP_FRAME_BYTES = 1_048_576
 
@@ -191,6 +240,12 @@ class RtaBrainMcpServer:
         self, conn, name: str, args: dict[str, Any]
     ) -> dict[str, Any]:
         project = args.get("project") or self.default_project
+        if name in OWNER_ONLY_GOVERNANCE_TOOLS:
+            raise ValueError("governance policy mutation requires an owner-controlled CLI or dashboard session")
+        if name == "brain_preflight" and args.get("override_reason"):
+            raise ValueError("governance override requires an owner-controlled CLI or dashboard session")
+        if name == "brain_preflight" and args.get("completed_checks"):
+            raise ValueError("governance check attestation requires an owner-controlled CLI or dashboard session")
         if name == "brain_search":
             payload = search(conn, str(args["query"]), project=project, limit=int(args.get("limit", 8)))
             return text_result(json_text(payload), payload)
@@ -250,6 +305,45 @@ class RtaBrainMcpServer:
         if name == "brain_reflect":
             payload = reflect(conn, project=project)
             return text_result(json_text(payload), payload)
+        if name == "brain_policy_add":
+            payload = create_policy(
+                conn,
+                project=project,
+                kind=str(args["kind"]),
+                statement=str(args["statement"]),
+                effect=str(args.get("effect", "warn")),
+                action_contains=str(args.get("action_contains", "")),
+                path_glob=str(args.get("path_glob", "")),
+                required_check=str(args.get("required_check", "")),
+                pramana=str(args.get("pramana", "smriti")),
+                confidence=float(args.get("confidence", 0.75)),
+                provenance=args.get("provenance"),
+                overrideable=bool(args.get("overrideable", True)),
+                expires_at=args.get("expires_at"),
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_policy_list":
+            payload = list_policies(conn, project=project, include_retired=bool(args.get("include_retired", False)))
+            return text_result(json_text(payload), payload)
+        if name == "brain_policy_retire":
+            payload = retire_policy(
+                conn, project=project, policy_id=int(args["policy_id"]), reason=str(args["reason"]),
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_preflight":
+            payload = preflight(
+                conn,
+                project=project,
+                action=str(args["action"]),
+                path=args.get("path"),
+                completed_checks=[],
+                override_reason=None,
+                actor="agent",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_governance_receipts":
+            payload = list_receipts(conn, project=project, limit=int(args.get("limit", 100)))
+            return text_result(json_text(payload), payload)
         if name == "brain_doctor":
             payload = doctor(conn)
             return text_result(json_text(payload), payload)
@@ -277,7 +371,7 @@ class RtaBrainMcpServer:
                     },
                 }
             if method == "tools/list":
-                return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": TOOLS}}
+                return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": AGENT_TOOLS}}
             if method == "tools/call":
                 params = request.get("params") or {}
                 if not isinstance(params, dict):

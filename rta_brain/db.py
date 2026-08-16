@@ -116,6 +116,40 @@ def init_schema(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS governance_policies (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL CHECK(kind IN ('constraint', 'failed_approach', 'fragile_path', 'required_check', 'prohibited_repetition')),
+            statement TEXT NOT NULL,
+            effect TEXT NOT NULL CHECK(effect IN ('warn', 'block')),
+            action_contains TEXT NOT NULL DEFAULT '',
+            path_glob TEXT NOT NULL DEFAULT '',
+            required_check TEXT NOT NULL DEFAULT '',
+            pramana TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            provenance_json TEXT NOT NULL DEFAULT '{}',
+            overrideable INTEGER NOT NULL DEFAULT 1 CHECK(overrideable IN (0, 1)),
+            expires_at TEXT,
+            status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'retired')),
+            retired_reason TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            retired_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS governance_receipts (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            action TEXT NOT NULL,
+            path TEXT,
+            actor TEXT NOT NULL,
+            initial_decision TEXT NOT NULL,
+            final_decision TEXT NOT NULL,
+            override_reason TEXT NOT NULL,
+            matched_policy_ids_json TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS entities (
             id INTEGER PRIMARY KEY,
             project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -218,6 +252,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_sources_project_kind_title ON sources(project_id, kind, title);
         CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_project_provider ON chunk_embeddings(project_id, provider, model);
         CREATE INDEX IF NOT EXISTS idx_checkpoints_project_updated ON checkpoints(project_id, updated_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_governance_policies_project_status ON governance_policies(project_id, status, id);
+        CREATE INDEX IF NOT EXISTS idx_governance_receipts_project_created ON governance_receipts(project_id, created_at DESC, id DESC);
         """
     )
     project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
@@ -430,7 +466,7 @@ def add_edge(
     return conn.total_changes > before
 
 
-def _validated_provenance(provenance: dict | None) -> dict:
+def validate_provenance(provenance: dict | None) -> dict:
     provenance = provenance or {}
     allowed = {"source_path", "source_hash", "command", "timestamp", "verification_status", "metadata"}
     unknown = set(provenance) - allowed
@@ -526,7 +562,7 @@ def remember(
         (project_id, memory_type, pramana, text, float(confidence), int(priority), json.dumps(metadata or {}), timestamp, timestamp),
     )
     memory_id = int(cur.lastrowid)
-    normalized_provenance = _validated_provenance(provenance_input)
+    normalized_provenance = validate_provenance(provenance_input)
     conn.execute(
         """
         INSERT INTO memory_provenance(

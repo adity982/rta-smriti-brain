@@ -2632,7 +2632,7 @@ textarea:focus {
 
 .inspectorTabs {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
 }
 
 .inspectorTabs button {
@@ -2908,6 +2908,267 @@ textarea:focus {
 
 .checkLabel span {
   line-height: 1.45;
+}
+
+.governancePanel {
+  gap: 14px;
+}
+
+.gateForm,
+.overrideForm,
+.policyAuthoring form {
+  display: grid;
+  gap: 10px;
+}
+
+.governancePanel label span {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.governancePanel label span em {
+  color: #6f8498;
+  font-size: 10px;
+  font-style: normal;
+}
+
+.gateDecision {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 64px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.gateDecision span,
+.gateDecision strong {
+  display: block;
+}
+
+.gateDecision span {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.gateDecision strong {
+  margin-top: 2px;
+  text-transform: uppercase;
+}
+
+.gateDecision em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.gateDecision.allow,
+.gateDecision.allow_with_override {
+  color: #5eead4;
+  border-color: rgba(94, 234, 212, 0.3);
+  background: rgba(20, 184, 166, 0.08);
+}
+
+.gateDecision.warn {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.34);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.gateDecision.block {
+  color: #fb7185;
+  border-color: rgba(251, 113, 133, 0.38);
+  background: rgba(244, 63, 94, 0.08);
+}
+
+.gateMatches,
+.policyList,
+.governanceReceiptList {
+  display: grid;
+  gap: 8px;
+}
+
+.gateMatches article,
+.policyList article,
+.governanceReceiptList article {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.gateMatches article.warn {
+  border-left: 3px solid #fbbf24;
+}
+
+.gateMatches article.block {
+  border-left: 3px solid #fb7185;
+}
+
+.policyLine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.policyLine strong {
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.policyLine em {
+  padding: 2px 6px;
+  border-radius: 5px;
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.11);
+  font-size: 10px;
+  font-style: normal;
+  text-transform: uppercase;
+}
+
+.policyLine em.block {
+  color: #fb7185;
+  background: rgba(244, 63, 94, 0.11);
+}
+
+.gateMatches p,
+.policyList p,
+.governanceReceiptList p {
+  margin: 0;
+  color: #d6e3ef;
+  font-size: 12px;
+  line-height: 1.42;
+}
+
+.gateMatches span,
+.policyList span,
+.governanceReceiptList span {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.gateMatches code {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #8bb5d8;
+  font-size: 10px;
+}
+
+.gateSatisfied,
+.governanceReceipts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  color: #5eead4;
+  font-size: 11px;
+}
+
+.governanceSectionTitle {
+  margin: 2px 0 -5px;
+}
+
+.policyRetire,
+.retireForm button {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.policyRetire {
+  justify-self: start;
+}
+
+.retireForm {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 6px;
+}
+
+.retireForm input {
+  min-width: 0;
+}
+
+.policyAuthoring {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.policyAuthoring summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #cfe0ee;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  list-style: none;
+}
+
+.policyAuthoring summary::-webkit-details-marker {
+  display: none;
+}
+
+.policyAuthoring[open] summary {
+  margin-bottom: 12px;
+}
+
+.policyFieldPair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.trustNote {
+  margin: 0;
+  color: #91a4b7;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.governanceReceipts {
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.governanceReceipts strong {
+  color: #d9e9f5;
+}
+
+.governanceReceiptList {
+  margin-top: -6px;
+}
+
+.governanceReceiptList small {
+  color: #b9cad9;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+@media (max-width: 520px) {
+  .policyFieldPair,
+  .retireForm {
+    grid-template-columns: 1fr;
+  }
 }
 
 @keyframes pulse {

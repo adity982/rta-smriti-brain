@@ -34,6 +34,7 @@ import {
   Route,
   Rocket,
   Search,
+  ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -403,6 +404,7 @@ function App() {
   const [freshness, setFreshness] = useState(null);
   const projectRequestRef = useRef(0);
   const fileRequestRef = useRef(0);
+  const governanceRequestRef = useRef(0);
   const [publish, setPublish] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [message, setMessage] = useState("");
@@ -443,6 +445,9 @@ function App() {
   const [isSavingCheckpoint, setIsSavingCheckpoint] = useState(false);
   const [isRefreshingPublish, setIsRefreshingPublish] = useState(false);
   const [referenceHistory, setReferenceHistory] = useState([]);
+  const [governance, setGovernance] = useState({ policies: [], receipts: [] });
+  const [preflightDecision, setPreflightDecision] = useState(null);
+  const [isGovernanceBusy, setIsGovernanceBusy] = useState(false);
 
   const selectedParams = useMemo(() => {
     if (!selectedProject) return null;
@@ -499,18 +504,43 @@ function App() {
     }
   }
 
+  async function loadGovernance(project = selectedProject, { silent = false } = {}) {
+    if (!project) return null;
+    const requestId = governanceRequestRef.current + 1;
+    governanceRequestRef.current = requestId;
+    if (!silent) setIsGovernanceBusy(true);
+    try {
+      const payload = await api(`/api/governance?${qs({
+        db_path: project.db_path,
+        project: project.project,
+        limit: 50,
+      })}`);
+      if (requestId !== governanceRequestRef.current) return null;
+      setGovernance({ policies: payload.policies || [], receipts: payload.receipts || [] });
+      return payload;
+    } catch (error) {
+      if (requestId === governanceRequestRef.current) setMessage(`Action Gate could not load: ${error.message}`);
+      return null;
+    } finally {
+      if (!silent && requestId === governanceRequestRef.current) setIsGovernanceBusy(false);
+    }
+  }
+
   async function loadProjectDetails(project = selectedProject) {
     if (!project) return;
     const requestId = projectRequestRef.current + 1;
     projectRequestRef.current = requestId;
+    const governanceRequestId = governanceRequestRef.current + 1;
+    governanceRequestRef.current = governanceRequestId;
     const params = { db_path: project.db_path, project: project.project };
-    const [memoryPayload, graphPayload, stalePayload, settingsPayload, checkpointPayload, watcherPayload] = await Promise.all([
+    const [memoryPayload, graphPayload, stalePayload, settingsPayload, checkpointPayload, watcherPayload, governancePayload] = await Promise.all([
       api(`/api/memories?${qs({ ...params, limit: 40 })}`),
       api(`/api/graph?${qs({ ...params, limit: 120 })}`),
       api(`/api/stale-check?${qs(params)}`),
       api(`/api/settings?${qs(params)}`),
       api(`/api/checkpoint?${qs(params)}`),
       api(`/api/watcher?${qs(params)}`),
+      api(`/api/governance?${qs({ ...params, limit: 50 })}`),
     ]);
     if (requestId !== projectRequestRef.current) return;
     setMemories(memoryPayload.memories || []);
@@ -520,6 +550,9 @@ function App() {
     setParserCapabilities(settingsPayload.parser_capabilities || {});
     setCheckpoint(checkpointPayload.checkpoint || null);
     setWatcher(watcherPayload);
+    if (governanceRequestId === governanceRequestRef.current) {
+      setGovernance({ policies: governancePayload.policies || [], receipts: governancePayload.receipts || [] });
+    }
     setSelectedNode(null);
     setReferenceHistory([]);
   }
@@ -572,6 +605,8 @@ function App() {
     if (selectedProject) {
       setFileTree({ entries: [], prefix: "", query: "", total_files: 0 });
       setFilePreview(null);
+      setGovernance({ policies: [], receipts: [] });
+      setPreflightDecision(null);
       setMessage(`Loading ${selectedProject.project}...`);
       loadProjectDetails(selectedProject)
         .then(async () => {
@@ -797,6 +832,67 @@ function App() {
     }
   }
 
+  async function evaluatePreflight(values) {
+    if (!selectedParams || isGovernanceBusy) return null;
+    setIsGovernanceBusy(true);
+    try {
+      const payload = await api("/api/preflight", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, ...values, actor: "dashboard-operator" }),
+      });
+      setPreflightDecision(payload);
+      await loadGovernance(selectedProject, { silent: true });
+      const matched = payload.matches?.length || 0;
+      setMessage(`Action Gate: ${payload.decision.replaceAll("_", " ")} (${matched} matching ${matched === 1 ? "policy" : "policies"}).`);
+      return payload;
+    } catch (error) {
+      setMessage(`Action Gate failed: ${error.message}`);
+      return null;
+    } finally {
+      setIsGovernanceBusy(false);
+    }
+  }
+
+  async function createGovernancePolicy(values) {
+    if (!selectedParams || isGovernanceBusy) return null;
+    setIsGovernanceBusy(true);
+    try {
+      const payload = await api("/api/governance-policy", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, action: "create", ...values }),
+      });
+      await loadGovernance(selectedProject, { silent: true });
+      setPreflightDecision(null);
+      setMessage(`Governance policy ${payload.policy.id} added.`);
+      return payload;
+    } catch (error) {
+      setMessage(`Policy could not be added: ${error.message}`);
+      return null;
+    } finally {
+      setIsGovernanceBusy(false);
+    }
+  }
+
+  async function retireGovernancePolicy(policyId, reason) {
+    if (!selectedParams || isGovernanceBusy) return null;
+    setIsGovernanceBusy(true);
+    try {
+      const payload = await api("/api/governance-policy", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, action: "retire", policy_id: policyId, reason }),
+      });
+      await loadGovernance(selectedProject, { silent: true });
+      setPreflightDecision(null);
+      setMessage(`Governance policy ${policyId} retired.`);
+      return payload;
+    } catch (error) {
+      setMessage(`Policy could not be retired: ${error.message}`);
+      return null;
+    } finally {
+      setIsGovernanceBusy(false);
+    }
+  }
+
   function addFileToTask(path) {
     if (task.includes(path)) {
       setMessage(`${path} is already in the task objective.`);
@@ -828,6 +924,11 @@ function App() {
   function showPublishReadiness() {
     showDrawer("publish");
     refreshPublishReadiness();
+  }
+
+  function showGovernance() {
+    showDrawer("governance");
+    loadGovernance();
   }
 
   function selectPrimaryNode(node, drawer = null) {
@@ -1002,6 +1103,7 @@ function App() {
             <div className="navGroup">
               <span className="navGroupLabel">Tools</span>
               <button className={searchOpen ? "active" : ""} onClick={() => { setViewMode("graph"); setNavContext("search"); setSearchOpen(true); }}><Search size={17} /><span>Search</span></button>
+              <button className={inspectorOpen && activeDrawer === "governance" ? "active" : ""} onClick={showGovernance}><ShieldAlert size={17} /><span>Action Gate</span><em>{governance.policies.length}</em></button>
               <button className={inspectorOpen && activeDrawer === "memory" ? "active" : ""} onClick={() => showDrawer("memory")}><Database size={17} /><span>Memory Ledger</span></button>
               <button className={inspectorOpen && activeDrawer === "checkpoint" ? "active" : ""} onClick={() => showDrawer("checkpoint")}><Route size={17} /><span>Continue Work</span></button>
               <button className={inspectorOpen && activeDrawer === "receipts" ? "active" : ""} onClick={() => showDrawer("receipts")}><Sparkles size={17} /><span>Context Packs</span><em>{receipts.length}</em></button>
@@ -1144,6 +1246,9 @@ function App() {
             <button className={activeDrawer === "references" ? "active" : ""} onClick={() => showDrawer("references")}>
               <GitBranch size={15} /> Refs
             </button>
+            <button className={activeDrawer === "governance" ? "active" : ""} onClick={showGovernance}>
+              <ShieldAlert size={15} /> Gate
+            </button>
             <button className={activeDrawer === "memory" ? "active" : ""} onClick={() => showDrawer("memory")}>
               <MemoryStick size={15} /> Memory
             </button>
@@ -1179,6 +1284,18 @@ function App() {
               onSelect={openReference}
               onBack={goBackReference}
               onStart={goToReferenceStart}
+            />
+          )}
+          {activeDrawer === "governance" && (
+            <GovernancePanel
+              project={selectedProject}
+              governance={governance}
+              decision={preflightDecision}
+              onEvaluate={evaluatePreflight}
+              onCreate={createGovernancePolicy}
+              onRetire={retireGovernancePolicy}
+              onRefresh={() => loadGovernance()}
+              isBusy={isGovernanceBusy}
             />
           )}
           {activeDrawer === "memory" && <MemoryLedger memories={memories} onReflect={reflect} />}
@@ -2248,6 +2365,193 @@ function ReceiptsPanel({ receipts, onCopy, onClear }) {
           </article>
         ))}
         {!receipts.length && <p className="emptyText">Generate a context pack to create the first receipt.</p>}
+      </div>
+    </div>
+  );
+}
+
+function GovernancePanel({ project, governance, decision, onEvaluate, onCreate, onRetire, onRefresh, isBusy }) {
+  const [action, setAction] = useState("");
+  const [path, setPath] = useState("");
+  const [overrideReason, setOverrideReason] = useState("");
+  const [retireTarget, setRetireTarget] = useState(null);
+  const [retireReason, setRetireReason] = useState("");
+  const [policy, setPolicy] = useState({
+    kind: "constraint",
+    effect: "warn",
+    statement: "",
+    action_contains: "",
+    path_glob: "",
+    required_check: "",
+    pramana: "smriti",
+    confidence: "0.75",
+    verification_status: "unverified",
+    source_path: "",
+    overrideable: true,
+  });
+
+  async function submitEvaluation(event, reason = "") {
+    event?.preventDefault();
+    if (!action.trim()) return;
+    const result = await onEvaluate({
+      action: action.trim(),
+      path: path.trim() || null,
+      completed_checks: [],
+      override_reason: reason || null,
+    });
+    if (result?.override_receipt) setOverrideReason("");
+  }
+
+  async function submitPolicy(event) {
+    event.preventDefault();
+    if (!policy.statement.trim()) return;
+    const result = await onCreate({
+      kind: policy.kind,
+      effect: policy.effect,
+      statement: policy.statement.trim(),
+      action_contains: policy.action_contains.trim(),
+      path_glob: policy.path_glob.trim(),
+      required_check: policy.required_check.trim(),
+      pramana: policy.pramana,
+      confidence: Number(policy.confidence),
+      overrideable: policy.overrideable,
+      provenance: {
+        verification_status: policy.verification_status,
+        source_path: policy.source_path.trim() || null,
+      },
+    });
+    if (result) setPolicy((current) => ({ ...current, statement: "", action_contains: "", path_glob: "", required_check: "", source_path: "" }));
+  }
+
+  async function confirmRetire() {
+    if (!retireTarget || !retireReason.trim()) return;
+    const result = await onRetire(retireTarget, retireReason.trim());
+    if (result) {
+      setRetireTarget(null);
+      setRetireReason("");
+    }
+  }
+
+  if (!project) {
+    return <div className="drawerContent"><h2>Action Gate</h2><p className="emptyState">Select a project brain first.</p></div>;
+  }
+
+  const decisionLabel = decision?.decision?.replaceAll("_", " ") || "not checked";
+  const canOverride = decision && ["block", "warn"].includes(decision.decision)
+    && decision.matches?.some((match) => match.overrideable);
+
+  return (
+    <div className="drawerContent governancePanel">
+      <div className="sectionHeader">
+        <h2>Action Gate</h2>
+        <button className="freshnessAction" onClick={onRefresh} disabled={isBusy} aria-label="Refresh governance policies">
+          <RefreshCw className={isBusy ? "spin" : ""} size={13} /> Refresh
+        </button>
+      </div>
+
+      <form className="gateForm" onSubmit={submitEvaluation}>
+        <label>
+          <span>Intended action</span>
+          <textarea value={action} onChange={(event) => setAction(event.target.value)} placeholder="Publish v0.4 release" rows={3} required />
+        </label>
+        <label>
+          <span>Repository path <em>optional</em></span>
+          <input value={path} onChange={(event) => setPath(event.target.value)} placeholder="src/release.py" />
+        </label>
+        <button className="primarySmall" type="submit" disabled={isBusy || !action.trim()}>
+          <ShieldCheck size={16} /> {isBusy ? "Evaluating..." : "Evaluate action"}
+        </button>
+      </form>
+
+      <section className={`gateDecision ${decision?.decision || "idle"}`} aria-live="polite">
+        <ShieldAlert size={22} />
+        <div><span>Decision</span><strong>{decisionLabel}</strong></div>
+        <em>{decision?.matches?.length || 0} matched</em>
+      </section>
+
+      {decision?.matches?.length > 0 && (
+        <div className="gateMatches">
+          {decision.matches.map((match) => (
+            <article key={match.policy_id} className={match.effective_effect}>
+              <div className="policyLine"><strong>{match.kind.replaceAll("_", " ")}</strong><em>{match.effective_effect}</em></div>
+              <p>{match.reason}</p>
+              <span>{match.pramana} / {Math.round(match.confidence * 100)}% / {match.provenance?.verification_status || "unverified"}</span>
+              {match.provenance?.source_path && <code>{match.provenance.source_path}</code>}
+            </article>
+          ))}
+        </div>
+      )}
+
+      {decision?.satisfied_policy_ids?.length > 0 && <p className="gateSatisfied"><CheckCircle2 size={14} /> {decision.satisfied_policy_ids.length} required check satisfied</p>}
+
+      {canOverride && (
+        <div className="overrideForm">
+          <label>
+            <span>Override reason</span>
+            <textarea value={overrideReason} onChange={(event) => setOverrideReason(event.target.value)} rows={2} placeholder="Owner approval and evidence reference" />
+          </label>
+          <button className="amberButton" type="button" disabled={isBusy || !overrideReason.trim()} onClick={(event) => submitEvaluation(event, overrideReason.trim())}>
+            Record override receipt
+          </button>
+        </div>
+      )}
+
+      <div className="sectionHeader governanceSectionTitle">
+        <span>Active policies</span><em>{governance.policies.length}</em>
+      </div>
+      <div className="policyList">
+        {governance.policies.map((item) => (
+          <article key={item.id}>
+            <div className="policyLine"><strong>{item.kind.replaceAll("_", " ")}</strong><em className={item.effect}>{item.effect}</em></div>
+            <p>{item.statement}</p>
+            <span>{item.pramana} / {Math.round(item.confidence * 100)}% / {item.provenance?.verification_status || "unverified"}</span>
+            {retireTarget === item.id ? (
+              <div className="retireForm">
+                <input value={retireReason} onChange={(event) => setRetireReason(event.target.value)} placeholder="Reason for retirement" autoFocus />
+                <button type="button" onClick={confirmRetire} disabled={isBusy || !retireReason.trim()}>Confirm</button>
+                <button type="button" onClick={() => { setRetireTarget(null); setRetireReason(""); }}>Cancel</button>
+              </div>
+            ) : <button className="policyRetire" type="button" onClick={() => setRetireTarget(item.id)}>Retire</button>}
+          </article>
+        ))}
+        {!governance.policies.length && <p className="emptyState">No active policies for {project.project}.</p>}
+      </div>
+
+      <details className="policyAuthoring">
+        <summary><Plus size={15} /> Add governance policy</summary>
+        <form onSubmit={submitPolicy}>
+          <label><span>Statement</span><textarea value={policy.statement} onChange={(event) => setPolicy({ ...policy, statement: event.target.value })} rows={3} required /></label>
+          <div className="policyFieldPair">
+            <label><span>Kind</span><select value={policy.kind} onChange={(event) => setPolicy({ ...policy, kind: event.target.value })}>
+              <option value="constraint">Constraint</option><option value="failed_approach">Failed approach</option><option value="fragile_path">Fragile path</option><option value="required_check">Required check</option><option value="prohibited_repetition">Prohibited repetition</option>
+            </select></label>
+            <label><span>Effect</span><select value={policy.effect} onChange={(event) => setPolicy({ ...policy, effect: event.target.value })}><option value="warn">Warn</option><option value="block">Block</option></select></label>
+          </div>
+          <label><span>Action contains</span><input value={policy.action_contains} onChange={(event) => setPolicy({ ...policy, action_contains: event.target.value })} placeholder="publish" /></label>
+          <label><span>Path glob</span><input value={policy.path_glob} onChange={(event) => setPolicy({ ...policy, path_glob: event.target.value })} placeholder="migrations/*.sql" /></label>
+          <label><span>Required check</span><input value={policy.required_check} onChange={(event) => setPolicy({ ...policy, required_check: event.target.value })} placeholder="privacy-scan" /></label>
+          <div className="policyFieldPair">
+            <label><span>Pramana</span><select value={policy.pramana} onChange={(event) => setPolicy({ ...policy, pramana: event.target.value })}><option value="smriti">Smriti</option><option value="pratyaksha">Pratyaksha</option><option value="sabda">Sabda</option><option value="anumana">Anumana</option><option value="kalpana">Kalpana</option></select></label>
+            <label><span>Confidence</span><input type="number" min="0" max="1" step="0.05" value={policy.confidence} onChange={(event) => setPolicy({ ...policy, confidence: event.target.value })} /></label>
+          </div>
+          <label><span>Verification</span><select value={policy.verification_status} onChange={(event) => setPolicy({ ...policy, verification_status: event.target.value })}><option value="unverified">Unverified</option><option value="verified">Verified</option><option value="failed">Failed</option><option value="stale">Stale</option></select></label>
+          <label><span>Evidence source</span><input value={policy.source_path} onChange={(event) => setPolicy({ ...policy, source_path: event.target.value })} placeholder="SECURITY.md" /></label>
+          <label className="checkLabel"><input type="checkbox" checked={policy.overrideable} onChange={(event) => setPolicy({ ...policy, overrideable: event.target.checked })} /><span>Operator may override with a recorded reason</span></label>
+          <p className="trustNote">Blocking requires verified Pratyaksha or Sabda evidence at 80% confidence or higher.</p>
+          <button className="primarySmall" type="submit" disabled={isBusy || !policy.statement.trim()}><Plus size={16} /> Add policy</button>
+        </form>
+      </details>
+
+      <div className="governanceReceipts"><span>Override receipts</span><strong>{governance.receipts.length}</strong></div>
+      <div className="governanceReceiptList">
+        {governance.receipts.slice(0, 5).map((receipt) => (
+          <article key={receipt.id}>
+            <div className="policyLine"><strong>{receipt.final_decision.replaceAll("_", " ")}</strong><em>#{receipt.id}</em></div>
+            <p>{receipt.action}</p>
+            <span>{receipt.actor} / {new Date(receipt.created_at).toLocaleString()}</span>
+            <small>{receipt.override_reason}</small>
+          </article>
+        ))}
       </div>
     </div>
   );
