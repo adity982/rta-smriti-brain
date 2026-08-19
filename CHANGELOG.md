@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Added append-only Codex session events, resumable transcript cursors, structured work-state reconciliation, and operational readiness.
+- Added a managed continuity daemon with canonical-project session binding, partial-write recovery, payload redaction/bounds, heartbeat validation, and conservative automatic checkpoints.
+- Added dashboard and MCP lifecycle controls plus one fail-closed multi-project MCP gateway.
+
 All notable changes are documented here. The project follows semantic versioning while APIs remain alpha.
 
 ## [0.4.0-alpha] - Unreleased

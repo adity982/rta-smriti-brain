@@ -2,6 +2,10 @@
 
 Rta-Smriti Brain is designed to index private repositories and private agent threads. That makes publishing hygiene important.
 
+Local storage is scoped to the operator's OS account, not a security boundary between mutually untrusted processes using that same account. POSIX installs enforce owner-only modes for brain and daemon artifacts; Windows installs inherit directory ACLs. Public examples and release assets must use synthetic data regardless of those local controls.
+
+Continuity capture stays local but may contain sensitive conversation and tool output. The adapter redacts common credential fields and token shapes and truncates oversized payloads, but this is defense in depth, not a guarantee that arbitrary secrets cannot appear. Never publish brain databases, daemon logs, captured events, checkpoints, or generated context packs from real projects.
+
 ## Never Commit
 
 - `.rta-smriti/`

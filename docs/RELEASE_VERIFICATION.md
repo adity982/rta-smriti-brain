@@ -12,6 +12,7 @@ CI, and post-publication installation proof.
 - Formal Git tag: `v0.4.0-alpha` (annotated and verified against the frozen commit)
 - Formal GitHub Release: [`Rta-Smriti Brain v0.4.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.4.0-alpha)
 - Release state: published prerelease
+- Current `main` status: post-release continuity hardening candidate, pending hosted CI and optional release-asset refresh
 
 The release contains the universal wheel, Windows x64, Linux x64, and macOS
 ARM64 binaries, a combined SHA-256 manifest, and the synthetic public-benchmark
@@ -64,7 +65,8 @@ workflow run is [CI run 32](https://github.com/sulabhdubey/rta-smriti-brain/acti
 | Operator console production build | Passed |
 | Launch-site production build | Passed |
 | Root npm dependency audit | 0 vulnerabilities |
-| Python project dependency audit | No known vulnerabilities reported by `pip-audit` |
+| Python runtime dependency surface | Core wheel has no required third-party dependencies; isolated install and both entry points passed |
+| Python project dependency audit | `pip-audit .` reported no known vulnerabilities |
 | Editable Python package dry-run | Resolved `rta-smriti-brain-0.4.0a1` |
 | Installed package lifecycle | Clean wheel install and 20-check first-run smoke passed; forced upgrade/reinstall and uninstall were then verified from an unrelated working directory |
 | Standalone Windows binary | Built from the versioned spec; CLI, SQLite/FTS, MCP dispatch, packaged dashboard assets, public benchmark, managed background sync, and managed console lifecycle passed |
@@ -110,6 +112,24 @@ The final wheel and three native binaries were produced and smoke-tested by the
 hosted matrix from the approved commit. Their workflow ZIP digests and enclosed
 manifests were verified before upload. The six public release assets were then
 downloaded again, and every file matched the published `SHA256SUMS.txt`.
+
+## Post-Release Main Candidate
+
+The continuity hardening batch after the published tag adds managed transcript
+capture, append-only session events, structured work-state reconciliation,
+operational readiness, and a multi-project MCP gateway. Local Windows
+verification for that batch covered unit tests, bytecode compilation, dashboard
+and launch builds, dependency audits, wheel and binary smoke tests, privacy
+scan, presentation-mode media sanitization, and six-project daemon status.
+
+Gitleaks is an optional release-environment check and is not claimed in this
+snapshot. The bundled privacy scanner remains a required gate and passed; this
+page does not imply that the two tools are equivalent.
+
+Codex host configuration was generated, added to the local Codex configuration,
+parsed successfully, and exercised against the multi-project MCP gateway over
+stdio. Native tool discovery in a newly started Codex task remains a publication
+gate because an already-running task cannot dynamically acquire MCP tools.
 
 ## Privacy Boundary
 

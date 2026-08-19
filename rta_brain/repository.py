@@ -378,7 +378,9 @@ def repository_state(root: str | Path | None, include_worktree: bool = True) -> 
     branch, full_head = _native_head(git_dir, common_dir)
     dirty_files = None
     if include_worktree:
-        status = _stdout(git_root, "status", "--porcelain=v1", "--untracked-files=all")
+        # Normal mode reports untracked directories as one dirty entry and avoids
+        # recursively walking generated trees during every dashboard refresh.
+        status = _stdout(git_root, "status", "--porcelain=v1", "--untracked-files=normal")
         dirty_files = len([line for line in status.splitlines() if line.strip()])
     return {
         "is_git_repo": True,

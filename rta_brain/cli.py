@@ -16,6 +16,13 @@ from .console_daemon import (
     start_console,
     stop_console,
 )
+from .continuity import (
+    append_event, ingest_codex_session, list_events, operational_readiness,
+    reconcile_work_items, upsert_work_item,
+)
+from .continuity_daemon import (
+    continuity_status, run_continuity_worker, start_continuity, stop_continuity,
+)
 from .db import (
     connect, doctor, get_project_settings, graph, graph_query, ingest_repo, ingest_thread, init_project, reflect,
     remember, save_checkpoint, search, stale_check, update_project_settings,
@@ -26,7 +33,7 @@ from .hooks import install_git_hooks, uninstall_git_hooks
 from .lifecycle import apply_memory_feedback, run_conservative_decay
 from .onboarding import SUPPORTED_TARGET_AGENTS, onboard_project
 from .portability import export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_verify
-from .project import bootstrap_project, install_local, mcp_config_payload, projects_list, self_check
+from .project import bootstrap_project, install_local, mcp_config_payload, mcp_gateway_config_payload, projects_list, self_check
 from .watch import watch_repository
 from .watch_daemon import run_watcher_worker, start_watcher, stop_watcher, watcher_status
 from .workspaces import add_project_to_workspace, create_workspace, get_workspace, list_workspaces, search_workspace
@@ -85,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("path")
     ingest.add_argument("--project", default="default")
     ingest.add_argument("--force", action="store_true", help="Re-read and re-index every eligible file even when metadata is unchanged")
+    ingest.add_argument("--repair-deep-stale", action="store_true", help="Hash every eligible file and re-index only content-drifted sources")
     ingest.add_argument("--rebind-root", action="store_true", help="Explicitly replace the brain's canonical project root")
 
     watch = sub.add_parser("watch-repo", help="Continuously refresh a repository using the incremental index")
@@ -107,6 +115,29 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("--stop-file", required=True)
     worker.add_argument("--lock-file", required=True)
     worker.add_argument("--interval", type=float, required=True)
+
+    continuity = sub.add_parser("continuity", help="Manage automatic Codex transcript capture and checkpoints")
+    add_common_options(continuity)
+    continuity.add_argument("action", choices=("start", "status", "stop"))
+    continuity.add_argument("--project", default="default")
+    continuity.add_argument("--root", help="Canonical project root; defaults to the bound root")
+    continuity.add_argument("--sessions-root", default=str(Path.home() / ".codex" / "sessions"))
+    continuity.add_argument("--interval", type=float, default=5.0)
+    continuity.add_argument("--inactivity", type=float, default=900.0)
+    continuity.add_argument("--lookback-days", type=float, default=30.0, help="Initial session lookback; 0 imports all history")
+    continuity.add_argument("--backlog-tail-mb", type=float, default=2.0, help="Recent tail retained when a session backlog is oversized")
+
+    continuity_worker = sub.add_parser("_continuity-worker", help=argparse.SUPPRESS)
+    continuity_worker.add_argument("--root", required=True)
+    continuity_worker.add_argument("--project", required=True)
+    continuity_worker.add_argument("--sessions-root", required=True)
+    continuity_worker.add_argument("--state-file", required=True)
+    continuity_worker.add_argument("--stop-file", required=True)
+    continuity_worker.add_argument("--lock-file", required=True)
+    continuity_worker.add_argument("--interval", type=float, required=True)
+    continuity_worker.add_argument("--inactivity", type=float, required=True)
+    continuity_worker.add_argument("--lookback-days", type=float, required=True)
+    continuity_worker.add_argument("--backlog-tail-bytes", type=int, required=True)
 
     settings = sub.add_parser("settings", help="Read or update a project's indexing and retrieval policy")
     add_common_options(settings)
@@ -216,6 +247,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(stale)
     stale.add_argument("--project", default="default")
     stale.add_argument("--deep", action="store_true", help="Hash file contents instead of using the fast stat manifest")
+    stale.add_argument("--rehash", action="store_true", help="Bypass the stat-keyed hash cache; implies --deep")
     stale.add_argument("--details", action="store_true", help="Include fresh file rows as well as anomalies")
     stale.add_argument("--detail-limit", type=int, default=50, help="Maximum freshness detail rows to emit (0-500)")
 
@@ -232,6 +264,49 @@ def build_parser() -> argparse.ArgumentParser:
     continuation = sub.add_parser("continue-prompt", help="Build a compact prompt for a new agent task")
     add_common_options(continuation)
     continuation.add_argument("--project", default="default")
+
+    session_event = sub.add_parser("session-event", help="Append an immutable operational event")
+    add_common_options(session_event)
+    session_event.add_argument("--project", default="default")
+    session_event.add_argument("--session-id", required=True)
+    session_event.add_argument("--cursor", required=True)
+    session_event.add_argument("--type", required=True)
+    session_event.add_argument("--payload-json", default="{}")
+    session_event.add_argument("--source", default="operator")
+    session_event.add_argument("--verification-status", choices=("unverified", "verified", "failed", "stale"), default="unverified")
+
+    session_events = sub.add_parser("session-events", help="Read append-only operational events")
+    add_common_options(session_events)
+    session_events.add_argument("--project", default="default")
+    session_events.add_argument("--session-id")
+    session_events.add_argument("--limit", type=int, default=100)
+
+    codex_session = sub.add_parser("ingest-codex-session", help="Incrementally capture a local Codex JSONL session")
+    add_common_options(codex_session)
+    codex_session.add_argument("path")
+    codex_session.add_argument("--project", default="default")
+    codex_session.add_argument("--session-id")
+    codex_session.add_argument("--max-events", type=int, default=5000)
+
+    work_item = sub.add_parser("work-item", help="Create or update a structured operational work item")
+    add_common_options(work_item)
+    work_item.add_argument("external_id")
+    work_item.add_argument("--project", default="default")
+    work_item.add_argument("--item-type", default="asset")
+    work_item.add_argument("--local-path")
+    work_item.add_argument("--qa-state", default="unknown")
+    work_item.add_argument("--decision", default="pending")
+    work_item.add_argument("--attempt-count", type=int, default=0)
+    work_item.add_argument("--fallback", default="")
+    work_item.add_argument("--next-action", default="")
+
+    reconcile = sub.add_parser("reconcile", help="Reconcile structured work state with the filesystem")
+    add_common_options(reconcile)
+    reconcile.add_argument("--project", default="default")
+
+    readiness = sub.add_parser("operational-readiness", help="Separate database health from task continuation readiness")
+    add_common_options(readiness)
+    readiness.add_argument("--project", default="default")
 
     reflect_cmd = sub.add_parser("reflect", help="Consolidate duplicate memories and flag contradictions")
     add_common_options(reflect_cmd)
@@ -277,6 +352,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(mcp_config)
     mcp_config.add_argument("--project", default="default")
     mcp_config.add_argument("--name", default="rta-smriti")
+    mcp_config.add_argument("--brain-dir", help="Generate one multi-project MCP gateway for this brain directory")
 
     bootstrap = sub.add_parser("bootstrap-project", help="Create a per-project brain, index the repo, and optionally write project agent instructions")
     add_common_options(bootstrap)
@@ -313,6 +389,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor_cmd = sub.add_parser("doctor", help="Verify local brain health")
     add_common_options(doctor_cmd)
+    doctor_cmd.add_argument("--project", help="Also evaluate task continuation readiness for one project")
 
     publish = sub.add_parser("publish-readiness", help="Check whether this package is ready to publish on GitHub")
     add_common_options(publish)
@@ -455,6 +532,12 @@ def main(argv=None) -> int:
             Path(args.lock_file),
             args.interval,
         )
+    if args.command == "_continuity-worker":
+        return run_continuity_worker(
+            Path(args.db), Path(args.root), args.project, Path(args.sessions_root),
+            Path(args.state_file), Path(args.stop_file), Path(args.lock_file),
+            args.interval, args.inactivity, args.lookback_days, args.backlog_tail_bytes,
+        )
     if args.command == "watcher":
         try:
             db_path = Path(args.db).expanduser().resolve()
@@ -476,6 +559,39 @@ def main(argv=None) -> int:
                         raise ValueError("project has no bound repository path; provide a path")
                     root = Path(row["root_path"])
                 payload = start_watcher(db_path, root, args.project, args.interval)
+            emit(payload, args.json)
+            return 0
+        except Exception as exc:
+            error = {"status": "error", "error": {"type": exc.__class__.__name__, "message": str(exc)}}
+            if getattr(args, "json", False):
+                print(json.dumps(error, indent=2, sort_keys=True), file=sys.stderr)
+            else:
+                print(f"error: {exc}", file=sys.stderr)
+            return 1
+    if args.command == "continuity":
+        try:
+            db_path = Path(args.db).expanduser().resolve()
+            if args.action == "status":
+                payload = continuity_status(db_path, args.project)
+            elif args.action == "stop":
+                payload = stop_continuity(db_path, args.project)
+            else:
+                root = Path(args.root).expanduser().resolve() if args.root else None
+                if root is None:
+                    conn = connect(db_path)
+                    try:
+                        row = conn.execute("SELECT root_path FROM projects WHERE name = ?", (args.project,)).fetchone()
+                    finally:
+                        conn.close()
+                    if not row or not row["root_path"]:
+                        raise ValueError("project has no bound repository path; provide --root")
+                    root = Path(row["root_path"])
+                payload = start_continuity(
+                    db_path, root, args.project, Path(args.sessions_root),
+                    interval_seconds=args.interval, inactivity_seconds=args.inactivity,
+                    lookback_days=args.lookback_days,
+                    backlog_tail_bytes=int(args.backlog_tail_mb * 1_000_000),
+                )
             emit(payload, args.json)
             return 0
         except Exception as exc:
@@ -512,7 +628,14 @@ def main(argv=None) -> int:
                     provenance=provenance,
                 )
             elif args.command == "ingest-repo":
-                payload = ingest_repo(conn, Path(args.path), project=args.project, force=args.force, allow_root_rebind=args.rebind_root)
+                payload = ingest_repo(
+                    conn,
+                    Path(args.path),
+                    project=args.project,
+                    force=args.force,
+                    repair_deep_stale=args.repair_deep_stale,
+                    allow_root_rebind=args.rebind_root,
+                )
             elif args.command == "watch-repo":
                 payload = watch_repository(conn, Path(args.path), project=args.project, interval_seconds=args.interval)
             elif args.command == "settings":
@@ -604,7 +727,8 @@ def main(argv=None) -> int:
                 payload = stale_check(
                     conn,
                     project=args.project,
-                    deep=args.deep,
+                    deep=bool(args.deep or args.rehash),
+                    refresh_hashes=args.rehash,
                     detail_limit=args.detail_limit,
                     include_fresh_details=args.details,
                 )
@@ -621,6 +745,31 @@ def main(argv=None) -> int:
                 )
             elif args.command == "continue-prompt":
                 payload = build_continuation_prompt(conn, project=args.project)
+            elif args.command == "session-event":
+                payload = append_event(
+                    conn, args.project, args.session_id, args.cursor, args.type,
+                    json.loads(args.payload_json), source=args.source,
+                    verification_status=args.verification_status,
+                )
+            elif args.command == "session-events":
+                payload = list_events(conn, args.project, session_id=args.session_id, limit=args.limit)
+            elif args.command == "ingest-codex-session":
+                payload = ingest_codex_session(
+                    conn, Path(args.path), args.project,
+                    session_id=args.session_id, max_events=args.max_events,
+                )
+            elif args.command == "work-item":
+                payload = upsert_work_item(
+                    conn, args.project, args.item_type, args.external_id,
+                    local_path=args.local_path, qa_state=args.qa_state, decision=args.decision,
+                    attempt_count=args.attempt_count, fallback=args.fallback, next_action=args.next_action,
+                )
+            elif args.command == "reconcile":
+                payload = reconcile_work_items(conn, args.project)
+            elif args.command == "operational-readiness":
+                payload = operational_readiness(
+                    conn, args.project, lifecycle=continuity_status(Path(args.db), args.project),
+                )
             elif args.command == "reflect":
                 payload = reflect(conn, project=args.project)
             elif args.command == "policy":
@@ -668,7 +817,10 @@ def main(argv=None) -> int:
             elif args.command == "governance-receipts":
                 payload = list_receipts(conn, project=args.project, limit=args.limit)
             elif args.command == "mcp-config":
-                payload = build_mcp_config(args.db, args.project, args.name)
+                payload = (
+                    mcp_gateway_config_payload(args.brain_dir, args.name, tool_root())
+                    if args.brain_dir else build_mcp_config(args.db, args.project, args.name)
+                )
             elif args.command == "bootstrap-project":
                 payload = bootstrap_project(
                     conn,
@@ -687,6 +839,10 @@ def main(argv=None) -> int:
                 payload = install_local(Path(args.target), tool_root())
             elif args.command == "doctor":
                 payload = doctor(conn)
+                if args.project:
+                    payload["operational"] = operational_readiness(
+                        conn, args.project, lifecycle=continuity_status(Path(args.db), args.project),
+                    )
             else:
                 parser.error(f"unknown command: {args.command}")
                 return 2

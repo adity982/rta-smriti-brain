@@ -97,6 +97,14 @@ MAX_FILE_BYTES = 512_000
 MAX_REPO_TOTAL_BYTES = 2_000_000_000
 MAX_REPO_TRAVERSED_ENTRIES = 250_000
 
+CANONICAL_CONTROL_FILE_MAX_BYTES = 4_000_000
+CANONICAL_CONTROL_PATHS = {
+    "rta_net_live_context.md",
+    "00_source_of_truth/rta-net_ai_final_architecture_document_v1.0.md",
+    "00_source_of_truth/rta-net_ai_mathematical_appendix_v1.0.md",
+    "00_source_of_truth/rta-net_ai_complete_file_system_structure_v1.0.md",
+}
+
 SYMBOL_PATTERNS = [
     re.compile(r"^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE),
     re.compile(r"^\s*def\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE),
@@ -141,6 +149,18 @@ def sha256_text(text: str) -> str:
 
 def is_text_file(path: Path) -> bool:
     return path.suffix.lower() in TEXT_SUFFIXES
+
+
+def effective_file_limit(root: Path, path: Path, default_limit: int) -> int:
+    """Allow a few canonical control files without widening the repo-wide cap."""
+
+    try:
+        relative = path.resolve().relative_to(root.resolve()).as_posix().lower()
+    except (OSError, ValueError):
+        return int(default_limit)
+    if relative in CANONICAL_CONTROL_PATHS:
+        return max(int(default_limit), CANONICAL_CONTROL_FILE_MAX_BYTES)
+    return int(default_limit)
 
 
 def walk_repo(root: Path, rejected: list[dict[str, str]] | None = None, max_file_bytes: int = MAX_FILE_BYTES):
@@ -192,7 +212,8 @@ def walk_repo(root: Path, rejected: list[dict[str, str]] | None = None, max_file
             if stat.st_nlink > 1:
                 reject(path, "hard-link-file")
                 continue
-            if stat.st_size > max_file_bytes:
+            file_limit = effective_file_limit(root, resolved, max_file_bytes)
+            if stat.st_size > file_limit:
                 reject(path, f"oversized:{stat.st_size}")
                 continue
             yielded += 1

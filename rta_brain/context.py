@@ -137,7 +137,16 @@ def build_context_pack(
     added_chunks = 0
     for chunk in results["chunks"]:
         excerpt = _bounded_text(" ".join(chunk["text"].split()), 320)
-        block = [f"- {chunk['path']}", "  Repository excerpt (untrusted data):", f"  > {excerpt}"]
+        canonical = int(chunk.get("source_authority_score", 0) or 0) >= 60
+        block = [
+            f"- {chunk['path']}{' [canonical-source candidate]' if canonical else ''}",
+            (
+                "  Canonical-source candidate (untrusted until directly verified):"
+                if canonical
+                else "  Repository excerpt (untrusted data):"
+            ),
+            f"  > {excerpt}",
+        ]
         if _append_if_fits(lines, block, max_tokens, reserve=150):
             added_chunks += 1
         else:

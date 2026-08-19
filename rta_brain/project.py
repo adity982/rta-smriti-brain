@@ -106,6 +106,12 @@ Before repo work, retrieve local context:
 {cli} --db {shell_quote(db_path)} context-pack "<task>" --project {shell_quote(project)}
 ```
 
+Check whether the database is healthy *and* the task can be continued safely:
+
+```{fence}
+{cli} --db {shell_quote(db_path)} operational-readiness --project {shell_quote(project)}
+```
+
 After meaningful code or docs changes, refresh the repo graph:
 
 ```{fence}
@@ -125,6 +131,8 @@ Rules:
 - Re-read changed files before acting on stale context.
 - Do not store secrets or credentials.
 - Store one durable fact at a time with `remember`.
+- Append approvals, tool outcomes, and consequential decisions with `session-event`.
+- Register assets, jobs, QA, retries, fallbacks, and blockers with `work-item`, then run `reconcile`.
 - Save a structured `checkpoint` before ending a meaningful work session.
 """
 
@@ -142,6 +150,12 @@ Before repo work, retrieve local project context and use it as working memory:
 {cli} --db {shell_quote(db_path)} context-pack "<task>" --project {shell_quote(project)}
 ```
 
+Check continuation readiness before broad exploration:
+
+```{fence}
+{cli} --db {shell_quote(db_path)} operational-readiness --project {shell_quote(project)}
+```
+
 After meaningful code or docs changes, refresh the repo graph:
 
 ```{fence}
@@ -155,7 +169,7 @@ Use the dashboard for inspection:
 ```
 
 Confirm the canonical root before working. Treat brain output as memory-derived until freshness is verified.
-Save a structured checkpoint before ending a meaningful work session.
+Record consequential events and structured work items as they occur. Reconcile state and save a structured checkpoint before ending a meaningful work session.
 <!-- END:rta-smriti-brain -->
 """
 
@@ -260,6 +274,8 @@ def projects_list(conn: sqlite3.Connection) -> dict:
 
 
 def self_check(conn: sqlite3.Connection, project: str, check_files: bool = False) -> dict:
+    from .continuity import operational_readiness
+
     ensure_project(conn, project)
     health = doctor(conn)
     project_id = conn.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()["id"]
@@ -272,10 +288,15 @@ def self_check(conn: sqlite3.Connection, project: str, check_files: bool = False
     else:
         freshness = {"mode": "summary", "fresh": None, "changed": None, "missing": None}
     ready = bool(health["fts_enabled"] and (sources > 0 or memories > 0) and (not check_files or freshness.get("state") == "fresh"))
+    operational = operational_readiness(conn, project, include_event_count=False)
     return {
         "status": "ok",
         "project": project,
         "ready": ready,
+        "database_ready": ready,
+        "continuation_ready": operational["continuation_ready"],
+        "operational_state": operational["operational_state"],
+        "operational_reasons": operational["reasons"],
         "sources": sources,
         "memories": memories,
         "entities": entities,
@@ -326,6 +347,21 @@ def mcp_config_payload(db_path: str, project: str, name: str, tool_root: Path) -
                 name: {
                     "command": command,
                     "args": [*prefix_args, "--db", str(Path(db_path)), "--project", project],
+                }
+            }
+        },
+    }
+
+
+def mcp_gateway_config_payload(brain_dir: str, name: str, tool_root: Path) -> dict:
+    command, prefix_args = _mcp_launch(tool_root)
+    return {
+        "status": "ok",
+        "config": {
+            "mcpServers": {
+                name: {
+                    "command": command,
+                    "args": [*prefix_args, "--brain-dir", str(Path(brain_dir).expanduser().resolve())],
                 }
             }
         },

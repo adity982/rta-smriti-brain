@@ -1,0 +1,269 @@
+import json
+import os
+import tempfile
+import time
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from rta_brain import db
+from rta_brain.continuity_daemon import (
+    capture_cycle,
+    continuity_paths,
+    continuity_status,
+    discover_codex_sessions,
+    start_continuity,
+    stop_continuity,
+    validate_codex_session_binding,
+)
+
+
+class ContinuityDaemonTests(unittest.TestCase):
+    def test_stop_waits_for_a_stale_live_process_to_exit(self):
+        stale_live = {"state": "stale", "process_alive": True, "pid": 42}
+        stopped = {"state": "stopped", "process_alive": False, "pid": 42}
+        with patch("rta_brain.continuity_daemon.continuity_paths", return_value={
+            "directory": Path("control"), "state": Path("control/state"),
+            "stop": Path("control/stop"), "lock": Path("control/lock"), "log": Path("control/log"),
+        }), patch("rta_brain.continuity_daemon.continuity_status", side_effect=[stale_live, stale_live, stopped]), patch(
+            "rta_brain.continuity_daemon._write_stop_request"
+        ):
+            result = stop_continuity(Path("brain.sqlite"), "demo", timeout=1)
+        self.assertEqual(result["state"], "stopped")
+        self.assertFalse(result["process_alive"])
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission contract")
+    def test_control_directory_and_state_are_private_on_posix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            database = Path(tmp) / "brain.sqlite"
+            database.touch()
+            paths = continuity_paths(database, "demo")
+            from rta_brain.watch_daemon import _atomic_write_json, _prepare_control_dir
+            _prepare_control_dir(paths["directory"])
+            _atomic_write_json(paths["state"], {"state": "stopped"})
+            self.assertEqual(paths["directory"].stat().st_mode & 0o777, 0o700)
+            self.assertEqual(paths["state"].stat().st_mode & 0o777, 0o600)
+
+    def test_status_rejects_live_pid_with_expired_heartbeat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            database = Path(tmp) / "brain.sqlite"
+            database.touch()
+            paths = continuity_paths(database, "demo")
+            paths["directory"].mkdir()
+            paths["state"].write_text(json.dumps({
+                "project": "demo", "pid": os.getpid(), "state": "running",
+                "interval_seconds": 1, "heartbeat_at": "2000-01-01T00:00:00+00:00",
+            }), encoding="utf-8")
+            self.assertEqual(continuity_status(database, "demo")["state"], "stale")
+
+    def test_start_refuses_to_duplicate_a_live_process_with_stale_heartbeat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp); database = base / "brain.sqlite"; project = base / "project"; sessions = base / "sessions"
+            project.mkdir(); sessions.mkdir()
+            conn = db.connect(database); db.init_project(conn, "demo", str(project)); conn.close()
+            paths = continuity_paths(database, "demo"); paths["directory"].mkdir()
+            paths["state"].write_text(json.dumps({
+                "project": "demo", "pid": os.getpid(), "state": "running",
+                "interval_seconds": 1, "heartbeat_at": "2000-01-01T00:00:00+00:00",
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "alive but unresponsive"):
+                start_continuity(database, project, "demo", sessions)
+
+    def test_discovery_only_returns_sessions_bound_to_canonical_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            project = base / "project"
+            other = base / "other"
+            sessions = base / "sessions"
+            project.mkdir()
+            other.mkdir()
+            sessions.mkdir()
+
+            matching = sessions / "matching.jsonl"
+            nested = sessions / "nested.jsonl"
+            foreign = sessions / "foreign.jsonl"
+            malformed = sessions / "malformed.jsonl"
+            matching.write_text(json.dumps({"type": "session_meta", "payload": {"id": "one", "cwd": str(project)}}) + "\n", encoding="utf-8")
+            nested.write_text(json.dumps({"type": "session_meta", "payload": {"id": "two", "cwd": str(project / "src")}}) + "\n", encoding="utf-8")
+            foreign.write_text(json.dumps({"type": "session_meta", "payload": {"id": "three", "cwd": str(other)}}) + "\n", encoding="utf-8")
+            malformed.write_text("not-json\n", encoding="utf-8")
+
+            found = discover_codex_sessions(sessions, project)
+            self.assertEqual([item["session_id"] for item in found], ["one", "two"])
+            self.assertEqual({Path(item["path"]).name for item in found}, {"matching.jsonl", "nested.jsonl"})
+
+    def test_discovery_bounds_initial_history_unless_explicitly_requested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            project = base / "project"
+            sessions = base / "sessions"
+            project.mkdir()
+            sessions.mkdir()
+            old = sessions / "old.jsonl"
+            old.write_text(json.dumps({"type": "session_meta", "payload": {"id": "old", "cwd": str(project)}}) + "\n", encoding="utf-8")
+            old_time = time.time() - 60 * 86400
+            os.utime(old, (old_time, old_time))
+
+            self.assertEqual(discover_codex_sessions(sessions, project), [])
+            self.assertEqual([item["session_id"] for item in discover_codex_sessions(sessions, project, lookback_days=0)], ["old"])
+
+    def test_discovery_rejects_an_oversized_metadata_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp); project = base / "project"; sessions = base / "sessions"
+            project.mkdir(); sessions.mkdir()
+            transcript = sessions / "oversized.jsonl"
+            transcript.write_bytes(b"x" * 300_000 + b"\n" + json.dumps({
+                "type": "session_meta", "payload": {"id": "late", "cwd": str(project)},
+            }).encode("utf-8") + b"\n")
+            self.assertEqual(discover_codex_sessions(sessions, project), [])
+
+    def test_session_binding_rejects_foreign_project_and_outside_session_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            project = base / "project"
+            other = base / "other"
+            sessions = base / "sessions"
+            project.mkdir(); other.mkdir(); sessions.mkdir()
+            foreign = sessions / "foreign.jsonl"
+            foreign.write_text(json.dumps({"type": "session_meta", "payload": {"id": "foreign", "cwd": str(other)}}) + "\n", encoding="utf-8")
+            outside = base / "outside.jsonl"
+            outside.write_text(json.dumps({"type": "session_meta", "payload": {"id": "outside", "cwd": str(project)}}) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "canonical project root"):
+                validate_codex_session_binding(foreign, sessions, project)
+            with self.assertRaisesRegex(ValueError, "outside the configured session directory"):
+                validate_codex_session_binding(outside, sessions, project)
+
+    def test_capture_cycle_creates_conservative_terminal_checkpoint_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            project = base / "project"
+            sessions = base / "sessions"
+            project.mkdir()
+            sessions.mkdir()
+            transcript = sessions / "thread.jsonl"
+            rows = [
+                {"type": "session_meta", "payload": {"id": "thread-1", "cwd": str(project)}},
+                {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Finish the release safely"}]}},
+                {"type": "event_msg", "payload": {"type": "task_complete", "message": "Done"}},
+            ]
+            transcript.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+            database = base / "brain.sqlite"
+            conn = db.connect(database)
+            try:
+                db.init_project(conn, "demo", str(project))
+                first = capture_cycle(conn, sessions, project, "demo", inactivity_seconds=3600)
+                second = capture_cycle(conn, sessions, project, "demo", inactivity_seconds=3600)
+                checkpoint = db.latest_checkpoint(conn, "demo")
+                self.assertEqual(first["events_inserted"], 3)
+                self.assertEqual(first["checkpoints_created"], 1)
+                self.assertEqual(second["checkpoints_created"], 0)
+                self.assertEqual(checkpoint["source"], "continuity-daemon")
+                self.assertEqual(checkpoint["trigger"], "task_complete")
+                self.assertEqual(checkpoint["objective"], "Finish the release safely")
+                self.assertEqual(checkpoint["verified_evidence"], "")
+                self.assertIn("unverified", checkpoint["remaining_gaps"].lower())
+            finally:
+                conn.close()
+
+    def test_resumed_session_uses_new_inactivity_checkpoint_after_old_terminal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp); project = base / "project"; sessions = base / "sessions"
+            project.mkdir(); sessions.mkdir(); transcript = sessions / "thread.jsonl"
+            rows = [
+                {"type": "session_meta", "payload": {"id": "thread-1", "cwd": str(project)}},
+                {"type": "response_item", "payload": {"type": "message", "role": "user", "content": "First task"}},
+                {"type": "event_msg", "payload": {"type": "task_complete", "message": "Done"}},
+            ]
+            transcript.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+            conn = db.connect(base / "brain.sqlite")
+            try:
+                db.init_project(conn, "demo", str(project))
+                capture_cycle(conn, sessions, project, "demo", inactivity_seconds=3600)
+                with transcript.open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user", "content": "Resumed task"}}) + "\n")
+                result = capture_cycle(conn, sessions, project, "demo", inactivity_seconds=1, now=time.time() + 10)
+                self.assertEqual(result["checkpoints_created"], 1)
+                self.assertEqual(db.latest_checkpoint(conn, "demo")["trigger"], "inactivity")
+                self.assertEqual(db.latest_checkpoint(conn, "demo")["objective"], "Resumed task")
+            finally:
+                conn.close()
+
+    def test_codex_turn_aborted_control_marker_is_not_promoted_to_objective(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp); project = base / "project"; sessions = base / "sessions"
+            project.mkdir(); sessions.mkdir(); transcript = sessions / "thread.jsonl"
+            rows = [
+                {"type": "session_meta", "payload": {"id": "thread-1", "cwd": str(project)}},
+                {"type": "response_item", "payload": {"type": "message", "role": "user", "content": "Ship the verified release"}},
+                {"type": "response_item", "payload": {"type": "message", "role": "user", "content": "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>"}},
+                {"type": "event_msg", "payload": {"type": "turn_aborted", "message": "Interrupted"}},
+            ]
+            transcript.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+            conn = db.connect(base / "brain.sqlite")
+            try:
+                db.init_project(conn, "demo", str(project))
+                capture_cycle(conn, sessions, project, "demo", inactivity_seconds=3600)
+                self.assertEqual(db.latest_checkpoint(conn, "demo")["objective"], "Ship the verified release")
+            finally:
+                conn.close()
+
+    def test_incomplete_backlog_does_not_publish_a_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            project = base / "project"
+            sessions = base / "sessions"
+            project.mkdir()
+            sessions.mkdir()
+            transcript = sessions / "thread.jsonl"
+            rows = [{"type": "session_meta", "payload": {"id": "thread-1", "cwd": str(project)}}]
+            rows.extend({"type": "response_item", "payload": {"type": "message", "role": "user", "content": f"step {index}"}} for index in range(20))
+            transcript.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+            conn = db.connect(base / "brain.sqlite")
+            try:
+                db.init_project(conn, "demo", str(project))
+                result = capture_cycle(conn, sessions, project, "demo", inactivity_seconds=1, now=time.time() + 10, max_events_per_session=2)
+                self.assertEqual(result["checkpoints_created"], 0)
+                self.assertIsNone(db.latest_checkpoint(conn, "demo"))
+            finally:
+                conn.close()
+
+    def test_managed_service_starts_captures_and_stops(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            project = base / "project"
+            sessions = base / "sessions"
+            project.mkdir()
+            sessions.mkdir()
+            transcript = sessions / "thread.jsonl"
+            transcript.write_text(
+                json.dumps({"type": "session_meta", "payload": {"id": "managed", "cwd": str(project)}}) + "\n"
+                + json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user", "content": "Resume safely"}}) + "\n",
+                encoding="utf-8",
+            )
+            database = base / "brain.sqlite"
+            conn = db.connect(database)
+            try:
+                db.init_project(conn, "demo", str(project))
+            finally:
+                conn.close()
+            started = start_continuity(database, project, "demo", sessions, interval_seconds=0.1, inactivity_seconds=3600)
+            try:
+                self.assertEqual(started["state"], "running")
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and continuity_status(database, "demo").get("events_inserted", 0) < 2:
+                    time.sleep(0.05)
+                self.assertGreaterEqual(continuity_status(database, "demo")["events_inserted"], 2)
+            finally:
+                stopped = stop_continuity(database, "demo")
+            self.assertEqual(stopped["state"], "stopped")
+            conn = db.connect(database)
+            try:
+                checkpoint = db.latest_checkpoint(conn, "demo")
+                self.assertEqual(checkpoint["trigger"], "service_shutdown")
+                self.assertEqual(checkpoint["verified_evidence"], "")
+            finally:
+                conn.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

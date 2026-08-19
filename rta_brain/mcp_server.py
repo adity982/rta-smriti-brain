@@ -10,6 +10,8 @@ from typing import Any
 
 from . import __version__
 from .context import build_context_pack, build_continuation_prompt
+from .continuity import append_event, ingest_codex_session, list_events, operational_readiness, reconcile_work_items, upsert_work_item
+from .continuity_daemon import continuity_status, start_continuity, stop_continuity, validate_codex_session_binding
 from .db import (
     connect, doctor, graph, graph_query, ingest_repo, ingest_thread, reflect, remember, remember_many,
     save_checkpoint, search, stale_check,
@@ -104,6 +106,7 @@ TOOLS = [
             "path": {"type": "string", "description": "Local repository or folder path."},
             "project": {"type": "string", "description": "Project memory bank name."},
             "force": {"type": "boolean", "default": False, "description": "Hash every file even when the stat manifest is unchanged."},
+            "repair_deep_stale": {"type": "boolean", "default": False, "description": "Hash every eligible file and re-index only content-drifted sources."},
         },
         ["path"],
     ),
@@ -131,6 +134,7 @@ TOOLS = [
         {
             "project": {"type": "string", "description": "Project memory bank name."},
             "deep": {"type": "boolean", "default": False, "description": "Hash file contents instead of using the fast stat manifest."},
+            "rehash": {"type": "boolean", "default": False, "description": "Bypass the stat-keyed hash cache; implies deep verification."},
             "include_fresh_details": {"type": "boolean", "default": False},
             "detail_limit": {"type": "integer", "minimum": 0, "maximum": 500, "default": 50},
         },
@@ -153,6 +157,60 @@ TOOLS = [
         "brain_continuation_prompt",
         "Build a compact new-task prompt from the canonical root, Git state, freshness, and latest checkpoint.",
         {"project": {"type": "string"}},
+    ),
+    tool_schema(
+        "brain_session_event",
+        "Append an immutable, provenance-bearing operational event.",
+        {
+            "project": {"type": "string"},
+            "session_id": {"type": "string"},
+            "cursor": {"type": "string"},
+            "event_type": {"type": "string"},
+            "payload": {"type": "object"},
+            "source": {"type": "string", "default": "agent"},
+            "verification_status": {"type": "string", "enum": ["unverified", "verified", "failed", "stale"]},
+        },
+        ["session_id", "cursor", "event_type", "payload"],
+    ),
+    tool_schema(
+        "brain_session_events",
+        "Read append-only operational events for a project or session.",
+        {"project": {"type": "string"}, "session_id": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 500}},
+    ),
+    tool_schema(
+        "brain_ingest_codex_session",
+        "Incrementally capture a local Codex JSONL transcript using a byte cursor.",
+        {
+            "project": {"type": "string"}, "path": {"type": "string"},
+            "max_events": {"type": "integer", "minimum": 1, "maximum": 5000, "default": 5000},
+        },
+        ["path"],
+    ),
+    tool_schema(
+        "brain_work_item",
+        "Create or update a structured asset, job, approval, blocker, or other work-state record.",
+        {
+            "project": {"type": "string"}, "item_type": {"type": "string"},
+            "external_id": {"type": "string"}, "local_path": {"type": "string"},
+            "qa_state": {"type": "string"}, "decision": {"type": "string"},
+            "attempt_count": {"type": "integer", "minimum": 0}, "fallback": {"type": "string"},
+            "next_action": {"type": "string"}, "metadata": {"type": "object"},
+        },
+        ["item_type", "external_id"],
+    ),
+    tool_schema("brain_reconcile", "Reconcile structured work state with the local filesystem.", {"project": {"type": "string"}}),
+    tool_schema("brain_operational_readiness", "Distinguish database health from task continuation readiness.", {"project": {"type": "string"}}),
+    tool_schema("brain_continuity_status", "Report managed Codex transcript capture and checkpoint lifecycle health.", {"project": {"type": "string"}}),
+    tool_schema(
+        "brain_continuity_control",
+        "Start or stop managed Codex transcript capture for the canonical project root.",
+        {
+            "project": {"type": "string"},
+            "action": {"type": "string", "enum": ["start", "stop"]},
+            "interval": {"type": "number", "minimum": 0.1, "maximum": 3600},
+            "inactivity": {"type": "number", "minimum": 1, "maximum": 604800},
+        },
+        ["action"],
     ),
     tool_schema(
         "brain_reflect",
@@ -244,7 +302,7 @@ TOOLS = [
     tool_schema(
         "brain_doctor",
         "Return Rta-Smriti brain health and count information.",
-        {},
+        {"project": {"type": "string", "description": "Also evaluate task continuation readiness."}},
     ),
 ]
 
@@ -270,6 +328,7 @@ MAX_MCP_FRAME_BYTES = 1_048_576
 MAX_MCP_JSON_NESTING = 64
 MAX_MCP_OUTSTANDING_REQUESTS = 32
 MAX_MCP_OUTSTANDING_BYTES = MAX_MCP_FRAME_BYTES * 4
+SUPPORTED_MCP_PROTOCOL_VERSIONS = ("2025-06-18", "2024-11-05")
 
 
 def _agent_tool_schema(tool: dict[str, Any]) -> dict[str, Any]:
@@ -425,30 +484,43 @@ def json_text(payload: Any) -> str:
 class RtaBrainMcpServer:
     def __init__(
         self,
-        db_path: Path,
-        default_project: str,
+        db_path: Path | None = None,
+        default_project: str | None = None,
         *,
+        brain_dir: Path | None = None,
         allow_memory_writes: bool = False,
         allow_repo_ingestion: bool = False,
         allow_thread_ingestion: bool = False,
         allowed_thread_roots: tuple[Path, ...] = (),
     ):
-        self.db_path = db_path
-        self.default_project = str(default_project).strip()
-        if not self.default_project:
+        if (db_path is None) == (brain_dir is None):
+            raise ValueError("configure exactly one of db_path or brain_dir")
+        self.db_path = db_path.expanduser().resolve() if db_path else None
+        self.brain_dir = brain_dir.expanduser().resolve() if brain_dir else None
+        self.default_project = str(default_project or "default").strip() if self.db_path else default_project
+        if self.db_path is not None and not self.default_project:
             raise ValueError("default project must not be empty")
         self.allowed_thread_roots = tuple(_canonical_thread_root(root) for root in allowed_thread_roots)
         if allow_thread_ingestion and not self.allowed_thread_roots:
             raise ValueError("thread ingestion requires at least one configured thread root")
-        enabled = set(PROJECT_BOUND_READ_TOOLS)
+        if self.brain_dir is not None:
+            enabled = set(TOOL_BY_NAME)
+        else:
+            enabled = set(PROJECT_BOUND_READ_TOOLS)
+            enabled.update({"brain_session_events", "brain_reconcile", "brain_operational_readiness", "brain_continuity_status"})
         if allow_memory_writes:
             enabled.update(MEMORY_WRITE_TOOLS)
+            enabled.update({"brain_session_event", "brain_work_item", "brain_continuity_control"})
         if allow_repo_ingestion:
             enabled.update(REPO_INGESTION_TOOLS)
         if allow_thread_ingestion:
             enabled.update(THREAD_INGESTION_TOOLS)
+            enabled.add("brain_ingest_codex_session")
         self.enabled_tools = frozenset(enabled)
-        self.agent_tools = [_agent_tool_schema(TOOL_BY_NAME[name]) for name in TOOL_BY_NAME if name in enabled]
+        self.agent_tools = [
+            (copy.deepcopy(TOOL_BY_NAME[name]) if self.brain_dir is not None else _agent_tool_schema(TOOL_BY_NAME[name]))
+            for name in TOOL_BY_NAME if name in enabled
+        ]
 
     def _bound_project(self, args: dict[str, Any]) -> str:
         requested = args.get("project")
@@ -458,13 +530,14 @@ class RtaBrainMcpServer:
             )
         return self.default_project
 
-    def _bound_repository_root(self, conn, args: dict[str, Any]) -> Path:
+    def _bound_repository_root(self, conn, args: dict[str, Any], project: str | None = None) -> Path:
+        project_name = project or self.default_project
         row = conn.execute(
-            "SELECT root_path FROM projects WHERE name = ?", (self.default_project,),
+            "SELECT root_path FROM projects WHERE name = ?", (project_name,),
         ).fetchone()
         if not row or not row["root_path"]:
             raise ValueError(
-                f"project '{self.default_project}' has no canonical repository root; bootstrap it before MCP ingestion"
+                f"project '{project_name}' has no canonical repository root; bootstrap it before MCP ingestion"
             )
         root = Path(str(row["root_path"])).expanduser().resolve()
         requested = args.get("path")
@@ -474,23 +547,59 @@ class RtaBrainMcpServer:
             )
         return root
 
+    def _open_project(self, project: str | None):
+        if self.db_path is not None:
+            if not self.default_project:
+                raise ValueError("single-database MCP mode requires a default project")
+            requested = str(project or self.default_project).strip()
+            if requested != self.default_project:
+                raise ValueError(
+                    f"MCP server is bound to project '{self.default_project}'; client project overrides are rejected"
+                )
+            return connect(self.db_path), self.db_path, self.default_project
+        if not project:
+            raise ValueError("project is required when using the multi-project brain gateway")
+        if not self.brain_dir or not self.brain_dir.is_dir() or self.brain_dir.is_symlink():
+            raise ValueError("brain directory is not a safe directory")
+        matches = []
+        for candidate in self.brain_dir.glob("*.sqlite"):
+            if candidate.is_symlink() or not candidate.is_file() or candidate.stat().st_nlink > 1:
+                continue
+            before = candidate.stat()
+            conn = connect(candidate)
+            after = candidate.stat()
+            if before.st_dev != after.st_dev or before.st_ino != after.st_ino:
+                conn.close()
+                raise ValueError("brain database changed identity while routing the MCP call")
+            if conn.execute("SELECT 1 FROM projects WHERE name = ?", (str(project),)).fetchone():
+                matches.append((conn, candidate.resolve()))
+            else:
+                conn.close()
+        if not matches:
+            raise ValueError(f"unknown project in brain directory: {project}")
+        if len(matches) > 1:
+            for conn, _path in matches:
+                conn.close()
+            raise ValueError(f"project name is ambiguous across brain databases: {project}")
+        conn, path = matches[0]
+        return conn, path, str(project)
+
     def call_tool(self, name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
         args = arguments or {}
         if name not in TOOL_BY_NAME:
             raise KeyError(f"unknown tool: {name}")
         if name not in self.enabled_tools:
             raise ValueError(f"MCP tool '{name}' is not enabled by server startup capabilities")
-        self._bound_project(args)
-        conn = connect(self.db_path)
+        conn, db_path, project = self._open_project(args.get("project") or self.default_project)
         try:
-            return self._call_tool_with_connection(conn, name, args)
+            return self._call_tool_with_connection(conn, name, args, db_path=db_path, resolved_project=project)
         finally:
             conn.close()
 
     def _call_tool_with_connection(
-        self, conn, name: str, args: dict[str, Any]
+        self, conn, name: str, args: dict[str, Any], *, db_path: Path, resolved_project: str
     ) -> dict[str, Any]:
-        project = self._bound_project(args)
+        project = resolved_project
         if name in OWNER_ONLY_GOVERNANCE_TOOLS:
             raise ValueError("governance policy mutation requires an owner-controlled CLI or dashboard session")
         if name == "brain_preflight" and args.get("override_reason"):
@@ -522,10 +631,18 @@ class RtaBrainMcpServer:
             payload = remember_many(conn, [_agent_memory_item(item) for item in args["items"]], project=project)
             return text_result(json_text(payload), payload)
         if name == "brain_ingest_repo":
-            root = self._bound_repository_root(conn, args)
-            payload = ingest_repo(conn, root, project=project, force=bool(args.get("force", False)))
+            root = self._bound_repository_root(conn, args, project)
+            payload = ingest_repo(
+                conn,
+                root,
+                project=project,
+                force=bool(args.get("force", False)),
+                repair_deep_stale=bool(args.get("repair_deep_stale", False)),
+            )
             return text_result(json_text(payload), payload)
         if name == "brain_ingest_thread":
+            if not self.allowed_thread_roots:
+                raise ValueError("thread ingestion roots are not configured for this MCP server")
             thread_path, thread_root = _confined_thread_path(
                 Path(str(args["path"])), self.allowed_thread_roots,
             )
@@ -560,7 +677,8 @@ class RtaBrainMcpServer:
             payload = stale_check(
                 conn,
                 project=project,
-                deep=bool(args.get("deep", False)),
+                deep=bool(args.get("deep", False) or args.get("rehash", False)),
+                refresh_hashes=bool(args.get("rehash", False)),
                 detail_limit=int(args.get("detail_limit", 50)),
                 include_fresh_details=bool(args.get("include_fresh_details", False)),
             )
@@ -579,6 +697,68 @@ class RtaBrainMcpServer:
             return text_result(json_text(payload), payload)
         if name == "brain_continuation_prompt":
             return text_result(build_continuation_prompt(conn, project=project))
+        if name == "brain_session_event":
+            payload = append_event(
+                conn, project, str(args["session_id"]), str(args["cursor"]),
+                str(args["event_type"]), dict(args["payload"]), source=str(args.get("source", "agent")),
+                verification_status=str(args.get("verification_status", "unverified")),
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_session_events":
+            payload = list_events(conn, project, session_id=args.get("session_id"), limit=int(args.get("limit", 100)))
+            return text_result(json_text(payload), payload)
+        if name == "brain_ingest_codex_session":
+            row = conn.execute("SELECT root_path FROM projects WHERE name = ?", (project,)).fetchone()
+            if not row or not row["root_path"]:
+                raise ValueError("project has no canonical root for transcript ingestion")
+            session_path = Path(str(args["path"]))
+            session_id = validate_codex_session_binding(
+                session_path, Path.home() / ".codex" / "sessions", Path(row["root_path"]),
+            )
+            payload = ingest_codex_session(
+                conn, session_path, project,
+                session_id=session_id, max_events=int(args.get("max_events", 5000)),
+                expected_project_root=Path(row["root_path"]),
+                expected_sessions_root=Path.home() / ".codex" / "sessions",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_work_item":
+            payload = upsert_work_item(
+                conn, project, str(args["item_type"]), str(args["external_id"]),
+                local_path=args.get("local_path"), qa_state=str(args.get("qa_state", "unknown")),
+                decision=str(args.get("decision", "pending")), attempt_count=int(args.get("attempt_count", 0)),
+                fallback=str(args.get("fallback", "")), next_action=str(args.get("next_action", "")),
+                metadata=args.get("metadata"),
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_reconcile":
+            payload = reconcile_work_items(conn, project)
+            return text_result(json_text(payload), payload)
+        if name == "brain_operational_readiness":
+            payload = operational_readiness(conn, project, lifecycle=continuity_status(db_path, project))
+            return text_result(json_text(payload), payload)
+        if name == "brain_continuity_status":
+            payload = continuity_status(db_path, project)
+            return text_result(json_text(payload), payload)
+        if name == "brain_continuity_control":
+            action = str(args["action"])
+            if action == "stop":
+                payload = stop_continuity(db_path, project)
+            elif action == "start":
+                row = conn.execute("SELECT root_path FROM projects WHERE name = ?", (project,)).fetchone()
+                if not row or not row["root_path"]:
+                    raise ValueError("project has no canonical root for continuity capture")
+                payload = start_continuity(
+                    db_path,
+                    Path(row["root_path"]),
+                    project,
+                    Path.home() / ".codex" / "sessions",
+                    interval_seconds=float(args.get("interval", 5.0)),
+                    inactivity_seconds=float(args.get("inactivity", 900.0)),
+                )
+            else:
+                raise ValueError("continuity action must be start or stop")
+            return text_result(json_text(payload), payload)
         if name == "brain_reflect":
             payload = reflect(conn, project=project)
             return text_result(json_text(payload), payload)
@@ -623,6 +803,10 @@ class RtaBrainMcpServer:
             return text_result(json_text(payload), payload)
         if name == "brain_doctor":
             payload = doctor(conn)
+            if project:
+                payload["operational"] = operational_readiness(
+                    conn, project, lifecycle=continuity_status(db_path, project),
+                )
             return text_result(json_text(payload), payload)
         raise KeyError(f"unknown tool: {name}")
 
@@ -631,24 +815,29 @@ class RtaBrainMcpServer:
             return self.error(None, -32600, "invalid request: JSON-RPC frame must be an object")
         method = request.get("method")
         request_id = request.get("id")
+        notification = "id" not in request
+        respond = lambda payload: None if notification else payload
         if request.get("jsonrpc") != "2.0" or not isinstance(method, str):
-            return self.error(request_id, -32600, "invalid request: jsonrpc must be '2.0' and method must be a string")
-        if method and method.startswith("notifications/"):
-            return None
+            return respond(self.error(request_id, -32600, "invalid request: jsonrpc must be '2.0' and method must be a string"))
         try:
             if method == "initialize":
-                requested_version = (request.get("params") or {}).get("protocolVersion") or "2025-06-18"
-                return {
+                requested_version = (request.get("params") or {}).get("protocolVersion")
+                negotiated_version = (
+                    requested_version
+                    if requested_version in SUPPORTED_MCP_PROTOCOL_VERSIONS
+                    else SUPPORTED_MCP_PROTOCOL_VERSIONS[0]
+                )
+                return respond({
                     "jsonrpc": "2.0",
                     "id": request_id,
                     "result": {
-                        "protocolVersion": requested_version,
+                        "protocolVersion": negotiated_version,
                         "capabilities": {"tools": {"listChanged": False}},
                         "serverInfo": {"name": "rta-smriti-brain", "version": __version__},
                     },
-                }
+                })
             if method == "tools/list":
-                return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": self.agent_tools}}
+                return respond({"jsonrpc": "2.0", "id": request_id, "result": {"tools": self.agent_tools}})
             if method == "tools/call":
                 params = request.get("params") or {}
                 if not isinstance(params, dict):
@@ -660,14 +849,14 @@ class RtaBrainMcpServer:
                 if not isinstance(arguments, dict):
                     raise ValueError("tools/call arguments must be an object")
                 result = self.call_tool(str(name), arguments)
-                return {"jsonrpc": "2.0", "id": request_id, "result": result}
+                return respond({"jsonrpc": "2.0", "id": request_id, "result": result})
             if method == "ping":
-                return {"jsonrpc": "2.0", "id": request_id, "result": {}}
-            return self.error(request_id, -32601, f"method not found: {method}")
+                return respond({"jsonrpc": "2.0", "id": request_id, "result": {}})
+            return respond(self.error(request_id, -32601, f"method not found: {method}"))
         except KeyError as exc:
-            return self.error(request_id, -32601, str(exc).strip("'"))
+            return respond(self.error(request_id, -32601, str(exc).strip("'")))
         except Exception as exc:
-            return self.error(request_id, -32000, str(exc), {"type": exc.__class__.__name__})
+            return respond(self.error(request_id, -32000, str(exc), {"type": exc.__class__.__name__}))
 
     async def handle_async(self, request: dict[str, Any]) -> dict[str, Any] | None:
         """Keep stdio responsive while SQLite, parsing, hashing, or embedding work runs."""
@@ -689,6 +878,10 @@ MUTATING_TOOLS = {
     "brain_ingest_repo",
     "brain_ingest_thread",
     "brain_checkpoint",
+    "brain_session_event",
+    "brain_ingest_codex_session",
+    "brain_work_item",
+    "brain_continuity_control",
     "brain_reflect",
 }
 
@@ -775,9 +968,10 @@ class McpRequestScheduler:
 
 
 async def serve_stdio_async(
-    db_path: Path,
-    default_project: str,
+    db_path: Path | None,
+    default_project: str | None,
     *,
+    brain_dir: Path | None = None,
     allow_memory_writes: bool = False,
     allow_repo_ingestion: bool = False,
     allow_thread_ingestion: bool = False,
@@ -786,6 +980,7 @@ async def serve_stdio_async(
     server = RtaBrainMcpServer(
         db_path=db_path,
         default_project=default_project,
+        brain_dir=brain_dir,
         allow_memory_writes=allow_memory_writes,
         allow_repo_ingestion=allow_repo_ingestion,
         allow_thread_ingestion=allow_thread_ingestion,
@@ -824,9 +1019,10 @@ async def serve_stdio_async(
 
 
 def serve_stdio(
-    db_path: Path,
-    default_project: str,
+    db_path: Path | None,
+    default_project: str | None,
     *,
+    brain_dir: Path | None = None,
     allow_memory_writes: bool = False,
     allow_repo_ingestion: bool = False,
     allow_thread_ingestion: bool = False,
@@ -835,6 +1031,7 @@ def serve_stdio(
     return asyncio.run(serve_stdio_async(
         db_path,
         default_project,
+        brain_dir=brain_dir,
         allow_memory_writes=allow_memory_writes,
         allow_repo_ingestion=allow_repo_ingestion,
         allow_thread_ingestion=allow_thread_ingestion,
@@ -844,8 +1041,10 @@ def serve_stdio(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rta-brain-mcp", description="Rta-Smriti Brain MCP stdio server")
-    parser.add_argument("--db", required=True, help="Path to SQLite brain file")
-    parser.add_argument("--project", default="default", help="Default project memory bank")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--db", help="Path to one SQLite brain file")
+    source.add_argument("--brain-dir", help="Directory of project-scoped SQLite brain files")
+    parser.add_argument("--project", default="default", help="Default project memory bank for single-database mode")
     parser.add_argument(
         "--allow-memory-writes", action="store_true",
         help="Allow agent-authored memories, checkpoints, and reflection (disabled by default)",
@@ -868,11 +1067,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.brain_dir and (args.allow_memory_writes or args.allow_repo_ingestion or args.allow_thread_ingestion or args.allow_thread_root):
+        parser.error("capability flags are only valid with --db single-project mode")
     if args.allow_thread_ingestion and not args.allow_thread_root:
         parser.error("--allow-thread-ingestion requires at least one --allow-thread-root")
     return serve_stdio(
-        Path(args.db),
+        Path(args.db) if args.db else None,
         args.project,
+        brain_dir=Path(args.brain_dir) if args.brain_dir else None,
         allow_memory_writes=args.allow_memory_writes,
         allow_repo_ingestion=args.allow_repo_ingestion,
         allow_thread_ingestion=args.allow_thread_ingestion,

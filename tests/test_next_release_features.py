@@ -13,6 +13,28 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RtaBrainNextReleaseTests(unittest.TestCase):
+    def test_schema_indexes_source_scoped_chunk_lookup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = db.connect(Path(tmp) / "brain.sqlite")
+            try:
+                db.init_schema(conn)
+                indexes = {
+                    str(row[1])
+                    for row in conn.execute("PRAGMA index_list('chunks')")
+                }
+                self.assertIn("idx_chunks_source_id", indexes)
+
+                plan = " ".join(
+                    str(row[3])
+                    for row in conn.execute(
+                        "EXPLAIN QUERY PLAN SELECT 1 FROM chunks WHERE source_id = ? LIMIT 1",
+                        (1,),
+                    )
+                ).upper()
+                self.assertIn("IDX_CHUNKS_SOURCE_ID", plan)
+            finally:
+                conn.close()
+
     def test_project_settings_allow_a_larger_fail_closed_file_limit(self):
         self.assertTrue(hasattr(db, "update_project_settings"), "project settings API is missing")
         self.assertTrue(hasattr(db, "get_project_settings"), "project settings reader is missing")
@@ -194,6 +216,46 @@ class RtaBrainNextReleaseTests(unittest.TestCase):
                         project="demo",
                         changed_paths=[linked_root / source.name],
                     )
+            finally:
+                conn.close()
+
+    def test_deep_stale_repair_reindexes_only_same_stat_content_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            source = root / "core.py"
+            source.write_text("READY = True\n", encoding="utf-8")
+            original_stat = source.stat()
+            conn = db.connect(Path(tmp) / "brain.sqlite")
+            try:
+                db.ingest_repo(conn, root, project="demo")
+                source.write_text("READY = None\n", encoding="utf-8")
+                os.utime(
+                    source,
+                    ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+                )
+
+                fast = db.ingest_repo(conn, root, project="demo")
+                self.assertTrue(fast["manifest_unchanged"])
+                self.assertEqual(
+                    db.stale_check(
+                        conn,
+                        project="demo",
+                        deep=True,
+                        refresh_hashes=True,
+                    )["changed"],
+                    1,
+                )
+
+                repaired = db.ingest_repo(
+                    conn,
+                    root,
+                    project="demo",
+                    repair_deep_stale=True,
+                )
+                self.assertEqual(repaired["updated_files"], 1)
+                self.assertEqual(repaired["unchanged_files"], 0)
+                self.assertEqual(db.stale_check(conn, project="demo", deep=True)["changed"], 0)
             finally:
                 conn.close()
 

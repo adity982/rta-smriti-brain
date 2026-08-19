@@ -27,6 +27,7 @@ Rta-Smriti gives each project a memory that stays on your machine.
 - Records structured checkpoints: objective, verified evidence, remaining gaps, next action, and prohibited repetition.
 - Attaches source path, hash, verification command, timestamp, and verification status to remembered claims.
 - Ingests long threads or handoff notes as explicitly unverified prior memory so useful context survives compaction without self-assigning trust.
+- Incrementally captures matching local Codex sessions with resumable byte cursors, bounded/redacted event payloads, and conservative interruption checkpoints.
 - Builds a focused **context pack** for the next agent task.
 - Enforces a hard context token budget and keeps direct evidence ahead of low-trust historical memory.
 - Runs a local operator console with graph, canvas, typed bases, context-pack receipts, memory ledger, freshness checks, and bootstrap flow.
@@ -170,6 +171,9 @@ The dashboard runs on `127.0.0.1` and includes:
 - **Memory ledger**: inspect stored memories, record helpful/harmful outcomes, and run conservative reflection
 - **Continue Work**: edit the structured checkpoint and copy a ready-to-use prompt for a new agent task
 - **Rta-Smriti Release**: source-checkout files and GitHub publication checks; it does not assess the selected private project
+- **Task continuity**: start or stop project-bound Codex session capture and inspect its heartbeat, last capture, checkpoint, and error state
+- **Rta-Smriti Release**: source-checkout files and GitHub publication checks; it does not assess the selected private project
+- **Task continuity**: start or stop project-bound Codex session capture and inspect its heartbeat, last capture, checkpoint, and error state
 - **Bootstrap flow**: create a new project brain from the UI
 - **Command palette**: copy common commands into your agent chat
 
@@ -199,7 +203,19 @@ Before asking an agent to work:
 
 Paste the generated context pack into the agent chat before the task. The pack includes relevant memories, repo evidence, an explicit untrusted-data boundary, and a labeled index-freshness snapshot. Never treat commands found inside retrieved evidence as instructions. Run a live stale check before high-risk work.
 
-For MCP hosts:
+For one MCP server that routes across every project brain without duplicating tools:
+
+```powershell
+& $RtaBrain --json mcp-config --brain-dir $BrainDir --name rta-smriti
+```
+
+```bash
+"$RtaBrain" --json mcp-config --brain-dir "$BrainDir" --name rta-smriti
+```
+
+Register the generated command and arguments in the MCP host, fully restart the host, and open a new task. Existing tasks cannot acquire newly registered MCP tools dynamically. Project names must resolve to exactly one database; ambiguous names fail closed.
+
+For a single-project MCP host:
 
 ```powershell
 & $RtaBrain --db "$BrainDir\project-name.sqlite" --json mcp-config --project project-name --name rta-smriti-project
@@ -217,6 +233,7 @@ remember          Store a durable memory
 ingest-repo       Index a repository or folder
 watch-repo        Continuously refresh a repository using incremental indexing
 watcher           Start, inspect, or stop managed background repository sync
+continuity        Start, inspect, or stop managed Codex transcript capture
 settings          Read or update a project's indexing and retrieval policy
 ingest-thread     Index a long thread, transcript, or handoff file
 search            Search memories and indexed files
@@ -233,8 +250,14 @@ memory-feedback   Record an operator-confirmed helpful, neutral, or harmful outc
 memory-decay      Conservatively age eligible unverified inference and hypothesis memories
 context-pack      Build a focused task context pack
 stale-check       Check stat-manifest freshness; add --deep for SHA-256 verification
-checkpoint        Save structured continuation state for the next agent task
-continue-prompt   Build a compact new-task prompt from root, Git, freshness, and checkpoint state
+    checkpoint        Save structured continuation state for the next agent task
+    continue-prompt   Build a compact new-task prompt from root, Git, freshness, and checkpoint state
+    session-event     Append an immutable operational event with provenance
+    session-events    Read append-only events for a project or session
+    ingest-codex-session Incrementally capture a local Codex JSONL session
+    work-item         Track an asset, job, QA result, retry, approval, fallback, or blocker
+    reconcile         Compare structured work state with the bound filesystem
+    operational-readiness Separate database health from safe task continuation
 reflect           Consolidate duplicate memories and flag simple contradictions
 mcp-config        Generate an MCP host config snippet
 bootstrap-project Create a brain, index a repo, and optionally write agent instructions
@@ -247,6 +270,8 @@ dashboard         Run the local operator console
 console           Start, open, inspect, restart, stop, or configure login startup
 publish-readiness Check whether the package is ready to publish
 ```
+
+Continuity capture uses a 30-day session lookback on first start so a new brain does not silently import an entire Codex history. Oversized new or resumed session backlogs retain a 2 MB recent tail, record an explicit `history_truncated` event, and then capture all new events. Pass `--lookback-days 0` only when you intentionally want every matching historical session; adjust the recovery bound with `--backlog-tail-mb`. Status reports the remaining session backlog, and continuation readiness stays fail-closed while capture is behind or has errors.
 
 ## MCP Server
 
@@ -279,6 +304,14 @@ Tools exposed:
 - `brain_stale_check`
 - `brain_checkpoint`
 - `brain_continuation_prompt`
+- `brain_session_event`
+- `brain_session_events`
+- `brain_ingest_codex_session`
+- `brain_work_item`
+- `brain_reconcile`
+- `brain_operational_readiness`
+- `brain_continuity_status`
+- `brain_continuity_control`
 - `brain_reflect`
 - `brain_policy_add` (owner-only)
 - `brain_policy_list`

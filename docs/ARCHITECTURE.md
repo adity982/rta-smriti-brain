@@ -29,6 +29,8 @@ SQLite project brain
           +--> selective bundle / authenticated snapshot
 ```
 
+Codex JSONL sessions enter through a separate continuity adapter. It reads only sessions whose declared working directory is inside the selected canonical project root, persists byte cursors, preserves incomplete final records for the next cycle, redacts common credential shapes, and bounds oversized tool output before writing append-only events. Initial capture is bounded by session age and a recent byte tail; a provenance-bearing `history_truncated` event exposes omitted history, after which every complete appended record is captured.
+
 ## Storage
 
 Each brain is one SQLite database. Connections reject symbolic, reparse, and hard-linked database files; apply owner-only POSIX modes where available; disable SQLite trusted schema; and use WAL journaling, normal synchronous durability, foreign keys, and a bounded busy timeout. Concurrent agents can read while crash-safe writes remain transactional. Project settings, portable repository identity, canonical root binding, manifests, file hashes, chunks, FTS records, optional embedding vectors, memories, claim provenance, versioned checkpoints, governance records, workspace references, entities, edges, evidence, and recall receipts remain local.
@@ -92,6 +94,14 @@ The stdio MCP server is bound to one project and exposes only read tools by defa
 Managed watchers are explicit user processes, not privileged services. A random launch capability binds each worker to an unlinked lock file. State, heartbeat, counters, stop requests, and logs live beside the selected brain under `.rta-smriti-daemons`. Control files reject symbolic and hard links, state writes are atomic, repository events are coalesced, and every indexing cycle uses a fresh SQLite connection and one rollback-safe transaction. The dashboard never accepts a client-supplied watch root; it reads the canonical root already bound to the selected project.
 
 The console has the same explicit start/open/status/restart/stop lifecycle and stores its capability token in a restricted local control file. Optional login startup writes only an owner-requested user-level registration and can be inspected or removed by the same CLI. The foreground `dashboard` command remains available for diagnostics.
+
+The continuity daemon uses the same managed-process safety model but never changes repository files. It captures a bounded number of pending sessions and events per cycle so stop requests remain responsive. Automatic checkpoints are created only after the newest matching transcript is fully consumed and a terminal, inactivity, or service-shutdown trigger occurs. They carry `source=continuity-daemon`, keep `verified_evidence` empty, and explicitly require operator verification. Manual checkpoints remain separately identifiable.
+
+On POSIX systems, brain databases, WAL/SHM sidecars, daemon state, and logs are restricted to the owning user (`0600`), while daemon control directories use `0700`. Rta-Smriti rejects linked database/control artifacts and files owned by another user. These controls do not isolate mutually untrusted processes running under the same operating-system account; use a dedicated OS account or machine boundary for that threat model.
+
+## Multi-Project MCP Gateway
+
+One stdio MCP process can receive a brain directory instead of one database. Each tool call must name a project. The gateway scans only unlinked SQLite files in that directory and opens the call against exactly one matching project database. Missing and duplicate project names fail closed, preventing accidental cross-project recall while avoiding six copies of the same MCP tool set.
 
 ## Distribution
 

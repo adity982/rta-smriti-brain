@@ -12,6 +12,8 @@ import rta_brain.mcp_server as mcp_server
 from rta_brain.db import connect, init_project
 from rta_brain.mcp_server import McpRequestScheduler, RtaBrainMcpServer
 
+from rta_brain import db as brain_db
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MCP = ROOT / "rta-brain-mcp.py"
@@ -30,6 +32,14 @@ def run_mcp(messages, db_path, *extra_args):
 
 def responses(stdout):
     return [json.loads(line) for line in stdout.splitlines() if line.strip()]
+
+
+def run_gateway(messages, brain_dir):
+    body = "\n".join(json.dumps(message) for message in messages) + "\n"
+    return subprocess.run(
+        [sys.executable, str(MCP), "--brain-dir", str(brain_dir)],
+        input=body, text=True, capture_output=True, cwd=ROOT,
+    )
 
 
 class RtaBrainMcpTests(unittest.TestCase):
@@ -59,6 +69,25 @@ class RtaBrainMcpTests(unittest.TestCase):
                 )
             self.assertEqual(result["structuredContent"]["status"], "ok")
 
+    def test_brain_directory_gateway_routes_projects_without_duplicate_tools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            brain_dir = Path(tmp)
+            for name in ("alpha", "beta"):
+                conn = brain_db.connect(brain_dir / f"{name}.sqlite")
+                try:
+                    brain_db.init_project(conn, name, str(brain_dir / name))
+                    brain_db.remember(conn, f"{name} canonical memory", project=name)
+                finally:
+                    conn.close()
+            result = run_gateway(
+                [{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "brain_search", "arguments": {"project": "beta", "query": "canonical memory"}}}],
+                brain_dir,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = responses(result.stdout)[0]["result"]["content"][0]["text"]
+            self.assertIn("beta canonical memory", text)
+            self.assertNotIn("alpha canonical memory", text)
+
     def test_initialize_and_list_tools(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "brain.sqlite"
@@ -87,6 +116,23 @@ class RtaBrainMcpTests(unittest.TestCase):
             self.assertNotIn("brain_ingest_thread", tool_names)
             self.assertNotIn("brain_workspace_search", tool_names)
             self.assertNotIn("brain_workspace_list", tool_names)
+
+    def test_initialize_negotiates_supported_version_and_all_notifications_are_silent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "brain.sqlite"
+            result = run_mcp(
+                [
+                    {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2099-01-01"}},
+                    {"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "brain_remember", "arguments": {"text": "notification side effect"}}},
+                    {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "brain_search", "arguments": {"query": "notification side effect"}}},
+                ],
+                db,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payloads = responses(result.stdout)
+            self.assertEqual(len(payloads), 2)
+            self.assertEqual(payloads[0]["result"]["protocolVersion"], "2025-06-18")
+            self.assertIn("notification side effect", payloads[1]["result"]["content"][0]["text"])
 
     def test_tool_calls_remember_search_and_context_pack(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from .ingest import (
     _lexical_root_for_candidate,
     build_file_record,
     chunk_text,
+    effective_file_limit,
     extract_terms,
     read_text,
     sha256_text,
@@ -94,17 +96,30 @@ def _prepare_database_path(db_path: Path) -> Path:
 def connect(db_path: Path) -> sqlite3.Connection:
     database = _prepare_database_path(db_path)
     conn = sqlite3.connect(str(database))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")
-    conn.execute("PRAGMA busy_timeout = 5000")
-    conn.execute("PRAGMA trusted_schema = OFF")
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("PRAGMA foreign_keys = ON")
+        for attempt in range(50):
+            try:
+                conn.execute("PRAGMA journal_mode = WAL")
+                break
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() or attempt == 49:
+                    raise
+                time.sleep(0.02)
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA trusted_schema = OFF")
+    except Exception:
+        conn.close()
+        raise
     if os.name != "nt":
-        for suffix in ("", "-wal", "-shm"):
-            sidecar = Path(str(database) + suffix)
-            if sidecar.exists() and sidecar.is_file() and not sidecar.is_symlink():
-                sidecar.chmod(0o600)
+        if database.stat().st_uid != os.getuid():
+            conn.close()
+            raise PermissionError(f"brain database is owned by another user: {database}")
+        for sidecar in (database, Path(f"{database}-wal"), Path(f"{database}-shm")):
+            if sidecar.exists() and sidecar.is_file() and not sidecar.is_symlink() and sidecar.stat().st_uid == os.getuid():
+                os.chmod(sidecar, 0o600)
     return conn
 
 
@@ -173,6 +188,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
             remaining_gaps TEXT NOT NULL DEFAULT '',
             next_action TEXT NOT NULL DEFAULT '',
             prohibited_repetition TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT 'operator',
+            trigger TEXT NOT NULL DEFAULT 'manual',
+            session_id TEXT,
             version INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -356,6 +374,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_edges_project_source_id ON edges(project_id, source_id, id);
         CREATE INDEX IF NOT EXISTS idx_edges_project_memory_id ON edges(project_id, memory_id, id);
         CREATE INDEX IF NOT EXISTS idx_sources_project_kind_title ON sources(project_id, kind, title);
+        CREATE INDEX IF NOT EXISTS idx_chunks_source_id ON chunks(source_id);
         CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_project_provider ON chunk_embeddings(project_id, provider, model);
         CREATE INDEX IF NOT EXISTS idx_checkpoints_project_updated ON checkpoints(project_id, updated_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_governance_policies_project_status ON governance_policies(project_id, status, id);
@@ -364,19 +383,32 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_memory_feedback_memory_created ON memory_feedback(memory_id, created_at DESC);
         """
     )
-    project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
-    if "repository_identity" not in project_columns:
-        conn.execute("ALTER TABLE projects ADD COLUMN repository_identity TEXT")
-    checkpoint_columns = {row["name"] for row in conn.execute("PRAGMA table_info(checkpoints)")}
-    if "version" not in checkpoint_columns:
-        conn.execute("ALTER TABLE checkpoints ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO memory_provenance(memory_id, timestamp, verification_status, metadata_json)
-        SELECT id, created_at, 'unverified', '{}' FROM memories
-        """
-    )
-    conn.commit()
+    try:
+        # Serialize introspection and ALTER statements across dashboard, MCP, and
+        # daemon connections opening an older brain at the same time.
+        conn.execute("BEGIN IMMEDIATE")
+        project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
+        if "repository_identity" not in project_columns:
+            conn.execute("ALTER TABLE projects ADD COLUMN repository_identity TEXT")
+        checkpoint_columns = {row["name"] for row in conn.execute("PRAGMA table_info(checkpoints)")}
+        if "version" not in checkpoint_columns:
+            conn.execute("ALTER TABLE checkpoints ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
+        if "source" not in checkpoint_columns:
+            conn.execute("ALTER TABLE checkpoints ADD COLUMN source TEXT NOT NULL DEFAULT 'operator'")
+        if "trigger" not in checkpoint_columns:
+            conn.execute("ALTER TABLE checkpoints ADD COLUMN trigger TEXT NOT NULL DEFAULT 'manual'")
+        if "session_id" not in checkpoint_columns:
+            conn.execute("ALTER TABLE checkpoints ADD COLUMN session_id TEXT")
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO memory_provenance(memory_id, timestamp, verification_status, metadata_json)
+            SELECT id, created_at, 'unverified', '{}' FROM memories
+            """
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def ensure_project(
@@ -762,6 +794,10 @@ def save_checkpoint(
     next_action: str = "",
     prohibited_repetition: str = "",
     expected_version: int | None = None,
+    source: str = "operator",
+    trigger: str = "manual",
+    session_id: str | None = None,
+    _commit: bool = True,
 ) -> dict:
     init_schema(conn)
     values = {
@@ -777,6 +813,9 @@ def save_checkpoint(
         if len(value) > 20_000:
             raise ValueError(f"checkpoint {key} exceeds the 20,000 character limit")
     project_id = ensure_project(conn, project)
+    source = str(source).strip() or "operator"
+    trigger = str(trigger).strip() or "manual"
+    session_id = str(session_id).strip() if session_id else None
     try:
         conn.execute("BEGIN IMMEDIATE")
         current = conn.execute(
@@ -794,15 +833,17 @@ def save_checkpoint(
             """
             INSERT INTO checkpoints(
                 project_id, objective, verified_evidence, remaining_gaps, next_action,
-                prohibited_repetition, version, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                prohibited_repetition, source, trigger, session_id, version, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 project_id, values["objective"], values["verified_evidence"], values["remaining_gaps"],
-                values["next_action"], values["prohibited_repetition"], version, timestamp, timestamp,
+                values["next_action"], values["prohibited_repetition"], source, trigger, session_id,
+                version, timestamp, timestamp,
             ),
         )
-        conn.commit()
+        if _commit:
+            conn.commit()
     except Exception:
         conn.rollback()
         raise
@@ -810,7 +851,8 @@ def save_checkpoint(
         "status": "ok",
         "project": project,
         "checkpoint": {
-            "id": int(cursor.lastrowid), **values, "version": version,
+            "id": int(cursor.lastrowid), **values, "source": source, "trigger": trigger,
+            "session_id": session_id, "version": version,
             "created_at": timestamp, "updated_at": timestamp,
         },
     }
@@ -821,7 +863,8 @@ def latest_checkpoint(conn: sqlite3.Connection, project: str = "default") -> dic
     row = conn.execute(
         """
         SELECT c.id, c.objective, c.verified_evidence, c.remaining_gaps, c.next_action,
-               c.prohibited_repetition, c.version, c.created_at, c.updated_at
+               c.prohibited_repetition, c.source, c.trigger, c.session_id,
+               c.version, c.created_at, c.updated_at
         FROM checkpoints c
         JOIN projects p ON p.id = c.project_id
         WHERE p.name = ?
@@ -1051,6 +1094,7 @@ def _ingest_repo_impl(
     root: Path,
     project: str = "default",
     force: bool = False,
+    repair_deep_stale: bool = False,
     allow_root_rebind: bool = False,
     changed_paths=None,
 ) -> dict:
@@ -1058,6 +1102,8 @@ def _ingest_repo_impl(
     root = root.resolve()
     if not root.exists() or not root.is_dir():
         raise ValueError(f"repo path does not exist or is not a directory: {root}")
+    if force and repair_deep_stale:
+        raise ValueError("force and repair_deep_stale are mutually exclusive")
     project_id = ensure_project(conn, project, str(root), allow_root_rebind=allow_root_rebind)
     changed_path_keys = _changed_path_keys(root, changed_paths)
     settings = get_project_settings(conn, project)
@@ -1083,7 +1129,7 @@ def _ingest_repo_impl(
         ).fetchone()["count"])
         embedding_index_ready = expected == actual
     if (
-        not force and not changed_path_keys and embedding_index_ready and prior_manifest
+        not force and not repair_deep_stale and not changed_path_keys and embedding_index_ready and prior_manifest
         and prior_manifest["digest"] == manifest_digest and int(prior_manifest["file_count"]) == len(path_stats)
     ):
         return {
@@ -1111,6 +1157,7 @@ def _ingest_repo_impl(
     embedded_chunks = 0
     parser_warnings = []
     for path, stat in path_stats:
+        file_max_bytes = effective_file_limit(root, path, max_file_bytes)
         path_key = str(path)
         path_changed = os.path.normcase(path_key) in changed_path_keys
         seen_paths.add(path_key)
@@ -1131,11 +1178,25 @@ def _ingest_repo_impl(
             parser_ready = indexed_parser == parser_adapter or (
                 parser_adapter == "auto" and str(indexed_parser).startswith("auto:")
             )
-            if not force and not path_changed and prior_metadata.get("mtime_ns") == stat.st_mtime_ns and prior_metadata.get("size") == stat.st_size and parser_ready and embedding_ready:
+            if repair_deep_stale:
+                text = read_text(path, max_bytes=file_max_bytes)
+                current_hash = sha256_text(text) if text is not None else ""
+                if current_hash:
+                    conn.execute(
+                        "INSERT INTO file_hash_cache(project_id, path, size, mtime_ns, sha256, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(project_id, path) DO UPDATE SET size = excluded.size, mtime_ns = excluded.mtime_ns, "
+                        "sha256 = excluded.sha256, updated_at = excluded.updated_at",
+                        (project_id, path_key, stat.st_size, stat.st_mtime_ns, current_hash, now_iso()),
+                    )
+                if current_hash == row["hash"] and parser_ready and embedding_ready:
+                    indexed_files += 1
+                    unchanged_files += 1
+                    continue
+            if not force and not repair_deep_stale and not path_changed and prior_metadata.get("mtime_ns") == stat.st_mtime_ns and prior_metadata.get("size") == stat.st_size and parser_ready and embedding_ready:
                 indexed_files += 1
                 unchanged_files += 1
                 continue
-            if not force and not path_changed and "mtime_ns" not in prior_metadata:
+            if not force and not repair_deep_stale and not path_changed and "mtime_ns" not in prior_metadata:
                 try:
                     indexed_at = datetime.fromisoformat(row["updated_at"]).timestamp()
                 except (TypeError, ValueError):
@@ -1144,8 +1205,8 @@ def _ingest_repo_impl(
                     indexed_files += 1
                     unchanged_files += 1
                     continue
-            text = read_text(path, max_bytes=max_file_bytes, root=root)
-            if not force and text is not None and sha256_text(text) == row["hash"] and parser_ready and embedding_ready:
+            text = read_text(path, max_bytes=file_max_bytes)
+            if not force and not repair_deep_stale and not path_changed and text is not None and sha256_text(text) == row["hash"] and parser_ready and embedding_ready:
                 if "mtime_ns" in prior_metadata:
                     metadata = {**prior_metadata, "mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
                     conn.execute("UPDATE sources SET metadata_json = ?, updated_at = ? WHERE id = ?", (json.dumps(metadata), now_iso(), int(row["id"])))
@@ -1153,7 +1214,7 @@ def _ingest_repo_impl(
                 unchanged_files += 1
                 continue
         record = build_file_record(
-            root, path, max_bytes=max_file_bytes, parser_name=parser_adapter,
+            root, path, max_bytes=file_max_bytes, parser_name=parser_adapter,
             lsp_command=str(settings["lsp_command"]), parser_registry=parser_registry,
         )
         if record is None:
@@ -1273,6 +1334,7 @@ def _ingest_repo_impl(
         "parser_adapter": parser_adapter, "embedding_provider": embedding_provider_name,
         "parser_warnings": parser_warnings[:100], "manifest_unchanged": False,
         "verified_changed_paths": len(changed_path_keys),
+        "deep_stale_repair": bool(repair_deep_stale),
     }
 
 
@@ -1281,6 +1343,7 @@ def ingest_repo(
     root: Path,
     project: str = "default",
     force: bool = False,
+    repair_deep_stale: bool = False,
     allow_root_rebind: bool = False,
     changed_paths=None,
 ) -> dict:
@@ -1291,6 +1354,7 @@ def ingest_repo(
             root,
             project=project,
             force=force,
+            repair_deep_stale=repair_deep_stale,
             allow_root_rebind=allow_root_rebind,
             changed_paths=changed_paths,
         )
@@ -1313,6 +1377,91 @@ def query_to_fts(query: str) -> str:
         meaningful.append(token)
     selected = meaningful or tokens[:4]
     return " OR ".join(selected[:8])
+
+
+_CONSEQUENTIAL_SOURCE_TERMS = {
+    "active",
+    "architecture",
+    "authority",
+    "canonical",
+    "complete",
+    "completion",
+    "current",
+    "goal",
+    "incomplete",
+    "launch",
+    "objective",
+    "remaining",
+    "source",
+    "status",
+    "truth",
+}
+
+_SOURCE_INTENT_TERMS = {
+    "architecture",
+    "drift",
+    "filesystem",
+    "formulations",
+    "implements",
+    "ledger",
+    "loom",
+    "mathematical",
+    "mathematics",
+    "skill",
+    "skills",
+    "structure",
+    "workbench",
+}
+
+
+def _is_consequential_source_query(query: str) -> bool:
+    tokens = {token.lower() for token in re.findall(r"[A-Za-z0-9_]+", query)}
+    return bool(
+        len(tokens & _CONSEQUENTIAL_SOURCE_TERMS) >= 2
+        or ("source" in tokens and tokens & _SOURCE_INTENT_TERMS)
+    )
+
+
+def _source_authority_score(path: str, query: str) -> int:
+    """Prefer current source contracts over tests and packaged historical copies.
+
+    The score is deliberately path- and intent-based. It does not claim that a
+    retrieved excerpt is true; it only makes the most likely canonical source
+    easier to verify first for consequential project-state questions.
+    """
+
+    if not _is_consequential_source_query(query):
+        return 0
+    normalized = str(path or "").replace("\\", "/").lower()
+    basename = normalized.rsplit("/", 1)[-1]
+    query_tokens = {
+        token.lower() for token in re.findall(r"[A-Za-z0-9_]+", query)
+    }
+    score = 0
+    if normalized.startswith("00_source_of_truth/") or "/00_source_of_truth/" in normalized:
+        score += 60
+    if (
+        "live_context" in basename
+        and query_tokens & {"current", "status", "remaining", "active", "latest"}
+        and not query_tokens & {"goal", "objective", "completion"}
+    ):
+        score += 90
+    if "active_goal" in basename and query_tokens & {"goal", "objective", "complete", "completion", "incomplete"}:
+        score += 120
+        version_match = re.search(r"_v(\d+)(?:\.[^/]*)?\.md$", basename)
+        if version_match:
+            score += min(25, int(version_match.group(1)))
+    if query_tokens & {"skill", "skills", "drift"} and basename == "agents.md":
+        score += 280
+    if basename in {"agents.md", "architecture.md", "readme.md"}:
+        score += 20
+    if normalized.startswith("03_tests/") or "/03_tests/" in normalized or "/tests/" in normalized:
+        score -= 90
+    if normalized.startswith("04_deployment/") or "/04_deployment/" in normalized:
+        score -= 55
+    if "__pycache__" in normalized or normalized.endswith((".pyc", ".pyo")):
+        score -= 120
+    return score
 
 
 def search(
@@ -1355,7 +1504,12 @@ def search(
     provider_name = str(settings["embedding_provider"])
     use_hybrid = (provider_name != "none") if hybrid is None else bool(hybrid and provider_name != "none")
     project_count = int(conn.execute("SELECT COUNT(*) AS count FROM projects").fetchone()["count"])
-    candidate_limit = limit if project_count <= 1 else min(5000, max(512, limit * 64))
+    consequential_source_query = _is_consequential_source_query(query)
+    candidate_limit = (
+        min(5000, max(512, limit * 64))
+        if project_count > 1 or consequential_source_query
+        else limit
+    )
 
     memory_candidates = conn.execute(
         """
@@ -1412,10 +1566,42 @@ def search(
         """,
         (fts_query, candidate_limit),
     ).fetchall()
-    selected_chunks = [
+    project_chunks = [
         row for row in chunk_candidates
         if project_id is None or int(row["project_id"]) == project_id
-    ][:limit]
+    ]
+    if consequential_source_query and project_id is not None:
+        canonical_candidates = conn.execute(
+            """
+            SELECT c.id AS chunk_id, s.project_id, s.title AS path, 1000000.0 AS rank
+            FROM sources s
+            JOIN chunks c ON c.source_id = s.id AND c.ordinal = 0
+            WHERE s.project_id = ?
+              AND (
+                lower(s.title) LIKE '00_source_of_truth/%'
+                OR lower(s.title) IN ('agents.md', 'architecture.md', 'readme.md')
+                OR lower(s.title) LIKE '%live_context%.md'
+                OR lower(s.title) LIKE '%active_goal%'
+              )
+            LIMIT 5000
+            """,
+            (project_id,),
+        ).fetchall()
+        by_chunk_id = {int(row["chunk_id"]): row for row in project_chunks}
+        for row in canonical_candidates:
+            if _source_authority_score(str(row["path"] or ""), query) > 0:
+                by_chunk_id.setdefault(int(row["chunk_id"]), row)
+        project_chunks = list(by_chunk_id.values())
+    if consequential_source_query:
+        project_chunks = sorted(
+            project_chunks,
+            key=lambda row: (
+                -_source_authority_score(str(row["path"] or ""), query),
+                float(row["rank"]),
+                str(row["path"] or ""),
+            ),
+        )
+    selected_chunks = project_chunks[:limit]
     chunks = []
     if selected_chunks:
         chunk_ids = [int(row["chunk_id"]) for row in selected_chunks]
@@ -1438,8 +1624,15 @@ def search(
             if item:
                 item["path"] = candidate["path"]
                 item["rank"] = candidate["rank"]
+                item["source_authority_score"] = _source_authority_score(
+                    str(candidate["path"] or ""), query
+                )
                 chunks.append(item)
-    retrieval = {"mode": "fts", "provider": "none"}
+    retrieval = {
+        "mode": "fts",
+        "provider": "none",
+        "canonical_source_reranking": consequential_source_query,
+    }
     if use_hybrid and project_id is not None:
         provider = create_provider(provider_name, str(settings["embedding_model"]))
         query_vector = provider.embed([query])[0]
@@ -1810,6 +2003,7 @@ def stale_check(
     conn: sqlite3.Connection,
     project: str = "default",
     deep: bool = False,
+    refresh_hashes: bool = False,
     detail_limit: int = 50,
     include_fresh_details: bool = False,
 ) -> dict:
@@ -1886,12 +2080,12 @@ def stale_check(
         stat = current_by_path.get(str(path))
         if stat is None:
             status = "missing"
-        elif deep:
+        elif deep or refresh_hashes:
             cached = conn.execute(
                 "SELECT sha256 FROM file_hash_cache WHERE project_id = ? AND path = ? AND size = ? AND mtime_ns = ?",
                 (int(row["id"]), str(path), stat.st_size, stat.st_mtime_ns),
             ).fetchone()
-            if cached:
+            if cached and not refresh_hashes:
                 current_hash = cached["sha256"]
                 hash_cache_hits += 1
             else:

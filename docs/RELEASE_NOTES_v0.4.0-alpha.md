@@ -5,6 +5,16 @@ This alpha turns repository memory from a manual snapshot into an operator-contr
 ## New
 
 - Foreground `watch-repo` plus managed-background `watcher` lifecycle commands using incremental manifests, event-scoped content hashing, and periodic polling verification
+- Managed Codex continuity lifecycle with canonical-project session discovery, resumable cursors, heartbeat-validated start/status/stop controls, and conservative automatic checkpoints
+- Bounded 30-day discovery plus explicit recent-tail recovery for oversized transcript backlogs, preventing silent disk growth while recording provenance-bearing truncation events
+- Append-only session events with common credential redaction, oversized-output bounds, partial-write recovery, and verification status
+- Structured work-state records and filesystem reconciliation for assets, jobs, approvals, blockers, QA decisions, fallbacks, and next actions
+- Operational readiness that distinguishes database health from checkpoint, reconciliation, capture-backlog, lifecycle, and error readiness
+- One fail-closed multi-project MCP gateway for native context, checkpoint, event, work-state, reconciliation, continuity, and doctor tools
+- Dashboard lifecycle health, backlog, checkpoint provenance, and safe continuity controls
+- Owner-only POSIX database/daemon modes, linked-artifact rejection, bounded MCP frames, protocol negotiation, and notification-safe JSON-RPC handling
+
+- Foreground `watch-repo` plus managed-background `watcher` lifecycle commands using incremental manifests, event-scoped content hashing, and periodic polling verification
 - Dashboard repository-sync controls with heartbeat, backend, and error visibility
 - Persistent SHA-256 cache for repeated deep freshness checks
 - Optional local hybrid FTS and vector retrieval

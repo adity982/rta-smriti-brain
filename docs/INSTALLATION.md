@@ -113,6 +113,32 @@ Use `rta-brain console open --brain-dir <path>` later. `console status`,
 by default; `console login-enable` adds a user-level Windows, macOS, or Linux
 registration and `console login-disable` removes it. Neither mode is privileged.
 
+## Codex Continuity And MCP
+
+Start automatic capture for one bootstrapped project:
+
+```powershell
+& $RtaBrain --db "$BrainDir\project-name.sqlite" continuity start --project project-name
+```
+
+```bash
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" continuity start --project project-name
+```
+
+Use `continuity status` to inspect its heartbeat and `continuity stop` before moving or deleting a brain. The service is an explicit user process, stores state beside the brain, and must be started again after reboot.
+
+On macOS and Linux, Rta-Smriti restricts brain databases and daemon files to the owning account (`0600`, with `0700` control directories). Do not share one OS login between mutually untrusted users or agents: processes under the same account can still access that account's files. Windows privacy follows the ACLs of the selected brain directory, so keep it under your private user profile rather than a shared folder.
+
+The first start considers sessions changed within the last 30 days. Use `--lookback-days N` to choose another bounded window, or `--lookback-days 0` to consider every matching session. For an oversized new or resumed backlog, the service starts from its latest 2 MB, records an explicit truncation event, and captures every subsequent append; use `--backlog-tail-mb` to change that bound. `sessions_pending` in status must reach zero before the lifecycle is continuation-ready.
+
+Generate one MCP gateway configuration for the whole brain directory:
+
+```powershell
+& $RtaBrain --json mcp-config --brain-dir $BrainDir --name rta-smriti
+```
+
+Register the emitted absolute command and arguments in Codex or another MCP host. Restart the host completely and create a new task before testing the tools. Use the single-database `mcp-config --project ...` form only when the host should access one project.
+
 ## Optional Local Capabilities
 
 ```bash
@@ -148,6 +174,8 @@ not required by an installed wheel.
 - **The requested port is occupied:** `console start` or `restart` selects an available loopback port and records it in status.
 - **A project identity mismatch appears:** verify that you selected the intended checkout; a different repository cannot be rebound over the existing brain.
 - **A project is blocked:** run `self-check --check-files`; blocked or changed files remain fail-closed until deliberately resolved.
+- **MCP tools do not appear:** verify the generated absolute paths, restart the MCP host completely, and open a new task; running tasks cannot acquire a newly registered server.
+- **Continuity is stale:** run `continuity status`, then `continuity start`; stale PID state is rejected using both process liveness and heartbeat age.
 
 ## Uninstall
 

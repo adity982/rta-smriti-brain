@@ -428,9 +428,12 @@ function App() {
   const [parserCapabilities, setParserCapabilities] = useState({});
   const [watcher, setWatcher] = useState({ state: "stopped", backend: null });
   const [isChangingWatcher, setIsChangingWatcher] = useState(false);
+  const [continuity, setContinuity] = useState({ state: "stopped", backend: null });
+  const [isChangingContinuity, setIsChangingContinuity] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [receipts, setReceipts] = useState([]);
   const [checkpoint, setCheckpoint] = useState(null);
+  const [continuationReadiness, setContinuationReadiness] = useState(null);
   const [isSavingCheckpoint, setIsSavingCheckpoint] = useState(false);
   const [isRefreshingPublish, setIsRefreshingPublish] = useState(false);
   const [referenceHistory, setReferenceHistory] = useState([]);
@@ -532,7 +535,16 @@ function App() {
     const governanceRequestId = governanceRequestRef.current + 1;
     governanceRequestRef.current = governanceRequestId;
     const params = { db_path: project.db_path, project: project.project };
-    const [memoryPayload, graphPayload, stalePayload, settingsPayload, checkpointPayload, watcherPayload, governancePayload] = await Promise.all([
+    const [
+      memoryPayload,
+      graphPayload,
+      stalePayload,
+      settingsPayload,
+      checkpointPayload,
+      watcherPayload,
+      governancePayload,
+      continuityPayload,
+    ] = await Promise.all([
       api(`/api/memories?${qs({ ...params, limit: 40 })}`),
       api(`/api/graph?${qs({ ...params, limit: 120 })}`),
       api(`/api/stale-check?${qs(params)}`),
@@ -540,6 +552,7 @@ function App() {
       api(`/api/checkpoint?${qs(params)}`),
       api(`/api/watcher?${qs(params)}`),
       api(`/api/governance?${qs({ ...params, limit: 50 })}`),
+      api(`/api/continuity?${qs(params)}`),
     ]);
     if (requestId !== projectRequestRef.current) return;
     setMemories(memoryPayload.memories || []);
@@ -548,10 +561,12 @@ function App() {
     setProjectSettings(settingsPayload.settings);
     setParserCapabilities(settingsPayload.parser_capabilities || {});
     setCheckpoint(checkpointPayload.checkpoint || null);
+    setContinuationReadiness(checkpointPayload.readiness || null);
     setWatcher(watcherPayload);
     if (governanceRequestId === governanceRequestRef.current) {
       setGovernance({ policies: governancePayload.policies || [], receipts: governancePayload.receipts || [] });
     }
+    setContinuity(continuityPayload);
     setSelectedNode(null);
     setReferenceHistory([]);
   }
@@ -610,10 +625,36 @@ function App() {
       loadProjectDetails(selectedProject)
         .then(async () => {
           if (viewMode === "files") await loadFiles("", "", selectedProject);
-          setMessage(`${selectedProject.project} ready.`);
+          setMessage(`${selectedProject.project} index loaded.`);
         })
         .catch((error) => setMessage(`Could not load ${selectedProject.project}: ${error.message}`));
     }
+  }, [selectedProject?.db_path, selectedProject?.project]);
+
+  useEffect(() => {
+    if (!selectedProject) return undefined;
+    let cancelled = false;
+    const params = { db_path: selectedProject.db_path, project: selectedProject.project };
+    const refreshContinuity = async () => {
+      try {
+        const [continuityPayload, checkpointPayload] = await Promise.all([
+          api(`/api/continuity?${qs(params)}`),
+          api(`/api/checkpoint?${qs(params)}`),
+        ]);
+        if (!cancelled) {
+          setContinuity(continuityPayload);
+          setCheckpoint(checkpointPayload.checkpoint || null);
+          setContinuationReadiness(checkpointPayload.readiness || null);
+        }
+      } catch {
+        // The full project refresh surfaces persistent backend errors to the operator.
+      }
+    };
+    const timer = window.setInterval(refreshContinuity, 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, [selectedProject?.db_path, selectedProject?.project]);
 
   useEffect(() => {
@@ -792,6 +833,25 @@ function App() {
       setMessage(`Background sync could not stop: ${error.message}`);
     } finally {
       setIsChangingWatcher(false);
+    }
+  }
+
+  async function toggleContinuity() {
+    if (!selectedParams || isChangingContinuity) return;
+    const running = continuity?.state === "running";
+    setIsChangingContinuity(true);
+    setMessage(`${running ? "Stopping" : "Starting"} continuity capture for ${selectedProject.project}...`);
+    try {
+      const payload = await api("/api/continuity", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, action: running ? "stop" : "start", interval: 2, inactivity: 900 }),
+      });
+      setContinuity(payload);
+      setMessage(running ? "Continuity capture stopped." : "Continuity capture is monitoring Codex sessions.");
+    } catch (error) {
+      setMessage(`Continuity capture could not ${running ? "stop" : "start"}: ${error.message}`);
+    } finally {
+      setIsChangingContinuity(false);
     }
   }
 
@@ -1103,11 +1163,9 @@ function App() {
 
   const shellKind = health?.shell || "powershell";
   const commandDbPath = presentationMode
-    ? shellKind === "powershell"
-      ? `$env:USERPROFILE\\Documents\\Rta-Smriti\\brains\\${selectedProject?.project || "project"}.sqlite`
-      : `$HOME/.local/share/rta-smriti/brains/${selectedProject?.project || "project"}.sqlite`
+    ? `${selectedProject?.project || "project"}.sqlite`
     : selectedProject?.db_path;
-  const cliCommand = health?.cli_command || "rta-brain";
+  const cliCommand = presentationMode ? "rta-brain" : health?.cli_command || "rta-brain";
   const command = selectedProject
     ? `${cliCommand} --db ${shellPathArg(commandDbPath, shellKind)} context-pack ${shellQuote(task || "<task>", shellKind)} --project ${shellQuote(selectedProject.project, shellKind)} --max-tokens ${contextBudget}`
     : "Select a project";
@@ -1120,7 +1178,7 @@ function App() {
             <BrainCircuit size={25} />
           </div>
           <div>
-            <strong>Rta-Smriti Brain</strong>
+            <h1>Rta-Smriti Brain</h1>
             <span>v0.4 Alpha Operator Console</span>
           </div>
         </div>
@@ -1128,7 +1186,7 @@ function App() {
           <span className="localBadge">
             <ShieldCheck size={15} /> Local Only
           </span>
-          <span className="pathText">Brain Path {presentationMode ? "%USERPROFILE%\\Documents\\Rta-Smriti\\brains" : displayPath(health?.brain_dir)}</span>
+          <span className="pathText">Brain Path {presentationMode ? "Local demo brain" : displayPath(health?.brain_dir)}</span>
         </div>
         <div className="topActions">
           <button className="ghostButton" onClick={() => showDrawer("bootstrap")}>
@@ -1177,7 +1235,7 @@ function App() {
                       setSelectedProject(project);
                       setProjectsOpen(false);
                     }}
-                    aria-label={`${project.project}, ${safeNumber(project.sources)} files, ${project.root_conflict ? "root conflict" : project.ready ? "ready" : "needs attention"}`}
+                    aria-label={`${project.project}, ${safeNumber(project.sources)} files, ${project.root_conflict ? "root conflict" : project.ready ? "indexed" : "needs indexing"}`}
                   >
                     <Network size={15} />
                     <span>
@@ -1224,7 +1282,7 @@ function App() {
           </nav>
           <div className="railFooter">
             <span>
-              <Database size={15} /> {readyProjects}/{projects.length} ready
+              <Database size={15} /> {readyProjects}/{projects.length} indexed
             </span>
             <span>
               <HardDrive size={15} /> SQLite
@@ -1305,6 +1363,9 @@ function App() {
                   onStartWatcher={startWatcher}
                   onStopWatcher={stopWatcher}
                   isChangingWatcher={isChangingWatcher}
+                  continuity={continuity}
+                  onToggleContinuity={toggleContinuity}
+                  isChangingContinuity={isChangingContinuity}
                 />
               )}
             </div>
@@ -1430,6 +1491,7 @@ function App() {
           {activeDrawer === "checkpoint" && (
             <CheckpointPanel
               checkpoint={checkpoint}
+              readiness={continuationReadiness}
               project={selectedProject}
               onSave={saveCheckpoint}
               onCopy={copyContinuationPrompt}
@@ -1473,6 +1535,7 @@ function GraphSettings({
   depth, setDepth, showLabels, setShowLabels, showEdges, setShowEdges,
   projectSettings, setProjectSettings, parserCapabilities, onSave, isSaving,
   watcher, onStartWatcher, onStopWatcher, isChangingWatcher,
+  continuity, onToggleContinuity, isChangingContinuity,
 }) {
   const settings = projectSettings || {};
   const updateSetting = (key, value) => setProjectSettings((current) => ({ ...(current || {}), [key]: value }));
@@ -1548,6 +1611,25 @@ function GraphSettings({
         >
           {watcher?.state === "running" ? <CircleDot size={15} /> : <Activity size={15} />}
           {isChangingWatcher ? "Working..." : watcher?.state === "running" ? "Stop Sync" : "Start Sync"}
+        </button>
+      </div>
+      <div className="settingsGroup watcherSettings continuitySettings">
+        <div className="watcherHeading">
+          <span className={`watcherDot ${continuity?.state === "running" ? "running" : ""}`} />
+          <span><strong>Task continuity</strong><small>{continuity?.state || "stopped"}{continuity?.backend ? ` / ${continuity.backend}` : ""}</small></span>
+        </div>
+        <p>Capture matching Codex sessions and create clearly marked, unverified interruption checkpoints.</p>
+        {continuity?.last_capture_at && <small>Last capture {new Date(continuity.last_capture_at).toLocaleString()}</small>}
+        {continuity?.last_checkpoint_at && <small>Last checkpoint {new Date(continuity.last_checkpoint_at).toLocaleString()}</small>}
+        {continuity?.state === "running" && <small>{continuity?.sessions_pending || 0} session{continuity?.sessions_pending === 1 ? "" : "s"} pending / {continuity?.lookback_days === 0 ? "all history" : `${continuity?.lookback_days || 30}-day lookback`}</small>}
+        {continuity?.last_error && <em className="watcherError" title={continuity.last_error}>Capture needs attention</em>}
+        <button
+          className={continuity?.state === "running" ? "watcherStopButton" : "watcherStartButton"}
+          onClick={onToggleContinuity}
+          disabled={isChangingContinuity}
+        >
+          {continuity?.state === "running" ? <CircleDot size={15} /> : <Activity size={15} />}
+          {isChangingContinuity ? "Working..." : continuity?.state === "running" ? "Stop Capture" : "Start Capture"}
         </button>
       </div>
     </div>
@@ -2436,7 +2518,7 @@ function RepoTree({ project }) {
   );
 }
 
-function CheckpointPanel({ checkpoint, project, onSave, onCopy, isSaving }) {
+function CheckpointPanel({ checkpoint, readiness, project, onSave, onCopy, isSaving }) {
   const [values, setValues] = useState({
     objective: "",
     verified_evidence: "",
@@ -2469,6 +2551,18 @@ function CheckpointPanel({ checkpoint, project, onSave, onCopy, isSaving }) {
         {project?.repository_identity && <small title={project.repository_identity}>Identity: {project.repository_identity.slice(0, 18)}...</small>}
         {git.is_git_repo && <small>{git.branch} @ {git.head || "unborn"} / {git.dirty_files} dirty</small>}
       </div>
+      {checkpoint?.source === "continuity-daemon" && (
+        <div className="automaticCheckpointNotice" role="status">
+          <ShieldCheck size={16} />
+          <span><strong>Automatically captured</strong><small>{checkpoint.trigger?.replaceAll("_", " ")} / evidence remains unverified until reviewed</small></span>
+        </div>
+      )}
+      {readiness?.reasons?.includes("continuity_history_truncated") && (
+        <div className="automaticCheckpointNotice readinessWarning" role="alert">
+          <CircleDot size={16} />
+          <span><strong>Manual review required</strong><small>Older transcript history was omitted by the configured capture bound. Review the retained events and source evidence, then save a manual checkpoint.</small></span>
+        </div>
+      )}
       <label><span>Objective</span><textarea rows="2" value={values.objective} onChange={(event) => update("objective", event.target.value)} /></label>
       <label><span>Verified Evidence</span><textarea rows="3" value={values.verified_evidence} onChange={(event) => update("verified_evidence", event.target.value)} /></label>
       <label><span>Remaining Gaps</span><textarea rows="2" value={values.remaining_gaps} onChange={(event) => update("remaining_gaps", event.target.value)} /></label>

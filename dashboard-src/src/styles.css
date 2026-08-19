@@ -98,7 +98,8 @@ select optgroup {
   box-shadow: 0 0 26px rgba(20, 184, 166, 0.18);
 }
 
-.brand strong {
+.brand h1 {
+  margin: 0;
   display: block;
   font-size: 17px;
   letter-spacing: 0;
@@ -2700,6 +2701,30 @@ textarea:focus {
 .checkpointIdentity.conflict {
   border-color: rgba(245, 158, 11, 0.42);
   background: rgba(245, 158, 11, 0.08);
+}
+
+.automaticCheckpointNotice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 0;
+  color: #f2c94c;
+  border-bottom: 1px solid var(--line);
+}
+
+.readinessWarning {
+  border-color: rgba(245, 185, 66, 0.48);
+  background: rgba(245, 185, 66, 0.08);
+  color: #f5c96a;
+}
+
+.automaticCheckpointNotice span {
+  display: grid;
+  gap: 2px;
+}
+
+.automaticCheckpointNotice small {
+  color: var(--muted);
 }
 
 .checkpointIdentity span,

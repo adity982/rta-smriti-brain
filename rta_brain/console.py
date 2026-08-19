@@ -30,6 +30,8 @@ from .lifecycle import apply_memory_feedback, run_conservative_decay
 from .portability import export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_verify
 from .watch_daemon import start_watcher, stop_watcher, watcher_status
 from .workspaces import add_project_to_workspace, create_workspace, get_workspace, list_workspaces, search_workspace
+from .continuity_daemon import continuity_status, start_continuity, stop_continuity
+from .continuity import operational_readiness
 
 
 @dataclass(frozen=True)
@@ -676,11 +678,25 @@ def make_handler(config: ConsoleConfig):
                     db_path = resolve_brain_db(config, q["db_path"])
                     self._json(watcher_status(db_path, q["project"]))
                     return
+                if parsed.path == "/api/continuity":
+                    q = _query(self)
+                    db_path = resolve_brain_db(config, q["db_path"])
+                    self._json(continuity_status(db_path, q["project"]))
+                    return
                 if parsed.path == "/api/checkpoint":
                     q = _query(self)
-                    conn = _open_db(resolve_brain_db(config, q["db_path"]))
+                    db_path = resolve_brain_db(config, q["db_path"])
+                    conn = _open_db(db_path)
                     try:
-                        self._json({"status": "ok", "project": q["project"], "checkpoint": latest_checkpoint(conn, q["project"])})
+                        self._json({
+                            "status": "ok",
+                            "project": q["project"],
+                            "checkpoint": latest_checkpoint(conn, q["project"]),
+                            "readiness": operational_readiness(
+                                conn, q["project"], lifecycle=continuity_status(db_path, q["project"]),
+                                include_event_count=False,
+                            ),
+                        })
                     finally:
                         conn.close()
                     return
@@ -898,7 +914,34 @@ def make_handler(config: ConsoleConfig):
                             db_path,
                             Path(row["root_path"]),
                             project,
+                            interval_seconds=float(payload.get("interval", 5.0)),
+                        )
+                    )
+                    return
+                if self.path == "/api/continuity":
+                    db_path = resolve_brain_db(config, payload["db_path"])
+                    project = str(payload["project"])
+                    action = str(payload.get("action", "status"))
+                    if action == "stop":
+                        self._json(stop_continuity(db_path, project))
+                        return
+                    if action != "start":
+                        raise ValueError("continuity action must be start or stop")
+                    conn = _open_db(db_path)
+                    try:
+                        row = conn.execute("SELECT root_path FROM projects WHERE name = ?", (project,)).fetchone()
+                    finally:
+                        conn.close()
+                    if not row or not row["root_path"]:
+                        raise ValueError("project has no canonical root for continuity capture")
+                    self._json(
+                        start_continuity(
+                            db_path,
+                            Path(row["root_path"]),
+                            project,
+                            Path(payload.get("sessions_root") or (Path.home() / ".codex" / "sessions")),
                             interval_seconds=float(payload.get("interval", 2.0)),
+                            inactivity_seconds=float(payload.get("inactivity", 900.0)),
                         )
                     )
                     return

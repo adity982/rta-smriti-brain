@@ -169,6 +169,8 @@ Login startup is optional, user-level, and reversible:
 
 Before ending a meaningful session, open **Continue Work** and record the objective, verified evidence, remaining gaps, safest next action, and exploration that should not be repeated. Save the checkpoint, then use **Copy New Task Prompt** when opening the next agent task.
 
+For Codex, enable **Settings > Task continuity** once per project. It captures only sessions whose declared working directory belongs to that canonical project, resumes after partial writes, redacts common credential shapes, and marks automatic checkpoints as unverified until a human or agent reconciles them.
+
 Graph is the map, Files is the source reader, Canvas is the working board, Bases is the structured database, and the Context-Pack Studio is the handoff point.
 
 ### Connect An MCP-Capable Agent
@@ -222,7 +224,7 @@ Filters the graph by node type.
 
 **Settings**
 
-Controls the active project's indexing policy. Auto parsing uses an installed Tree-sitter grammar when supported and safely falls back to built-in regex. You can also select regex explicitly, configure an LSP bridge, change hybrid retrieval, or adjust the fail-closed source cap. External providers are never installed automatically.
+Controls the active project's indexing policy, repository watcher, and task-continuity service. Auto parsing uses an installed Tree-sitter grammar when supported and safely falls back to built-in regex. You can also select regex explicitly, configure an LSP bridge, change hybrid retrieval, or adjust the fail-closed source cap. External providers are never installed automatically.
 
 **Context-Pack Studio**
 
@@ -360,6 +362,29 @@ Use `--deep` for SHA-256 freshness with stat-keyed cache reuse. Fresh file rows 
 ```
 
 The equivalent macOS/Linux commands use `"$RtaBrain"` and `$BrainDir/project-name.sqlite` as shown earlier.
+
+## Run Managed Task Continuity
+
+Start once per active project after bootstrap:
+
+```powershell
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" continuity start --project project-name
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json continuity status --project project-name
+```
+
+The service considers sessions changed in the last 30 days. Oversized new or resumed backlogs retain a recent 2 MB tail and write an explicit `history_truncated` event before capturing every subsequent append. A project is not continuation-ready while `sessions_pending` is nonzero or capture errors exist. Stop it before moving or deleting the brain:
+
+```powershell
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" continuity stop --project project-name
+```
+
+For one native MCP registration across every brain, generate the gateway configuration:
+
+```powershell
+& $RtaBrain mcp-config --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains" --name rta-smriti
+```
+
+Add the emitted configuration to the MCP host and start a new agent task. Existing tasks cannot dynamically acquire newly registered MCP tools. In multi-project mode every tool call must name a project, and duplicate project names fail closed.
 
 ## Attach Claim Provenance
 

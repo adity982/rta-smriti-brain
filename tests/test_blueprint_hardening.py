@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import json
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -26,6 +27,34 @@ class RtaBrainBlueprintHardeningTests(unittest.TestCase):
                 self.assertEqual(conn.execute("PRAGMA busy_timeout").fetchone()[0], 5000)
             finally:
                 conn.close()
+
+    def test_concurrent_first_open_serializes_legacy_schema_migration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "legacy.sqlite"
+            raw = sqlite3.connect(db_path)
+            raw.executescript("""
+                CREATE TABLE projects(id INTEGER PRIMARY KEY, name TEXT UNIQUE, root_path TEXT, created_at TEXT NOT NULL);
+                CREATE TABLE checkpoints(
+                    id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, objective TEXT NOT NULL,
+                    verified_evidence TEXT NOT NULL DEFAULT '', remaining_gaps TEXT NOT NULL DEFAULT '',
+                    next_action TEXT NOT NULL DEFAULT '', prohibited_repetition TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+            """)
+            raw.close()
+
+            def migrate():
+                conn = db.connect(db_path)
+                try:
+                    db.init_schema(conn)
+                    return {row["name"] for row in conn.execute("PRAGMA table_info(checkpoints)")}
+                finally:
+                    conn.close()
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                results = [future.result() for future in (pool.submit(migrate), pool.submit(migrate))]
+            for columns in results:
+                self.assertTrue({"version", "source", "trigger", "session_id"}.issubset(columns))
 
     def test_repository_identity_survives_a_git_checkout_move(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -176,6 +205,99 @@ class RtaBrainBlueprintHardeningTests(unittest.TestCase):
                 self.assertIn("Content pruned to honor token budget", pack)
             finally:
                 conn.close()
+
+    def test_consequential_goal_query_prefers_canonical_source_over_old_test_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            (root / "00_Source_of_Truth").mkdir(parents=True)
+            (root / "03_Tests" / "unit").mkdir(parents=True)
+            goal = root / "00_Source_of_Truth" / "RTA_NET_ACTIVE_GOAL_v004.md"
+            goal.write_text(
+                "# Active goal\n\nThe strict current count is 9/12. "
+                "Benchmark breadth and launch qualification remain incomplete.\n",
+                encoding="utf-8",
+            )
+            (root / "03_Tests" / "unit" / "test_old_goal.py").write_text(
+                "The active goal remains incomplete at 2/11 requirements.\n" * 20,
+                encoding="utf-8",
+            )
+            (root / "00_Source_of_Truth" / "RTA_NET_ACTIVE_GOAL_v003.md").write_text(
+                "# Superseded goal\n\nThe strict historical count is 9/11.\n",
+                encoding="utf-8",
+            )
+            conn = db.connect(Path(tmp) / "brain.sqlite")
+            try:
+                db.ingest_repo(conn, root, project="demo")
+                query = "Which active source defines the current goal and what remains incomplete?"
+                result = db.search(conn, query, project="demo", limit=2)
+                self.assertTrue(result["retrieval"]["canonical_source_reranking"])
+                self.assertEqual(
+                    result["chunks"][0]["path"],
+                    "00_Source_of_Truth/RTA_NET_ACTIVE_GOAL_v004.md",
+                )
+                self.assertGreaterEqual(
+                    result["chunks"][0]["source_authority_score"], 60
+                )
+                pack = build_context_pack(
+                    conn, query, project="demo", limit=2, max_tokens=1200
+                )
+                self.assertIn("RTA_NET_ACTIVE_GOAL_v004.md", pack)
+                if "test_old_goal.py" in pack:
+                    self.assertLess(
+                        pack.index("RTA_NET_ACTIVE_GOAL_v004.md"),
+                        pack.index("test_old_goal.py"),
+                    )
+                self.assertIn("canonical-source candidate", pack)
+            finally:
+                conn.close()
+
+    def test_consequential_source_intents_inject_the_expected_canonical_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            source_truth = root / "00_Source_of_Truth"
+            source_truth.mkdir(parents=True)
+            files = {
+                "PROJECT_LIVE_CONTEXT.md": "Current active status and latest operator change.",
+                "AGENTS.md": "Required skill selection and drift checks.",
+                "00_Source_of_Truth/ARCHITECTURE.md": "Architecture and authority boundaries.",
+                "00_Source_of_Truth/ACTIVE_GOAL_v4.md": "Current objective, completion gaps, and next action.",
+            }
+            for relative, text in files.items():
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text, encoding="utf-8")
+            conn = db.connect(Path(tmp) / "brain.sqlite")
+            try:
+                db.ingest_repo(conn, root, project="demo")
+                cases = (
+                    ("What is the current active status and latest operator change?", "PROJECT_LIVE_CONTEXT.md"),
+                    ("Which source defines the architecture and authority boundaries?", "00_Source_of_Truth/ARCHITECTURE.md"),
+                    ("Which active source requires skill selection and a drift check?", "AGENTS.md"),
+                    ("What is the active goal objective and remaining completion gap?", "00_Source_of_Truth/ACTIVE_GOAL_v4.md"),
+                )
+                for query, expected in cases:
+                    with self.subTest(query=query):
+                        result = db.search(conn, query, project="demo", limit=3)
+                        self.assertEqual(result["chunks"][0]["path"], expected)
+            finally:
+                conn.close()
+
+    def test_canonical_control_files_have_a_narrow_oversize_ingestion_allowance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            source_truth = root / "00_Source_of_Truth"
+            source_truth.mkdir(parents=True)
+            canonical = root / "RTA_NET_LIVE_CONTEXT.md"
+            canonical.write_text("latest active status\n" + ("evidence " * 90_000), encoding="utf-8")
+            ordinary = root / "ordinary_large_log.md"
+            ordinary.write_text("historical log\n" + ("noise " * 120_000), encoding="utf-8")
+            rejected: list[dict[str, str]] = []
+            paths = list(db.walk_repo(root, rejected=rejected, max_file_bytes=512_000))
+            self.assertIn(canonical.resolve(), paths)
+            self.assertNotIn(ordinary.resolve(), paths)
+            self.assertTrue(
+                any(item["path"] == str(ordinary.resolve()) and item["reason"].startswith("oversized:") for item in rejected)
+            )
 
     def test_mcp_heavy_calls_can_run_concurrently(self):
         class SlowServer(RtaBrainMcpServer):

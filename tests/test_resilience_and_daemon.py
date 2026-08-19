@@ -156,6 +156,10 @@ class RtaBrainResilienceTests(unittest.TestCase):
         self.assertIn("Repository sync", dashboard)
         self.assertIn("startWatcher", dashboard)
         self.assertIn("stopWatcher", dashboard)
+        self.assertGreaterEqual(console.count('"/api/continuity"'), 2)
+        self.assertIn("Task continuity", dashboard)
+        self.assertIn("toggleContinuity", dashboard)
+        self.assertIn("Automatically captured", dashboard)
 
 
 class RtaBrainWatchDaemonTests(unittest.TestCase):
