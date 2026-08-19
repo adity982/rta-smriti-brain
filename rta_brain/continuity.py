@@ -150,9 +150,11 @@ def append_event(
     verification_status: str = "unverified",
     occurred_at: str | None = None,
     _commit: bool = True,
+    _project_id: int | None = None,
 ) -> dict:
-    init_continuity_schema(conn)
-    project_id = ensure_project(conn, project)
+    if _commit:
+        init_continuity_schema(conn)
+    project_id = int(_project_id) if _project_id is not None else ensure_project(conn, project)
     session_id = str(session_id).strip()
     cursor = str(cursor).strip()
     event_type = str(event_type).strip().lower().replace(" ", "_")
@@ -253,126 +255,131 @@ def ingest_codex_session(
     inserted = 0
     ignored = 0
     processed = 0
+    conn.execute("SAVEPOINT codex_jsonl_ingest")
     with path.open("rb") as handle:
-        opened = os.fstat(handle.fileno())
-        current = path.stat()
-        if opened.st_dev != current.st_dev or opened.st_ino != current.st_ino or opened.st_nlink > 1:
-            raise ValueError("Codex session changed identity while it was being opened")
-        file_size = opened.st_size
-        if start < 0 or start > file_size:
-            start = 0
-        if expected_sessions_root is not None:
-            try:
-                path.relative_to(expected_sessions_root.expanduser().resolve())
-            except ValueError as exc:
-                raise ValueError("Codex session is outside the configured session directory") from exc
-        if expected_project_root is not None:
-            declared_session = None
-            declared_cwd = None
-            consumed = 0
-            handle.seek(0)
-            while consumed < MAX_SESSION_META_BYTES:
-                raw_meta = handle.readline(min(MAX_CODEX_LINE_BYTES + 1, MAX_SESSION_META_BYTES - consumed + 1))
-                if not raw_meta or len(raw_meta) > MAX_CODEX_LINE_BYTES:
-                    break
-                consumed += len(raw_meta)
+        try:
+            opened = os.fstat(handle.fileno())
+            current = path.stat()
+            if opened.st_dev != current.st_dev or opened.st_ino != current.st_ino or opened.st_nlink > 1:
+                raise ValueError("Codex session changed identity while it was being opened")
+            file_size = opened.st_size
+            if start < 0 or start > file_size:
+                start = 0
+            if expected_sessions_root is not None:
                 try:
-                    meta = json.loads(raw_meta)
-                except (UnicodeDecodeError, json.JSONDecodeError):
-                    continue
-                if meta.get("type") == "session_meta" and isinstance(meta.get("payload"), dict):
-                    declared_session = str(meta["payload"].get("id") or "").strip()
-                    declared_cwd = meta["payload"].get("cwd")
-                    break
-            if not declared_session or not declared_cwd:
-                raise ValueError("Codex session has no valid session metadata")
-            try:
-                Path(str(declared_cwd)).expanduser().resolve().relative_to(expected_project_root.expanduser().resolve())
-            except ValueError as exc:
-                raise ValueError("Codex session is not bound to the canonical project root") from exc
-            if session_id and declared_session != stream_id:
-                raise ValueError("Codex session identity changed after discovery")
-        if backlog_tail_bytes is not None and file_size - start > max(1, int(backlog_tail_bytes)):
-            previous_cursor = start
-            handle.seek(file_size - max(1, int(backlog_tail_bytes)))
-            handle.readline()
-            start = handle.tell()
-            marker = append_event(
-                conn, project, stream_id, f"truncated:{previous_cursor}:{start}", "history_truncated",
-                {"from_cursor": previous_cursor, "to_cursor": start, "skipped_bytes": start - previous_cursor, "retained_tail_bytes": file_size - start},
+                    path.relative_to(expected_sessions_root.expanduser().resolve())
+                except ValueError as exc:
+                    raise ValueError("Codex session is outside the configured session directory") from exc
+            if expected_project_root is not None:
+                declared_session = None
+                declared_cwd = None
+                consumed = 0
+                handle.seek(0)
+                while consumed < MAX_SESSION_META_BYTES:
+                    raw_meta = handle.readline(min(MAX_CODEX_LINE_BYTES + 1, MAX_SESSION_META_BYTES - consumed + 1))
+                    if not raw_meta or len(raw_meta) > MAX_CODEX_LINE_BYTES:
+                        break
+                    consumed += len(raw_meta)
+                    try:
+                        meta = json.loads(raw_meta)
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        continue
+                    if meta.get("type") == "session_meta" and isinstance(meta.get("payload"), dict):
+                        declared_session = str(meta["payload"].get("id") or "").strip()
+                        declared_cwd = meta["payload"].get("cwd")
+                        break
+                if not declared_session or not declared_cwd:
+                    raise ValueError("Codex session has no valid session metadata")
+                try:
+                    Path(str(declared_cwd)).expanduser().resolve().relative_to(expected_project_root.expanduser().resolve())
+                except ValueError as exc:
+                    raise ValueError("Codex session is not bound to the canonical project root") from exc
+                if session_id and declared_session != stream_id:
+                    raise ValueError("Codex session identity changed after discovery")
+            if backlog_tail_bytes is not None and file_size - start > max(1, int(backlog_tail_bytes)):
+                previous_cursor = start
+                handle.seek(file_size - max(1, int(backlog_tail_bytes)))
+                handle.readline()
+                start = handle.tell()
+                marker = append_event(
+                    conn, project, stream_id, f"truncated:{previous_cursor}:{start}", "history_truncated",
+                    {"from_cursor": previous_cursor, "to_cursor": start, "skipped_bytes": start - previous_cursor, "retained_tail_bytes": file_size - start},
                 source="continuity-daemon", verification_status="unverified",
-                _commit=False,
+                _commit=False, _project_id=project_id,
             )
-            inserted += int(marker["inserted"])
-        handle.seek(start)
-        while processed < max_events:
-            offset = handle.tell()
-            raw_line = handle.readline(MAX_CODEX_LINE_BYTES + 1)
-            if not raw_line:
-                break
-            if len(raw_line) > MAX_CODEX_LINE_BYTES and not raw_line.endswith(b"\n"):
-                digest = hashlib.sha256(raw_line)
-                total = len(raw_line)
-                complete_record = False
-                while True:
-                    chunk = handle.readline(65_536)
-                    if not chunk:
+                inserted += int(marker["inserted"])
+            handle.seek(start)
+            while processed < max_events:
+                offset = handle.tell()
+                raw_line = handle.readline(MAX_CODEX_LINE_BYTES + 1)
+                if not raw_line:
+                    break
+                if len(raw_line) > MAX_CODEX_LINE_BYTES and not raw_line.endswith(b"\n"):
+                    digest = hashlib.sha256(raw_line)
+                    total = len(raw_line)
+                    complete_record = False
+                    while True:
+                        chunk = handle.readline(65_536)
+                        if not chunk:
+                            break
+                        digest.update(chunk)
+                        total += len(chunk)
+                        if chunk.endswith(b"\n"):
+                            complete_record = True
+                            break
+                    if not complete_record:
+                        handle.seek(offset)
                         break
-                    digest.update(chunk)
-                    total += len(chunk)
-                    if chunk.endswith(b"\n"):
-                        complete_record = True
-                        break
-                if not complete_record:
+                    processed += 1
+                    result = append_event(
+                        conn, project, stream_id, str(offset), "oversized_record",
+                        {"source_bytes": total, "stored": False}, source="codex-jsonl",
+                        source_hash=digest.hexdigest(), verification_status="unverified",
+                        _commit=False, _project_id=project_id,
+                    )
+                    inserted += int(result["inserted"])
+                    continue
+                if not raw_line.endswith(b"\n"):
                     handle.seek(offset)
                     break
                 processed += 1
+                line = raw_line.decode("utf-8", errors="replace")
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    ignored += 1
+                    continue
+                mapped = _codex_event(payload)
+                if mapped is None:
+                    ignored += 1
+                    continue
+                event_type, event_payload = mapped
+                event_payload = _bound_event_value(_redact_event_value(event_payload))
+                digest = hashlib.sha256(raw_line).hexdigest()
                 result = append_event(
-                    conn, project, stream_id, str(offset), "oversized_record",
-                    {"source_bytes": total, "stored": False}, source="codex-jsonl",
-                    source_hash=digest.hexdigest(), verification_status="unverified",
-                    _commit=False,
+                    conn, project, stream_id, str(offset), event_type, event_payload,
+                    source="codex-jsonl", source_hash=digest,
+                    verification_status="unverified", occurred_at=payload.get("timestamp"),
+                    _commit=False, _project_id=project_id,
                 )
                 inserted += int(result["inserted"])
-                continue
-            if not raw_line.endswith(b"\n"):
-                handle.seek(offset)
-                break
-            processed += 1
-            line = raw_line.decode("utf-8", errors="replace")
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                ignored += 1
-                continue
-            mapped = _codex_event(payload)
-            if mapped is None:
-                ignored += 1
-                continue
-            event_type, event_payload = mapped
-            event_payload = _bound_event_value(_redact_event_value(event_payload))
-            digest = hashlib.sha256(raw_line).hexdigest()
-            result = append_event(
-                conn, project, stream_id, str(offset), event_type, event_payload,
-                source="codex-jsonl", source_hash=digest,
-                verification_status="unverified", occurred_at=payload.get("timestamp"),
-                _commit=False,
-            )
-            inserted += int(result["inserted"])
-        end = handle.tell()
-        final_opened = os.fstat(handle.fileno())
-        final_path = path.stat()
-        if (
-            final_opened.st_dev != opened.st_dev
-            or final_opened.st_ino != opened.st_ino
-            or final_opened.st_nlink > 1
-            or final_path.st_dev != final_opened.st_dev
-            or final_path.st_ino != final_opened.st_ino
-        ):
-            conn.rollback()
-            raise ValueError("Codex session changed identity while it was being ingested")
-        file_size = final_opened.st_size
-        file_mtime_ns = final_opened.st_mtime_ns
+            end = handle.tell()
+            final_opened = os.fstat(handle.fileno())
+            final_path = path.stat()
+            if (
+                final_opened.st_dev != opened.st_dev
+                or final_opened.st_ino != opened.st_ino
+                or final_opened.st_nlink > 1
+                or final_path.st_dev != final_opened.st_dev
+                or final_path.st_ino != final_opened.st_ino
+            ):
+                raise ValueError("Codex session changed identity while it was being ingested")
+            file_size = final_opened.st_size
+            file_mtime_ns = final_opened.st_mtime_ns
+        except Exception:
+            conn.execute("ROLLBACK TO SAVEPOINT codex_jsonl_ingest")
+            conn.execute("RELEASE SAVEPOINT codex_jsonl_ingest")
+            raise
     source_hash = hashlib.sha256(f"{file_size}:{file_mtime_ns}".encode("ascii")).hexdigest()
     conn.execute(
         """
@@ -384,6 +391,7 @@ def ingest_codex_session(
         """,
         (project_id, stream_id, end, str(path), source_hash, now_iso()),
     )
+    conn.execute("RELEASE SAVEPOINT codex_jsonl_ingest")
     conn.commit()
     return {
         "status": "ok", "project": project, "session_id": stream_id,

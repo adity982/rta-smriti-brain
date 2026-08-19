@@ -38,9 +38,9 @@ class ContinuityDaemonTests(unittest.TestCase):
             database = Path(tmp) / "brain.sqlite"
             database.touch()
             paths = continuity_paths(database, "demo")
-            from rta_brain.watch_daemon import _atomic_write_json, _prepare_control_dir
-            _prepare_control_dir(paths["directory"])
-            _atomic_write_json(paths["state"], {"state": "stopped"})
+            from rta_brain.runtime_control import prepare_control_dir, write_json
+            prepare_control_dir(paths["directory"], label="continuity")
+            write_json(paths["state"], {"state": "stopped"}, label="continuity state")
             self.assertEqual(paths["directory"].stat().st_mode & 0o777, 0o700)
             self.assertEqual(paths["state"].stat().st_mode & 0o777, 0o600)
 
