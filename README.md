@@ -172,8 +172,6 @@ The dashboard runs on `127.0.0.1` and includes:
 - **Continue Work**: edit the structured checkpoint and copy a ready-to-use prompt for a new agent task
 - **Rta-Smriti Release**: source-checkout files and GitHub publication checks; it does not assess the selected private project
 - **Task continuity**: start or stop project-bound Codex session capture and inspect its heartbeat, last capture, checkpoint, and error state
-- **Rta-Smriti Release**: source-checkout files and GitHub publication checks; it does not assess the selected private project
-- **Task continuity**: start or stop project-bound Codex session capture and inspect its heartbeat, last capture, checkpoint, and error state
 - **Bootstrap flow**: create a new project brain from the UI
 - **Command palette**: copy common commands into your agent chat
 
