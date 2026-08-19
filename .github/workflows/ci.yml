@@ -13,6 +13,7 @@ jobs:
   verify:
     name: Verify (${{ matrix.os }} / Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -45,9 +46,11 @@ jobs:
       - run: npm run build:launch
       - name: Install Chromium with Linux runtime dependencies
         if: matrix.python == '3.11' && runner.os == 'Linux'
+        timeout-minutes: 10
         run: npx playwright install --with-deps chromium
       - name: Install Chromium
         if: matrix.python == '3.11' && runner.os != 'Linux'
+        timeout-minutes: 10
         run: npx playwright install chromium
       - run: python -m pip install -e ".[tree-sitter,tokenization,watcher]"
       - run: python scripts/privacy_scan.py
@@ -57,14 +60,17 @@ jobs:
       - run: python scripts/build_installed_smoke.py
       - name: Run rendered operator acceptance
         if: matrix.python == '3.11'
+        timeout-minutes: 12
         run: npm run test:operator
       - name: Run launch-site operator acceptance
         if: matrix.python == '3.11'
+        timeout-minutes: 5
         run: npm run test:launch
       - name: Run packaged public benchmark
         run: python -m rta_brain.cli benchmark --json > public-benchmark-result.json
       - name: Run bounded synthetic performance probe
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.11'
+        timeout-minutes: 5
         run: python scripts/performance_probe.py --profiles 100 1000 --assert-bounds
       - run: python rta-brain.py publish-readiness --json
       - name: Install standalone binary builder
@@ -72,9 +78,11 @@ jobs:
         run: python -m pip install ".[binary]"
       - name: Build standalone binary
         if: matrix.python == '3.11'
+        timeout-minutes: 15
         run: python scripts/build_binary.py
       - name: Smoke-test standalone binary
         if: matrix.python == '3.11'
+        timeout-minutes: 5
         run: python scripts/smoke_binary.py
       - name: Stage versioned binary and checksum
         if: matrix.python == '3.11' && matrix.os != 'ubuntu-latest'

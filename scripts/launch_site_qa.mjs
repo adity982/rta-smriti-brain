@@ -7,10 +7,42 @@ import { fileURLToPath } from "node:url";
 const port = 4176;
 const baseUrl = `http://127.0.0.1:${port}`;
 const viteCli = fileURLToPath(new URL("../node_modules/vite/bin/vite.js", import.meta.url));
+const qaTimeoutMs = 120_000;
+let serverStdout = "";
+let serverStderr = "";
 const server = spawn(process.execPath, [
   viteCli, "preview", "--config", "vite.launch.config.js",
   "--host", "127.0.0.1", "--port", String(port),
 ], { stdio: ["ignore", "pipe", "pipe"] });
+server.stdout.on("data", (chunk) => {
+  serverStdout = `${serverStdout}${chunk.toString()}`.slice(-8_000);
+});
+server.stderr.on("data", (chunk) => {
+  serverStderr = `${serverStderr}${chunk.toString()}`.slice(-8_000);
+});
+
+const qaTimer = setTimeout(() => {
+  process.stderr.write(`launch-site QA timed out after ${qaTimeoutMs}ms\n`);
+  process.stderr.write(`vite stdout tail:\n${serverStdout}\n`);
+  process.stderr.write(`vite stderr tail:\n${serverStderr}\n`);
+  server.kill();
+  process.exit(124);
+}, qaTimeoutMs);
+qaTimer.unref?.();
+
+async function withTimeout(promise, ms, label) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 async function waitForServer() {
   let lastError;
@@ -23,7 +55,7 @@ async function waitForServer() {
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`launch preview did not start: ${lastError?.message || "unknown error"}`);
+  throw new Error(`launch preview did not start: ${lastError?.message || "unknown error"}\n${serverStderr}`);
 }
 
 async function stopServer() {
@@ -60,19 +92,19 @@ try {
   await page.getByRole("tab", { name: "kalpana", exact: true }).click();
   await page.getByText("Hypothesized", { exact: true }).waitFor();
 
-  const duration = await page.locator("video").evaluate((video) => new Promise((resolve, reject) => {
+  const duration = await withTimeout(page.locator("video").evaluate((video) => new Promise((resolve, reject) => {
     if (video.readyState >= 1) resolve(video.duration);
     else {
       video.addEventListener("loadedmetadata", () => resolve(video.duration), { once: true });
       video.addEventListener("error", () => reject(new Error("launch video failed to load")), { once: true });
       video.load();
     }
-  }));
+  })), 20_000, "launch video metadata");
   assert.ok(duration >= 59 && duration <= 61, `unexpected video duration: ${duration}`);
 
   const localLinks = await page.locator('a[href^="./"]').evaluateAll((links) => links.map((link) => link.href));
   for (const href of localLinks) {
-    const response = await fetch(href);
+    const response = await withTimeout(fetch(href), 10_000, `local link fetch ${href}`);
     assert.equal(response.ok, true, `broken local link: ${href}`);
   }
   assert.ok((await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)) <= 1);
@@ -99,4 +131,5 @@ try {
   await context?.close();
   await browser?.close();
   await stopServer();
+  clearTimeout(qaTimer);
 }
