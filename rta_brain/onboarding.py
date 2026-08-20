@@ -8,6 +8,7 @@ from .db import connect
 from .project import bootstrap_project, project_db_path, self_check, shell_cli_command, shell_quote
 from .repository import repository_state
 from .watch_daemon import start_watcher
+from .continuity_daemon import DEFAULT_BACKLOG_TAIL_BYTES, start_continuity
 
 
 SUPPORTED_TARGET_AGENTS = frozenset({
@@ -51,6 +52,12 @@ def onboard_project(
     write_agents: bool = False,
     embedding_provider: str = "hash",
     watcher_interval: float = 2.0,
+    sessions_root: Path | None = None,
+    start_continuity_capture: bool = True,
+    continuity_interval: float | None = None,
+    continuity_inactivity: float = 900.0,
+    continuity_lookback_days: float = 30.0,
+    continuity_backlog_tail_bytes: int = DEFAULT_BACKLOG_TAIL_BYTES,
     port: int = 8765,
     open_browser: bool = True,
     start_sync: bool = True,
@@ -111,6 +118,35 @@ def onboard_project(
             watcher = {"status": "ok", "state": "disabled"}
             stages.append(_stage("watcher", "complete", "Incremental sync was explicitly disabled."))
         result["watcher"] = watcher
+
+        if start_continuity_capture:
+            sessions = (sessions_root or (Path.home() / ".codex" / "sessions")).expanduser().resolve()
+            if sessions.is_dir():
+                continuity = start_continuity(
+                    db_path,
+                    repo,
+                    selected_project,
+                    sessions,
+                    interval_seconds=continuity_interval or max(0.1, watcher_interval),
+                    inactivity_seconds=continuity_inactivity,
+                    lookback_days=continuity_lookback_days,
+                    backlog_tail_bytes=continuity_backlog_tail_bytes,
+                )
+                if continuity.get("state") != "running":
+                    raise RuntimeError(f"task continuity capture is not running: {continuity.get('state')}")
+                stages.append(_stage("continuity", "complete", "Managed Codex task continuity capture is running."))
+            else:
+                continuity = {
+                    "status": "ok",
+                    "state": "unavailable",
+                    "reason": "codex_sessions_root_missing",
+                    "sessions_root": str(sessions),
+                }
+                stages.append(_stage("continuity", "complete", "Codex task continuity capture skipped because the sessions directory was not found."))
+        else:
+            continuity = {"status": "ok", "state": "disabled"}
+            stages.append(_stage("continuity", "complete", "Task continuity capture was explicitly disabled."))
+        result["continuity"] = continuity
 
         if manage_console:
             from .console_daemon import start_console

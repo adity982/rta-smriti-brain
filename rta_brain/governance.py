@@ -17,6 +17,10 @@ POLICY_KINDS = frozenset({
 })
 POLICY_EFFECTS = frozenset({"warn", "block"})
 BLOCKING_PRAMANA = frozenset({"pratyaksha", "sabda"})
+CONSEQUENTIAL_ACTION_TERMS = frozenset({
+    "commit", "delete", "deploy", "edit", "merge", "migrate", "publish",
+    "push", "release", "remove", "rewrite", "ship", "tag",
+})
 
 
 def _project_id(conn, project: str) -> int:
@@ -262,6 +266,110 @@ def _receipt_dict(row) -> dict:
     return receipt
 
 
+def _is_consequential_action(action: str) -> bool:
+    tokens = {token.casefold() for token in re.findall(r"[A-Za-z0-9_]+", action)}
+    return bool(tokens & CONSEQUENTIAL_ACTION_TERMS)
+
+
+def _operational_match(kind: str, statement: str, reason: str) -> dict:
+    return {
+        "policy_id": None,
+        "kind": kind,
+        "statement": statement,
+        "requested_effect": "warn",
+        "effective_effect": "warn",
+        "reason": reason,
+        "required_check": None,
+        "overrideable": True,
+        "pramana": "pratyaksha",
+        "confidence": 0.9,
+        "provenance": {
+            "source_path": None,
+            "source_hash": None,
+            "command": None,
+            "timestamp": now_iso(),
+            "verification_status": "indexed_snapshot",
+            "metadata": {},
+        },
+    }
+
+
+def _operational_preflight_matches(action: str, operational_context: dict | None) -> tuple[list[dict], dict]:
+    context = operational_context if isinstance(operational_context, dict) else {}
+    consequential = _is_consequential_action(action)
+    summary = {
+        "consequential_action": consequential,
+        "evaluated": bool(context),
+    }
+    if not context or not consequential:
+        return [], summary
+    matches = []
+    readiness = context.get("readiness") if isinstance(context.get("readiness"), dict) else {}
+    reasons = [str(item) for item in readiness.get("reasons") or []]
+    if readiness.get("operational_state") == "operationally_not_ready" or reasons:
+        readable = ", ".join(reasons) if reasons else "operational readiness is not green"
+        matches.append(_operational_match(
+            "operational_readiness",
+            "Task continuation readiness is not green for this action.",
+            f"Operational readiness is not green: {readable}. Establish or refresh the checkpoint before proceeding.",
+        ))
+    git = context.get("git") if isinstance(context.get("git"), dict) else {}
+    dirty_files = git.get("dirty_files")
+    try:
+        dirty_count = int(dirty_files) if dirty_files is not None else 0
+    except (TypeError, ValueError):
+        dirty_count = 0
+    if dirty_count > 0:
+        branch = str(git.get("branch") or "unknown")
+        head = str(git.get("head") or "unknown")
+        matches.append(_operational_match(
+            "dirty_worktree",
+            "The Git worktree has uncommitted or untracked files.",
+            f"Git worktree has {dirty_count} dirty file(s) on {branch} @ {head}; inspect them before acting.",
+        ))
+    freshness = context.get("freshness") if isinstance(context.get("freshness"), dict) else {}
+    if str(freshness.get("state") or "").casefold() not in {"", "fresh"}:
+        changed = int(freshness.get("changed") or 0)
+        missing = int(freshness.get("missing") or 0)
+        added = int(freshness.get("added") or 0)
+        uninspectable = int(freshness.get("uninspectable") or 0)
+        matches.append(_operational_match(
+            "stale_index",
+            "The indexed evidence is stale or incomplete.",
+            (
+                "Indexed evidence is not fresh "
+                f"(changed={changed}, missing={missing}, added={added}, uninspectable={uninspectable}); "
+                "refresh or verify affected files before acting."
+            ),
+        ))
+    if context.get("canonical_root_mismatch"):
+        matches.append(_operational_match(
+            "canonical_root",
+            "The requested project root does not match the canonical indexed root.",
+            "Canonical-root mismatch detected; verify the project root before allowing an agent to continue.",
+        ))
+    return matches, summary
+
+
+def build_operational_context(conn, project: str, *, db_path: str | Path | None = None) -> dict:
+    """Collect bounded local readiness signals for pre-action governance."""
+    from .continuity import operational_readiness
+    from .continuity_daemon import continuity_status
+    from .db import indexed_freshness
+    from .repository import repository_state
+
+    init_schema(conn)
+    row = conn.execute("SELECT root_path FROM projects WHERE name = ?", (project,)).fetchone()
+    root = row["root_path"] if row and row["root_path"] else None
+    lifecycle = continuity_status(Path(db_path), project) if db_path else None
+    return {
+        "readiness": operational_readiness(conn, project, lifecycle=lifecycle, include_event_count=False),
+        "git": repository_state(root) if root else {},
+        "freshness": indexed_freshness(conn, project),
+        "canonical_root": root,
+    }
+
+
 def preflight(
     conn,
     *,
@@ -271,6 +379,7 @@ def preflight(
     completed_checks: list[str] | None = None,
     override_reason: str | None = None,
     actor: str = "operator",
+    operational_context: dict | None = None,
 ) -> dict:
     action_text = _bounded_text(action, "action", maximum=8_000, required=True)
     path_text = _normalized_action_path(path)
@@ -321,6 +430,8 @@ def preflight(
             "confidence": float(policy["confidence"]),
             "provenance": policy["provenance"],
         })
+    operational_matches, operational_summary = _operational_preflight_matches(action_text, operational_context)
+    matches.extend(operational_matches)
     initial_decision = "block" if any(item["effective_effect"] == "block" for item in matches) else (
         "warn" if matches else "allow"
     )
@@ -359,7 +470,13 @@ def preflight(
         {key: value for key, value in policy.items() if key not in {"created_at", "retired_at"}}
         for policy in policies if not _is_expired(policy)
     ])
-    action_digest = _digest({"action": action_text, "path": path_text, "completed_checks": check_evidence})
+    operational_digest = _digest(operational_context or {}) if operational_summary["evaluated"] else None
+    action_digest = _digest({
+        "action": action_text,
+        "path": path_text,
+        "completed_checks": check_evidence,
+        "operational_digest": operational_digest,
+    })
     created_at = now_iso()
     valid_until = (datetime.now(timezone.utc) + timedelta(minutes=5)).replace(microsecond=0).isoformat()
     project_id = _project_id(conn, project)
@@ -378,6 +495,7 @@ def preflight(
     decision_receipt = {
         "id": int(cursor.lastrowid), "action_digest": action_digest, "policy_digest": policy_digest,
         "decision": final_decision, "created_at": created_at, "valid_until": valid_until,
+        "operational_digest": operational_digest,
     }
     return {
         "status": "ok",
@@ -390,6 +508,7 @@ def preflight(
         "completed_checks": sorted(checks),
         "completed_check_evidence": check_evidence,
         "satisfied_policy_ids": sorted(satisfied),
+        "operational_context": operational_summary,
         "override_receipt": receipt,
         "decision_receipt": decision_receipt,
     }

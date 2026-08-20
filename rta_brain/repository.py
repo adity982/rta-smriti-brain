@@ -336,6 +336,19 @@ def _git_marker_identity(common_dir: Path, create: bool) -> str | None:
     return f"git-local:{value}"
 
 
+def stable_git_identity(root: str | Path) -> str | None:
+    """Return the portable first-commit identity for an established Git repo."""
+    requested = Path(root).expanduser().resolve()
+    layout = _git_layout(requested)
+    if not layout:
+        return None
+    repository_root, _git_dir, _common_dir = layout
+    first_commits = _stdout(repository_root, "rev-list", "--max-parents=0", "HEAD").splitlines()
+    if first_commits and re.fullmatch(r"[0-9a-fA-F]{40,64}", first_commits[0]):
+        return f"git:{first_commits[0].lower()}"
+    return None
+
+
 def repository_identity(root: str | Path, create_marker: bool = True) -> str:
     requested = Path(root).expanduser().resolve()
     if not requested.exists() or not requested.is_dir():
@@ -349,9 +362,9 @@ def repository_identity(root: str | Path, create_marker: bool = True) -> str:
         existing_git_marker = _git_marker_identity(common_dir, create=False)
         if existing_git_marker:
             return existing_git_marker
-        first_commits = _stdout(repository_root, "rev-list", "--max-parents=0", "HEAD").splitlines()
-        if first_commits and re.fullmatch(r"[0-9a-fA-F]{40,64}", first_commits[0]):
-            return f"git:{first_commits[0].lower()}"
+        stable_identity = stable_git_identity(repository_root)
+        if stable_identity:
+            return stable_identity
         marker = _git_marker_identity(common_dir, create=create_marker)
         if marker:
             return marker

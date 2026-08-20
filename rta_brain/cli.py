@@ -27,7 +27,7 @@ from .db import (
     connect, doctor, get_project_settings, graph, graph_query, ingest_repo, ingest_thread, init_project, reflect,
     remember, save_checkpoint, search, stale_check, update_project_settings,
 )
-from .governance import create_policy, list_policies, list_receipts, preflight, retire_policy
+from .governance import build_operational_context, create_policy, list_policies, list_receipts, preflight, retire_policy
 from .diagnostics import retrieval_diagnostics
 from .hooks import install_git_hooks, uninstall_git_hooks
 from .lifecycle import apply_memory_feedback, run_conservative_decay
@@ -340,6 +340,7 @@ def build_parser() -> argparse.ArgumentParser:
     preflight_cmd.add_argument("--project", default="default")
     preflight_cmd.add_argument("--path")
     preflight_cmd.add_argument("--check", action="append", default=[])
+    preflight_cmd.add_argument("--operational-context", action="store_true", help="Warn on checkpoint, freshness, and Git readiness risks")
     preflight_cmd.add_argument("--override-reason")
     preflight_cmd.add_argument("--actor", default="operator")
 
@@ -370,6 +371,12 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--write-agents", action="store_true", help="Add the Rta-Smriti bridge to project agent files")
     start.add_argument("--embedding-provider", choices=("none", "hash", "sentence-transformers"), default="hash")
     start.add_argument("--interval", type=float, default=2.0)
+    start.add_argument("--sessions-root", default=str(Path.home() / ".codex" / "sessions"))
+    start.add_argument("--no-continuity", action="store_true", help="Do not start managed Codex task-continuity capture")
+    start.add_argument("--continuity-interval", type=float, help="Continuity capture interval in seconds; defaults to --interval")
+    start.add_argument("--continuity-inactivity", type=float, default=900.0)
+    start.add_argument("--lookback-days", type=float, default=30.0, help="Initial Codex session lookback for continuity capture")
+    start.add_argument("--backlog-tail-mb", type=float, default=2.0, help="Recent tail retained when a Codex session backlog is oversized")
     start.add_argument("--port", type=int, default=8765)
     start.add_argument("--no-open", action="store_true")
     start.add_argument("--no-watcher", action="store_true")
@@ -396,7 +403,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     dashboard = sub.add_parser("dashboard", help="Run the local operator console", description="Run the local operator console")
     dashboard.add_argument("--brain-dir", default=str(Path.home() / "Documents" / "Codex" / "brains"))
-    dashboard.add_argument("--db", default=None, help="Default brain DB for the opened console")
+    dashboard.add_argument("--db", default=argparse.SUPPRESS, help="Default brain DB for the opened console")
     dashboard.add_argument("--project", default=None, help="Default project for the opened console")
     dashboard.add_argument("--host", choices=("127.0.0.1", "localhost"), default="127.0.0.1", help="Loopback host only")
     dashboard.add_argument("--port", type=int, default=8765)
@@ -408,7 +415,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("start", "open", "status", "restart", "stop", "login-enable", "login-disable", "login-status"),
     )
     console.add_argument("--brain-dir", default=str(Path.home() / "Documents" / "Codex" / "brains"))
-    console.add_argument("--db", default=None, help="Default brain DB for the opened console")
+    console.add_argument("--db", default=argparse.SUPPRESS, help="Default brain DB for the opened console")
     console.add_argument("--project", default=None, help="Default project for the opened console")
     console.add_argument("--host", choices=("127.0.0.1", "localhost"), default="127.0.0.1")
     console.add_argument("--port", type=int, default=8765)
@@ -447,6 +454,12 @@ def main(argv=None) -> int:
                 write_agents=args.write_agents,
                 embedding_provider=args.embedding_provider,
                 watcher_interval=args.interval,
+                sessions_root=Path(args.sessions_root),
+                start_continuity_capture=not args.no_continuity,
+                continuity_interval=args.continuity_interval,
+                continuity_inactivity=args.continuity_inactivity,
+                continuity_lookback_days=args.lookback_days,
+                continuity_backlog_tail_bytes=int(args.backlog_tail_mb * 1_000_000),
                 port=args.port,
                 open_browser=not args.no_open,
                 start_sync=not args.no_watcher,
@@ -811,6 +824,10 @@ def main(argv=None) -> int:
                     completed_checks=args.check,
                     override_reason=args.override_reason,
                     actor=args.actor,
+                    operational_context=(
+                        build_operational_context(conn, args.project, db_path=args.db)
+                        if args.operational_context else None
+                    ),
                 )
                 if payload["decision"] == "block":
                     exit_code = 2

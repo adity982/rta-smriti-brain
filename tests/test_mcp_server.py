@@ -264,6 +264,30 @@ class RtaBrainMcpTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "confined to the canonical project root"):
                 server.call_tool("brain_ingest_repo", {"path": str(outside)})
 
+    def test_repo_ingestion_short_circuits_when_index_is_already_fresh(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "bound"
+            root.mkdir()
+            (root / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+            brain = Path(tmp) / "brain.sqlite"
+            conn = connect(brain)
+            try:
+                init_project(conn, "demo", str(root))
+                brain_db.ingest_repo(conn, root, project="demo")
+            finally:
+                conn.close()
+            server = RtaBrainMcpServer(brain, "demo", allow_repo_ingestion=True)
+
+            with patch("rta_brain.mcp_server.ingest_repo", side_effect=AssertionError("full ingestion should not run")):
+                accepted = server.call_tool("brain_ingest_repo", {})
+
+            payload = accepted["structuredContent"]
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["state"], "fresh")
+            self.assertTrue(payload["manifest_unchanged"])
+            self.assertTrue(payload["mcp_short_circuit"])
+            self.assertEqual(payload["indexed_files"], 1)
+
     def test_mcp_memory_writes_are_downgraded_to_unverified_agent_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "brain.sqlite"

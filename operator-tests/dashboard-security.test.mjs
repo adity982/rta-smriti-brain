@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { chooseProject, isExactProjectIdentity } from "../dashboard-src/src/project-selection.js";
+import { chooseProject, defaultProjectIdentity, isExactProjectIdentity } from "../dashboard-src/src/project-selection.js";
 import { shellPathArg, shellQuote } from "../dashboard-src/src/shell-command.js";
 
 const posixShell = process.platform === "win32"
@@ -89,4 +89,16 @@ test("project selection fails closed for missing or ambiguous identities", () =>
   assert.equal(isExactProjectIdentity(canonical), true);
   assert.equal(isExactProjectIdentity({ project: "same-name" }), false);
   assert.equal(isExactProjectIdentity(null), false);
+});
+
+test("dashboard health defaults become an exact project identity", () => {
+  assert.deepEqual(
+    defaultProjectIdentity({
+      default_project: "demo",
+      default_db: "C:/brains/demo.sqlite",
+    }),
+    { project: "demo", db_path: "C:/brains/demo.sqlite" },
+  );
+  assert.equal(defaultProjectIdentity({ default_project: "demo" }), null);
+  assert.equal(defaultProjectIdentity({ default_db: "C:/brains/demo.sqlite" }), null);
 });

@@ -140,9 +140,10 @@ For the first use, onboard the project and open the console in one command:
 ```
 
 The command detects the canonical Git root, creates or migrates the project brain,
-indexes it, starts managed repository sync and the managed console, then opens an
-authorized browser. It is safe to rerun. Later use `console open`; the console and
-watcher survive terminal closure.
+indexes it, starts managed repository sync, starts Codex task-continuity capture
+when a local Codex sessions folder exists, starts the managed console, then opens
+an authorized browser. It is safe to rerun. Later use `console open`; the console,
+watcher, and continuity capture survive terminal closure.
 
 ```powershell
 & $RtaBrain console status --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains" --json
@@ -169,7 +170,12 @@ Login startup is optional, user-level, and reversible:
 
 Before ending a meaningful session, open **Continue Work** and record the objective, verified evidence, remaining gaps, safest next action, and exploration that should not be repeated. Save the checkpoint, then use **Copy New Task Prompt** when opening the next agent task.
 
-For Codex, enable **Settings > Task continuity** once per project. It captures only sessions whose declared working directory belongs to that canonical project, resumes after partial writes, redacts common credential shapes, and marks automatic checkpoints as unverified until a human or agent reconciles them.
+For Codex, the `start` command enables **Settings > Task continuity** automatically
+when it can see the local sessions folder. Use `--no-continuity` to skip this, or
+`--sessions-root` if Codex stores sessions somewhere else. The capture service only
+imports sessions whose declared working directory belongs to that canonical
+project, resumes after partial writes, redacts common credential shapes, and marks
+automatic checkpoints as unverified until a human or agent reconciles them.
 
 Graph is the map, Files is the source reader, Canvas is the working board, Bases is the structured database, and the Context-Pack Studio is the handoff point.
 
@@ -242,9 +248,11 @@ Shows visible connections and backlinks for the selected graph node.
 
 Checks a proposed action against typed constraints, failed approaches, fragile paths, required checks, and prohibited repetition. It shows why the result is `allow`, `warn`, or `block`, including policy scope, expiry, pramana, verification, and source hash. Only an owner can create or retire policies or override a block; every override creates a durable receipt.
 
+Dashboard evaluations also include operational context: continuation readiness, Git dirty-file count, and index freshness. This makes consequential actions such as publish, deploy, commit, migration, or deletion warn before an agent acts on stale or incomplete project state.
+
 **Intelligence**
 
-Explains the active retrieval mode, provider, embedding coverage, parser fallback, freshness, rank components, latency, and source hashes. Its graph query follows bounded dependencies, dependents, impact, evidence, or relevance links and labels approximate relationships with confidence.
+Explains the active retrieval mode, provider, embedding coverage, parser fallback, freshness, rank components, latency, source hashes, and plain-language selection reasons for each returned file. Its graph query follows bounded dependencies, dependents, impact, evidence, or relevance links and labels approximate relationships with confidence.
 
 **Workspaces**
 
@@ -440,10 +448,11 @@ Create a hash-backed policy from trusted project evidence, then evaluate the int
 ```powershell
 & $RtaBrain --db "$BrainDir\project-name.sqlite" policy add --project project-name --kind required_check --statement "Privacy proof is required before publishing" --effect block --action-contains publish --required-check privacy-proof --pramana pratyaksha --verification-status verified --source-path docs/release-policy.md
 & $RtaBrain --db "$BrainDir\project-name.sqlite" preflight "publish release" --project project-name --json
+& $RtaBrain --db "$BrainDir\project-name.sqlite" preflight "publish release" --project project-name --operational-context --json
 & $RtaBrain --db "$BrainDir\project-name.sqlite" preflight "publish release" --project project-name --check privacy-proof --json
 ```
 
-When `--source-path` points inside the canonical project root, Rta-Smriti hashes the current file. Low-trust or unverified memory can warn, but cannot independently block. Completed checks are owner attestations; agents using MCP cannot supply them or override a result.
+When `--source-path` points inside the canonical project root, Rta-Smriti hashes the current file. Low-trust or unverified memory can warn, but cannot independently block. Completed checks are owner attestations; agents using MCP cannot supply them or override a result. The `--operational-context` flag adds checkpoint, continuity, Git, and freshness warnings to CLI preflight without changing policy authoring.
 
 ## Explain Retrieval And Impact
 

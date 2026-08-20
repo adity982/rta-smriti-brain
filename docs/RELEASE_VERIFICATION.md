@@ -20,6 +20,43 @@ The release contains the universal wheel, Windows x64, Linux x64, and macOS
 ARM64 binaries, a combined SHA-256 manifest, and the synthetic public-benchmark
 result. GitHub-generated source archives are also available from the tag.
 
+## v0.5.0-alpha Candidate State
+
+Main is being prepared as source version `0.5.0-alpha` (`0.5.0a1` in Python
+package metadata). A formal `v0.5.0-alpha` tag and GitHub Release should not be
+created until the reviewed candidate commit passes the local gates below and the
+hosted Windows/macOS/Linux matrix.
+
+This candidate adds the Trust + Retrieval Intelligence batch on top of the
+published v0.4 release: operational preflight warnings, retrieval selection
+reasons, exact dashboard default-brain selection, root-level managed-console
+`--db` parsing, and one-command onboarding continuity capture.
+
+Latest local candidate evidence from the C-drive release checkout:
+
+| Candidate gate | Local result |
+| --- | --- |
+| Dashboard production build | Passed |
+| Launch-site production build | Passed |
+| Dashboard unit tests | 5 passed |
+| Operator browser QA | 2 passed |
+| Launch-site browser QA | Passed: desktop, mobile, interactions, media, links, accessibility |
+| Python unittest discovery | 224 tests passed, 9 skipped |
+| Python bytecode compilation | Passed |
+| npm audit high severity gate | 0 vulnerabilities |
+| Editable install dry run | Would install `rta-smriti-brain-0.5.0a1` |
+| Installed-distribution smoke | Passed install, upgrade, and uninstall lifecycle |
+| Public benchmark | Synthetic corpus passed lexical, hash-hybrid, continuation, contradiction, stale, and governance gates |
+| Privacy scan | 170 candidate files passed |
+| Git diff whitespace check | Passed with only Windows LF-to-CRLF warnings |
+| Built-in publish-readiness | Structural checks passed; clean-tree check remains open until reviewed commit |
+| Dogfood brain freshness | 147 indexed sources fresh; 0 added, 0 changed, 0 missing |
+
+Do not claim Gitleaks, Bandit, Ruff, or Semgrep unless those tools were
+available and actually run in the release shell. Hosted Windows/macOS/Linux CI,
+standalone binary smoke tests, checksums, tag creation, and GitHub Release
+publication remain pending until the reviewed candidate commit is pushed.
+
 ## Verification Commands
 
 Run these commands from the repository root:
@@ -39,6 +76,7 @@ python -m pip install ".[binary]"
 python scripts/build_binary.py
 python scripts/smoke_binary.py
 python scripts/privacy_scan.py
+python scripts/privacy_scan.py --root .
 pip-audit . --progress-spinner off
 python rta-brain.py publish-readiness --json
 git diff --check

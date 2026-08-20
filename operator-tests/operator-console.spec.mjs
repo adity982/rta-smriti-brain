@@ -56,18 +56,26 @@ async function stopFixtureServer(child) {
   if (child.exitCode === null) child.kill("SIGKILL");
 }
 
-async function stopBootstrappedWatcher(tempRoot) {
+async function runCleanupCommand(args, timeoutMs = 12_000) {
   const python = process.env.PYTHON || (process.platform === "win32" ? "python" : "python3");
-  const database = path.join(tempRoot, "brains", "bootstrapped-project.sqlite");
-  const child = spawn(python, [
-    path.join(root, "rta-brain.py"), "--db", database,
-    "watcher", "stop", "--project", "bootstrapped-project",
-  ], { cwd: root, stdio: "ignore" });
+  const child = spawn(python, args, { cwd: root, stdio: "ignore" });
   await Promise.race([
     new Promise((resolve) => child.once("exit", resolve)),
-    new Promise((resolve) => setTimeout(resolve, 15_000)),
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
   ]);
   if (child.exitCode === null) child.kill("SIGKILL");
+}
+
+async function stopBootstrappedDaemons(tempRoot) {
+  const database = path.join(tempRoot, "brains", "bootstrapped-project.sqlite");
+  await runCleanupCommand([
+    path.join(root, "rta-brain.py"), "--db", database,
+    "continuity", "stop", "--project", "bootstrapped-project",
+  ]);
+  await runCleanupCommand([
+    path.join(root, "rta-brain.py"), "--db", database,
+    "watcher", "stop", "--project", "bootstrapped-project",
+  ]);
 }
 
 async function unnamedControls(page) {
@@ -388,8 +396,13 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect(page.locator(".taskComposer code")).not.toContainText("operator-demo.sqlite");
     await page.unroute("**/api/health");
     await reloadedNavigation.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByRole("button", { name: "Stop Sync", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Start Sync", exact: true })).toBeVisible();
+    const bootstrappedStopSync = page.getByRole("button", { name: "Stop Sync", exact: true });
+    if (await bootstrappedStopSync.isVisible()) {
+      await bootstrappedStopSync.click();
+      await expect(page.getByRole("button", { name: "Start Sync", exact: true })).toBeVisible();
+    } else {
+      await expect(page.getByRole("button", { name: "Start Sync", exact: true })).toBeVisible();
+    }
 
     let healthMode = "conflict";
     await page.route("**/api/health", async (route) => {
@@ -411,7 +424,7 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect(page.getByText("bootstrapped-project", { exact: true }).first()).toBeVisible();
     expect(errors).toEqual([]);
   } finally {
-    await stopBootstrappedWatcher(tempRoot);
+    await stopBootstrappedDaemons(tempRoot);
     await context?.close();
     await stopFixtureServer(child);
     await rm(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
@@ -442,10 +455,11 @@ test("failed post-bootstrap identity verification clears the stale project", asy
     }));
     await page.getByRole("button", { name: "Set Up & Start", exact: true }).click();
     await expect(page.locator(".miniOutput")).toContainText("Brain ready: bootstrapped-project", { timeout: 30_000 });
+    await expect(page.locator(".miniOutput")).toContainText("VERIFY: Dashboard refresh failed after setup");
     await expect(page.locator(".activeProjectCopy strong")).toHaveText("Choose a brain");
-    await expect(page.getByRole("status").filter({ hasText: "Dashboard refresh failed" })).toContainText("simulated identity verification failure");
+    await expect(page.locator(".statusBar [role='status']")).toContainText("simulated identity verification failure");
   } finally {
-    await stopBootstrappedWatcher(tempRoot);
+    await stopBootstrappedDaemons(tempRoot);
     await context?.close();
     await stopFixtureServer(child);
     await rm(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });

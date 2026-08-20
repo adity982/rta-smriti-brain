@@ -18,7 +18,7 @@ from .db import (
 )
 from .ingest import _lexical_root_for_candidate
 from .diagnostics import retrieval_diagnostics
-from .governance import create_policy, list_policies, list_receipts, preflight, retire_policy
+from .governance import build_operational_context, create_policy, list_policies, list_receipts, preflight, retire_policy
 from .workspaces import get_workspace, list_workspaces, search_workspace
 
 
@@ -291,6 +291,7 @@ TOOLS = [
             "project": {"type": "string"},
             "action": {"type": "string"},
             "path": {"type": "string"},
+            "include_operational_context": {"type": "boolean", "default": True},
         },
         ["action"],
     ),
@@ -632,12 +633,33 @@ class RtaBrainMcpServer:
             return text_result(json_text(payload), payload)
         if name == "brain_ingest_repo":
             root = self._bound_repository_root(conn, args, project)
+            force = bool(args.get("force", False))
+            repair_deep_stale = bool(args.get("repair_deep_stale", False))
+            if not force and not repair_deep_stale:
+                freshness = stale_check(conn, project=project, detail_limit=0)
+                if freshness.get("state") == "fresh":
+                    payload = {
+                        "status": "ok",
+                        "project": project,
+                        "root": str(root),
+                        "state": "fresh",
+                        "indexed_files": int(freshness.get("fresh") or 0),
+                        "updated_files": 0,
+                        "unchanged_files": int(freshness.get("fresh") or 0),
+                        "removed_files": 0,
+                        "skipped_files": 0,
+                        "blocked_files": int(freshness.get("uninspectable") or 0),
+                        "manifest_unchanged": True,
+                        "mcp_short_circuit": True,
+                        "freshness": freshness,
+                    }
+                    return text_result(json_text(payload), payload)
             payload = ingest_repo(
                 conn,
                 root,
                 project=project,
-                force=bool(args.get("force", False)),
-                repair_deep_stale=bool(args.get("repair_deep_stale", False)),
+                force=force,
+                repair_deep_stale=repair_deep_stale,
             )
             return text_result(json_text(payload), payload)
         if name == "brain_ingest_thread":
@@ -796,6 +818,10 @@ class RtaBrainMcpServer:
                 completed_checks=[],
                 override_reason=None,
                 actor="agent",
+                operational_context=(
+                    build_operational_context(conn, project, db_path=db_path)
+                    if bool(args.get("include_operational_context", True)) else None
+                ),
             )
             return text_result(json_text(payload), payload)
         if name == "brain_governance_receipts":

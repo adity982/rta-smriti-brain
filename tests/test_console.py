@@ -7,6 +7,7 @@ from os import chdir, getcwd
 from pathlib import Path
 from unittest.mock import patch
 
+from rta_brain.cli import build_parser
 from rta_brain.console import ConsoleConfig, _trusted_git_candidates, create_dashboard_server, dashboard_snapshot, is_authorized_request, is_local_origin, publish_readiness, read_file_preview, read_file_tree, read_memories, resolve_brain_db, resolve_static_asset, run_dashboard, scan_brain_databases
 from rta_brain.db import connect, graph, ingest_repo, init_project, remember
 from rta_brain.ingest import walk_repo
@@ -17,6 +18,30 @@ CLI = ROOT / "rta-brain.py"
 
 
 class RtaBrainConsoleTests(unittest.TestCase):
+    def test_console_and_dashboard_preserve_global_default_db(self):
+        parser = build_parser()
+
+        console = parser.parse_args([
+            "--db",
+            "C:/brains/demo.sqlite",
+            "--json",
+            "console",
+            "start",
+            "--brain-dir",
+            "C:/brains",
+            "--no-open",
+        ])
+        self.assertEqual(console.db, "C:/brains/demo.sqlite")
+        self.assertTrue(console.json)
+
+        dashboard = parser.parse_args([
+            "--db",
+            "C:/brains/demo.sqlite",
+            "dashboard",
+            "--no-open",
+        ])
+        self.assertEqual(dashboard.db, "C:/brains/demo.sqlite")
+
     def test_dashboard_snapshot_exposes_an_executable_cli_command(self):
         with tempfile.TemporaryDirectory() as tmp:
             snapshot = dashboard_snapshot(ConsoleConfig(tool_root=ROOT, brain_dir=Path(tmp)))
@@ -114,6 +139,8 @@ class RtaBrainConsoleTests(unittest.TestCase):
         self.assertIn(".github/workflows/ci.yml", names)
         self.assertIn("clean working tree", names)
         self.assertIn("python -m unittest discover -s tests -v", readiness["commands"])
+        self.assertNotIn("git add .", readiness["commands"])
+        self.assertIn("git status --short", readiness["commands"])
 
         result = subprocess.run(
             [sys.executable, str(CLI), "dashboard", "--help"],

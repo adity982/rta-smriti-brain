@@ -45,7 +45,7 @@ import {
   ThumbsUp,
   Zap,
 } from "lucide-react";
-import { chooseProject, isExactProjectIdentity } from "./project-selection.js";
+import { chooseProject, defaultProjectIdentity, isExactProjectIdentity } from "./project-selection.js";
 import { shellPathArg, shellQuote } from "./shell-command.js";
 import "./styles.css";
 
@@ -475,17 +475,20 @@ function App() {
       setProjects(payload.projects || []);
       setPublish(payload.publish);
       const available = payload.projects || [];
-      const preferredDecision = chooseProject(available, null, preferredProject);
-      setSelectedProject((current) => chooseProject(available, current, preferredProject).selected);
+      const preferredIdentity = preferredProject || defaultProjectIdentity(payload);
+      const preferredDecision = chooseProject(available, null, preferredIdentity);
+      setSelectedProject((current) => chooseProject(available, current, preferredIdentity).selected);
       if (preferredDecision.reason === "preferred_identity_missing") {
         setMessage(`The new brain could not be matched to its exact database identity. Selection was cleared to protect the canonical root.`);
       } else if (preferredDecision.reason === "preferred_name_ambiguous") {
         setMessage(`More than one brain has that name. Select the exact database before continuing.`);
       }
+      return payload;
     } catch (error) {
       if (isExactProjectIdentity(preferredProject)) setSelectedProject(null);
       setLoadError(error.message);
       setMessage(`Dashboard refresh failed: ${error.message}`);
+      return null;
     } finally {
       setIsLoading(false);
     }
@@ -897,12 +900,12 @@ function App() {
     try {
       const payload = await api("/api/preflight", {
         method: "POST",
-        body: JSON.stringify({ ...selectedParams, ...values, actor: "dashboard-operator" }),
+        body: JSON.stringify({ ...selectedParams, ...values, actor: "dashboard-operator", include_operational_context: true }),
       });
       setPreflightDecision(payload);
       await loadGovernance(selectedProject, { silent: true });
       const matched = payload.matches?.length || 0;
-      setMessage(`Action Gate: ${payload.decision.replaceAll("_", " ")} (${matched} matching ${matched === 1 ? "policy" : "policies"}).`);
+      setMessage(`Action Gate: ${payload.decision.replaceAll("_", " ")} (${matched} matching ${matched === 1 ? "check" : "checks"}).`);
       return payload;
     } catch (error) {
       setMessage(`Action Gate failed: ${error.message}`);
@@ -2765,6 +2768,9 @@ function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, on
                   <article key={`${item.path}-${index}`}>
                     <div><strong>{item.path}</strong><em>#{item.ranking.position}</em></div>
                     <span>lex {Number(item.ranking.lexical_score || 0).toFixed(3)} / sem {Number(item.ranking.semantic_score || 0).toFixed(3)} / hybrid {Number(item.ranking.hybrid_score || 0).toFixed(3)}</span>
+                    <div className="selectionReasons" aria-label={`Why ${item.path} was selected`}>
+                      {(item.selection_reasons || []).slice(0, 3).map((reason) => <b key={reason}>{reason}</b>)}
+                    </div>
                     <small title={item.evidence.source_hash}>{item.evidence.verification_status}</small>
                   </article>
                 ))}
@@ -3014,8 +3020,8 @@ function GovernancePanel({ project, governance, decision, onEvaluate, onCreate, 
 
       {decision?.matches?.length > 0 && (
         <div className="gateMatches">
-          {decision.matches.map((match) => (
-            <article key={match.policy_id} className={match.effective_effect}>
+          {decision.matches.map((match, index) => (
+            <article key={match.policy_id ?? `${match.kind}-${index}`} className={match.effective_effect}>
               <div className="policyLine"><strong>{match.kind.replaceAll("_", " ")}</strong><em>{match.effective_effect}</em></div>
               <p>{match.reason}</p>
               <span>{match.pramana} / {Math.round(match.confidence * 100)}% / {match.provenance?.verification_status || "unverified"}</span>
@@ -3165,8 +3171,9 @@ function BootstrapPanel({ onDone, shellKind }) {
         setOutput(`Setup needs attention at ${payload.error?.stage || "verification"}: ${payload.error?.message || "unknown error"}\n\n${stageText}\n\nResume: ${payload.recovery_commands?.resume || "rerun setup"}`);
         return;
       }
-      setOutput(`Brain ready: ${payload.project}\nIndexed files: ${payload.bootstrap?.ingest?.indexed_files || 0}\nDatabase: ${displayPath(payload.db_path)}\n\n${stageText}${payload.bootstrap?.agent_index_file ? `\n\nAgent bridge: ${displayPath(payload.bootstrap.agent_index_file)}` : ""}`);
-      await onDone({ project: payload.project, db_path: payload.db_path });
+      const readyText = `Brain ready: ${payload.project}\nIndexed files: ${payload.bootstrap?.ingest?.indexed_files || 0}\nDatabase: ${displayPath(payload.db_path)}\n\n${stageText}${payload.bootstrap?.agent_index_file ? `\n\nAgent bridge: ${displayPath(payload.bootstrap.agent_index_file)}` : ""}`;
+      const refreshed = await onDone({ project: payload.project, db_path: payload.db_path });
+      setOutput(refreshed ? readyText : `${readyText}\n\nVERIFY: Dashboard refresh failed after setup. The brain was created, but the operator console cleared selection until the exact project/database identity can be verified.`);
     } catch (error) {
       setOutput(`Bootstrap failed: ${error.message}`);
     } finally {

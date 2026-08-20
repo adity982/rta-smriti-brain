@@ -7,6 +7,17 @@ export function isExactProjectIdentity(value) {
   );
 }
 
+export function defaultProjectIdentity(payload) {
+  if (
+    payload
+    && typeof payload.default_project === "string"
+    && typeof payload.default_db === "string"
+  ) {
+    return { project: payload.default_project, db_path: payload.default_db };
+  }
+  return null;
+}
+
 export function chooseProject(availableProjects, currentProject = null, preferredProject = null) {
   const available = Array.isArray(availableProjects) ? availableProjects : [];
   const preferredIdentity = isExactProjectIdentity(preferredProject)

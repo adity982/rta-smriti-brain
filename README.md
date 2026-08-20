@@ -4,12 +4,12 @@
 
 [![CI](https://github.com/sulabhdubey/rta-smriti-brain/actions/workflows/ci.yml/badge.svg)](https://github.com/sulabhdubey/rta-smriti-brain/actions/workflows/ci.yml)
 [![Cross-platform binaries](https://github.com/sulabhdubey/rta-smriti-brain/actions/workflows/binaries.yml/badge.svg)](https://github.com/sulabhdubey/rta-smriti-brain/actions/workflows/binaries.yml)
-[![Release](https://img.shields.io/github/v/release/sulabhdubey/rta-smriti-brain?include_prereleases&label=release)](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.4.0-alpha)
+[![Release](https://img.shields.io/github/v/release/sulabhdubey/rta-smriti-brain?include_prereleases&label=release)](https://github.com/sulabhdubey/rta-smriti-brain/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
 
-**A local project brain for AI coding agents. Current prerelease: `v0.4.0-alpha`, refreshed at commit `358e76b`.**
+**A local project brain for AI coding agents. Main is now prepared as the `v0.5.0-alpha` Trust + Retrieval Intelligence candidate.**
 
-[Download v0.4.0-alpha](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.4.0-alpha) · [Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second product demo](launch-assets/product-hunt/rta-smriti-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Public benchmark](docs/PUBLIC_BENCHMARK.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
+[Latest prerelease assets](https://github.com/sulabhdubey/rta-smriti-brain/releases) · [Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second product demo](launch-assets/product-hunt/rta-smriti-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Public benchmark](docs/PUBLIC_BENCHMARK.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
 
 Rta-Smriti Brain turns a project repository, long agent threads, durable decisions, and evidence into a small local memory graph that Codex, Claude Code, Cursor, or any MCP-capable agent can reuse before doing work.
 
@@ -19,9 +19,10 @@ It is built for the moment every AI-assisted developer knows too well:
 
 Rta-Smriti gives each project a memory that stays on your machine.
 
-## Latest Release
+## Latest Release And Main Candidate
 
-`v0.4.0-alpha` is the current public alpha. The refreshed release points to
+`v0.4.0-alpha` remains the latest formal GitHub prerelease until a new tag is
+created. The refreshed v0.4 release points to
 commit `358e76b51652b2074580f0f183826691e8a9f686` and was verified by
 [GitHub Actions run 32302463544](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32302463544)
 on Windows, macOS, and Ubuntu across Python 3.11, 3.12, and 3.13.
@@ -32,6 +33,12 @@ The release refresh adds the managed continuity lifecycle, resumable local
 Codex transcript capture, structured checkpoints, work-state reconciliation,
 operational readiness checks, refreshed release assets, and the multi-project
 MCP gateway on top of the original v0.4 alpha feature set.
+
+Main now carries the `v0.5.0-alpha` candidate. It keeps the v0.4 continuity
+foundation and adds pre-action operational warnings, explainable retrieval
+selection reasons, exact dashboard default-brain selection, safer managed-console
+startup parsing, and one-command onboarding that starts Codex continuity capture
+when the local sessions folder is available.
 
 ## What It Does
 
@@ -50,7 +57,7 @@ MCP gateway on top of the original v0.4 alpha feature set.
 - Watches active repositories with foreground or managed-background incremental sync and reuses a persistent SHA-256 cache for deep freshness checks.
 - Supports optional local hybrid retrieval through a built-in deterministic hash provider or an installed Sentence Transformers model.
 - Supports built-in regex parsing plus optional Tree-sitter and explicit LSP adapter commands.
-- Evaluates intended actions through an evidence-aware **Action Gate** that returns `allow`, `warn`, or `block` with short-lived decision receipts.
+- Evaluates intended actions through an evidence-aware **Action Gate** that returns `allow`, `warn`, or `block` with policy, readiness, Git, and freshness signals.
 - Explains retrieval provider, embedding coverage, freshness, latency, lexical/semantic rank, and source-hash provenance instead of hiding ranking decisions.
 - Traverses bounded dependency, dependent, impact, evidence, and relevance subgraphs with explicit relation filters, including approximate calls and test links.
 - Searches existing project brains through query-only local workspaces without merging or mutating their databases.
@@ -72,8 +79,8 @@ Rta-Smriti combines all three into a small, inspectable project brain:
 | Context pack | A compact, copyable brief for the next agent turn |
 | Continuation checkpoint | Structured state that tells the next agent what is done, what remains, and what not to repeat |
 | Pramana model | Evidence labels so observed facts, trusted docs, inference, memory, and hypotheses are not treated equally |
-| Action Gate | Pre-action checks that surface trusted constraints, required proof, fragile paths, and prohibited repetition |
-| Explainable intelligence | Retrieval diagnostics and bounded graph impact queries with evidence hashes and confidence |
+| Action Gate | Pre-action checks that surface trusted constraints, required proof, fragile paths, prohibited repetition, checkpoint readiness, dirty worktrees, and stale indexes |
+| Explainable intelligence | Retrieval diagnostics with selection reasons plus bounded graph impact queries with evidence hashes and confidence |
 | Local workspaces | Search across explicitly selected project brains while preserving database isolation |
 | Local operator console | Visual graph, freshness, publish checks, bootstrap, and memory reflection |
 
@@ -130,7 +137,7 @@ optional extras, troubleshooting, and uninstall instructions.
 
 ## Quick Start
 
-Create one central brain directory, then onboard and open a project in one command. This detects the canonical Git root, creates or migrates the brain, indexes it, starts the background watcher and managed console, and opens an authorized browser session:
+Create one central brain directory, then onboard and open a project in one command. This detects the canonical Git root, creates or migrates the brain, indexes it, starts the background watcher, starts Codex task-continuity capture when a local Codex sessions folder exists, opens the managed console, and opens an authorized browser session:
 
 ```powershell
 $BrainDir = "$env:USERPROFILE\Documents\Rta-Smriti\brains"
@@ -161,6 +168,9 @@ session URL; `console restart` repairs stale state or a failed process; `console
 ends it explicitly. Login startup is optional and owner-controlled through
 `console login-enable` / `console login-disable` on Windows, macOS, and Linux.
 
+Use `--no-continuity` when onboarding a machine that does not use Codex local
+sessions, or pass `--sessions-root` when Codex stores sessions somewhere else.
+
 The dashboard runs on `127.0.0.1` and includes:
 
 ![Rta-Smriti v0.4 operator console with evidence graph and retrieval diagnostics](launch-assets/screenshots/operator-console-v0.4.png)
@@ -179,8 +189,8 @@ The dashboard runs on `127.0.0.1` and includes:
 - **Incremental refresh**: update the selected repo index from the freshness control; filesystem events force a bounded content-hash check for touched paths, while unchanged projects use a fast stat manifest
 - **Indexing policy**: configure the fail-closed source-size cap, parser adapter, and optional local hybrid retrieval per project
 - **References and backlinks**: inspect why a node is connected and follow its visible relationships
-- **Action Gate**: evaluate a proposed action against trusted policies, required checks, expiry, scope, and provenance; owner overrides create durable receipts
-- **Intelligence**: explain retrieval and run bounded dependency, dependent, impact, evidence, or relevance queries
+- **Action Gate**: evaluate a proposed action against trusted policies, required checks, expiry, scope, provenance, continuation readiness, Git state, and freshness; owner overrides create durable receipts
+- **Intelligence**: explain retrieval with source hashes and selection reasons, then run bounded dependency, dependent, impact, evidence, or relevance queries
 - **Workspaces**: group independent local brains and search them together without copying or rebinding their repositories
 - **Memory ledger**: inspect stored memories, record helpful/harmful outcomes, and run conservative reflection
 - **Continue Work**: edit the structured checkpoint and copy a ready-to-use prompt for a new agent task

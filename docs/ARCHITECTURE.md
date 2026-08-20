@@ -45,7 +45,7 @@ Freshness output is anomaly-first: changed, missing, added, and blocked files ar
 
 ## Project Identity
 
-A named project is bound to a portable repository identity plus one resolved canonical root. Git repositories use stable repository history identity; non-Git folders receive a local marker under the ignored `.rta-smriti` directory. A moved checkout relocates automatically only when its identity matches and the old root is gone. A live alternate root still requires explicit rebind, and a different identity is always rejected. Routine context generation reads Git HEAD and refs natively; the dashboard alone runs the heavier dirty-worktree scan.
+A named project is bound to a portable repository identity plus one resolved canonical root. Git repositories use stable repository history identity; non-Git folders receive a local marker under the ignored `.rta-smriti` directory. If a legacy Git-local marker is present after a project was already bound to a stable Git history identity, the binder recomputes the first-commit identity and accepts only that exact match. A moved checkout relocates automatically only when its identity matches and the old root is gone. A live alternate root still requires explicit rebind, and a different identity is always rejected. Routine context generation reads Git HEAD and refs natively; the dashboard alone runs the heavier dirty-worktree scan.
 
 ## Parser Boundary
 
@@ -65,11 +65,11 @@ FTS5 BM25 remains available on every project. The recommended bootstrap path ena
 
 Context packs enforce a caller-selected token budget. Checkpoints and high-ranked `pratyaksha` evidence are considered first; lower-priority memories and chunks are omitted when needed, and the pack states when pruning occurred. Optional `tiktoken` provides model tokenization while the dependency-free path uses a conservative deterministic estimate.
 
-Retrieval diagnostics report the active mode, provider, embedding coverage, parser fallbacks, freshness, elapsed time, rank components, and source hashes. The public benchmark ships as package data and compares no-memory, lexical, and dependency-free hash-hybrid modes on a synthetic corpus. An explicit flag can add an available local Sentence Transformers model; otherwise the result records that optional semantic evidence was not requested. Its results are regression evidence, not a claim of market superiority.
+Retrieval diagnostics report the active mode, provider, embedding coverage, parser fallbacks, freshness, elapsed time, rank components, source hashes, normalized query terms, and per-result selection reasons. The public benchmark ships as package data and compares no-memory, lexical, and dependency-free hash-hybrid modes on a synthetic corpus. An explicit flag can add an available local Sentence Transformers model; otherwise the result records that optional semantic evidence was not requested. Its results are regression evidence, not a claim of market superiority.
 
 ## Governance
 
-Typed policies describe constraints, failed approaches, fragile paths, required checks, and prohibited repetition. Preflight evaluation is deterministic and scope-aware. Only high-trust, verified, hash-backed policy evidence can independently block; weaker records are warnings. Every evaluation emits a short-lived receipt bound to the action and current policy digest. Owner overrides record actor, reason, and matched policy evidence. Agent MCP tools cannot mutate policy, attest required checks, or override a block.
+Typed policies describe constraints, failed approaches, fragile paths, required checks, and prohibited repetition. Preflight evaluation is deterministic and scope-aware. Only high-trust, verified, hash-backed policy evidence can independently block; weaker records are warnings. Optional operational context adds transient warnings for consequential actions when checkpoint readiness, continuity capture, Git dirty state, canonical root, or index freshness is not green. Every evaluation emits a short-lived receipt bound to the action and current policy digest. Owner overrides record actor, reason, and matched policy evidence. Agent MCP tools cannot mutate policy, attest required checks, or override a block.
 
 ## Graph Intelligence
 
@@ -87,7 +87,7 @@ Helpful, neutral, and harmful outcomes are explicit operator feedback. Conservat
 
 ## Agent Concurrency
 
-The stdio MCP server is bound to one project and exposes only read tools by default. Memory writes, repository ingestion, and thread ingestion require separate startup capabilities; repository ingestion always uses the registered canonical root, and thread ingestion requires explicit allowed roots plus descriptor-bound reads. Agent-authored memory is downgraded to unverified `anumana` and cannot self-assert source authority. Blocking SQLite, hashing, parsing, and embedding work moves to worker threads with bounded request count, bytes, JSON nesting, and concurrency. Mutation visibility is ordered, memory batches are atomic, and checkpoints use optimistic versions under a SQLite write transaction so stale agents cannot silently overwrite newer continuation state.
+The stdio MCP server is bound to one project and exposes only read tools by default. Memory writes, repository ingestion, and thread ingestion require separate startup capabilities; repository ingestion always uses the registered canonical root, short-circuits when the current index is already fresh, and thread ingestion requires explicit allowed roots plus descriptor-bound reads. Agent-authored memory is downgraded to unverified `anumana` and cannot self-assert source authority. Blocking SQLite, hashing, parsing, and embedding work moves to worker threads with bounded request count, bytes, JSON nesting, and concurrency. Mutation visibility is ordered, memory batches are atomic, and checkpoints use optimistic versions under a SQLite write transaction so stale agents cannot silently overwrite newer continuation state.
 
 ## Background Sync
 

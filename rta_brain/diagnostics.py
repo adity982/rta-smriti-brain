@@ -2,9 +2,47 @@
 
 from __future__ import annotations
 
+import re
 from time import perf_counter
 
 from .db import get_project_settings, indexed_freshness, init_schema, search
+
+
+DIAGNOSTIC_STOP_WORDS = frozenset({
+    "and", "are", "for", "from", "how", "into", "not", "the", "this", "what", "when", "where", "which", "why",
+})
+
+
+def _query_terms(query: str) -> list[str]:
+    terms = {
+        token.casefold()
+        for token in re.findall(r"[A-Za-z0-9_]+", str(query))
+        if len(token) > 2 and token.casefold() not in DIAGNOSTIC_STOP_WORDS
+    }
+    return sorted(terms)
+
+
+def _selection_reasons(item: dict, terms: list[str], retrieval: dict, freshness: dict) -> list[str]:
+    text = f"{item.get('path') or ''}\n{item.get('text') or ''}".casefold()
+    matched = [term for term in terms if term in text]
+    reasons = []
+    if matched:
+        reasons.append(f"matched query terms: {', '.join(matched)}")
+    if retrieval.get("mode") == "hybrid" and float(item.get("semantic_score") or 0) > 0:
+        provider = str(retrieval.get("provider") or "local")
+        reasons.append(
+            "hash-hybrid retrieval contributed semantic support"
+            if provider == "hash" else f"{provider} hybrid retrieval contributed semantic support"
+        )
+    if item.get("source_authority_score"):
+        reasons.append("canonical source reranking raised this result for consequential context")
+    if item.get("source_hash") and freshness.get("state") == "fresh":
+        reasons.append("fresh indexed snapshot with source hash")
+    elif item.get("source_hash"):
+        reasons.append("indexed snapshot includes source hash")
+    if not reasons:
+        reasons.append("selected by bounded lexical ranking")
+    return reasons
 
 
 def retrieval_diagnostics(conn, query: str, *, project: str = "default", limit: int = 8) -> dict:
@@ -42,6 +80,8 @@ def retrieval_diagnostics(conn, query: str, *, project: str = "default", limit: 
             warning_count += len(metadata.get("parser_warnings") or [])
     settings = get_project_settings(conn, project) if project_row else {}
     diagnostics = []
+    terms = _query_terms(query)
+    freshness = indexed_freshness(conn, project)
     for index, item in enumerate(result.get("chunks", []), start=1):
         diagnostics.append({
             "path": item.get("path"),
@@ -57,11 +97,13 @@ def retrieval_diagnostics(conn, query: str, *, project: str = "default", limit: 
                 "source_hash": item.get("source_hash"),
                 "verification_status": "indexed_snapshot",
             },
+            "selection_reasons": _selection_reasons(item, terms, result.get("retrieval", {}), freshness),
         })
     return {
         "status": "ok",
         "project": project,
         "query": str(query),
+        "query_terms": terms,
         "latency_ms": latency_ms,
         "retrieval": result.get("retrieval", {}),
         "index": {
@@ -73,6 +115,6 @@ def retrieval_diagnostics(conn, query: str, *, project: str = "default", limit: 
             "parsers_used": parser_counts,
             "parser_warnings": warning_count,
         },
-        "freshness": indexed_freshness(conn, project),
+        "freshness": freshness,
         "results": diagnostics,
     }

@@ -200,6 +200,41 @@ class GovernanceTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "project-relative"):
                     preflight(self.conn, project="demo", action="Edit", path=unsafe)
 
+    def test_operational_context_warns_before_consequential_actions(self):
+        decision = preflight(
+            self.conn,
+            project="demo",
+            action="Publish the next release",
+            path="docs/RELEASE.md",
+            operational_context={
+                "readiness": {
+                    "operational_state": "operationally_not_ready",
+                    "reasons": ["no_structured_checkpoint"],
+                },
+                "git": {
+                    "repository_root": self.tempdir.name,
+                    "branch": "main",
+                    "head": "abc123",
+                    "dirty_files": 2,
+                },
+                "freshness": {
+                    "state": "stale",
+                    "changed": 1,
+                    "missing": 0,
+                    "added": 0,
+                    "uninspectable": 0,
+                },
+            },
+        )
+        kinds = {item["kind"] for item in decision["matches"]}
+        self.assertEqual(decision["decision"], "warn")
+        self.assertIn("operational_readiness", kinds)
+        self.assertIn("dirty_worktree", kinds)
+        self.assertIn("stale_index", kinds)
+        self.assertTrue(any("no_structured_checkpoint" in item["reason"] for item in decision["matches"]))
+        self.assertTrue(decision["operational_context"]["consequential_action"])
+        self.assertTrue(decision["decision_receipt"]["operational_digest"])
+
     def test_cli_block_decision_uses_a_nonzero_exit_code(self):
         db_path = Path(self.tempdir.name) / "brain.sqlite"
         add = subprocess.run(

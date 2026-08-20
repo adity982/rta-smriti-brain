@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from rta_brain.console_daemon import stop_console
+from rta_brain.continuity_daemon import stop_continuity
 from rta_brain.onboarding import derive_project_name, onboard_project
 from rta_brain.watch_daemon import stop_watcher
 
@@ -30,6 +31,8 @@ class OnboardingTests(unittest.TestCase):
             make_minimal_git_repo(root)
             (root / "main.py").write_text("def ready():\n    return True\n", encoding="utf-8")
             brain_dir = Path(tmp) / "brains"
+            sessions = Path(tmp) / "sessions"
+            sessions.mkdir()
 
             payload = onboard_project(
                 ROOT,
@@ -41,6 +44,7 @@ class OnboardingTests(unittest.TestCase):
                 port=0,
                 open_browser=False,
                 watcher_interval=0.2,
+                sessions_root=sessions,
             )
             try:
                 self.assertEqual(payload["status"], "ok")
@@ -49,12 +53,14 @@ class OnboardingTests(unittest.TestCase):
                 self.assertEqual(Path(payload["repo_path"]), root.resolve())
                 self.assertTrue(Path(payload["db_path"]).is_file())
                 self.assertEqual(payload["watcher"]["state"], "running")
+                self.assertEqual(payload["continuity"]["state"], "running")
                 self.assertEqual(payload["console"]["state"], "running")
                 self.assertTrue(payload["readiness"]["ready"])
-                self.assertEqual([stage["state"] for stage in payload["stages"]], ["complete"] * 5)
+                self.assertEqual([stage["state"] for stage in payload["stages"]], ["complete"] * 6)
                 self.assertFalse((root / "AGENTS.md").exists())
             finally:
                 stop_console(brain_dir, timeout=8.0)
+                stop_continuity(Path(payload["db_path"]), payload["project"], timeout=8.0)
                 stop_watcher(Path(payload["db_path"]), payload["project"], timeout=8.0)
 
     def test_repeated_onboarding_reuses_the_existing_brain_incrementally(self):
@@ -63,21 +69,25 @@ class OnboardingTests(unittest.TestCase):
             root.mkdir()
             (root / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
             brain_dir = Path(tmp) / "brains"
+            sessions = Path(tmp) / "sessions"
+            sessions.mkdir()
             first = onboard_project(
                 ROOT, root, brain_dir=brain_dir, project="repeatable", port=0,
-                open_browser=False, watcher_interval=0.2,
+                open_browser=False, watcher_interval=0.2, sessions_root=sessions,
             )
             try:
                 second = onboard_project(
                     ROOT, root, brain_dir=brain_dir, project="repeatable", port=0,
-                    open_browser=False, watcher_interval=0.2,
+                    open_browser=False, watcher_interval=0.2, sessions_root=sessions,
                 )
                 self.assertTrue(second["ready"])
                 self.assertEqual(second["db_path"], first["db_path"])
                 self.assertEqual(second["bootstrap"]["ingest"]["updated_files"], 0)
                 self.assertEqual(second["console"]["pid"], first["console"]["pid"])
+                self.assertEqual(second["continuity"]["pid"], first["continuity"]["pid"])
             finally:
                 stop_console(brain_dir, timeout=8.0)
+                stop_continuity(Path(first["db_path"]), first["project"], timeout=8.0)
                 stop_watcher(Path(first["db_path"]), first["project"], timeout=8.0)
 
 

@@ -34,6 +34,11 @@ class ReleaseIntelligenceTests(unittest.TestCase):
         self.assertEqual(report["results"][0]["path"], "queue.md")
         self.assertIn("hybrid_score", report["results"][0]["ranking"])
         self.assertTrue(report["results"][0]["evidence"]["source_hash"])
+        self.assertEqual(report["query_terms"], ["backpressure", "latency"])
+        reasons = report["results"][0]["selection_reasons"]
+        self.assertIn("matched query terms: backpressure, latency", reasons)
+        self.assertIn("hash-hybrid retrieval contributed semantic support", reasons)
+        self.assertIn("fresh indexed snapshot with source hash", reasons)
 
     def test_parser_and_graph_queries_expose_calls_dependents_tests_and_impact(self):
         parsed = RegexParser().parse(Path("service.py"), "def run():\n    helper()\n")

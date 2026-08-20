@@ -18,7 +18,7 @@ from .ingest import (
     walk_repo,
 )
 from .parsers import ParserRegistry
-from .repository import canonical_root, repository_identity, same_root
+from .repository import canonical_root, repository_identity, same_root, stable_git_identity
 
 
 VALID_PRAMANA = {"pratyaksha", "sabda", "anumana", "smriti", "kalpana"}
@@ -34,6 +34,20 @@ DEFAULT_PROJECT_SETTINGS = {
     "embedding_model": "all-MiniLM-L6-v2",
     "hybrid_weight": 0.45,
 }
+
+
+def _repository_identities_match(
+    stored_identity: str | None,
+    requested_identity: str | None,
+    requested_root: str | Path,
+) -> bool:
+    if stored_identity == requested_identity:
+        return True
+    if not stored_identity or not requested_identity:
+        return False
+    if stored_identity.startswith("git:") and requested_identity.startswith("git-local:"):
+        return stable_git_identity(requested_root) == stored_identity
+    return False
 QUERY_STOP_WORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "in", "is", "it",
     "of", "on", "or", "that", "the", "this", "to", "what", "when", "where", "which", "with",
@@ -427,7 +441,11 @@ def ensure_project(
             requested_identity = repository_identity(Path(requested)) if Path(requested).is_dir() else None
             stored = row["root_path"]
             stored_identity = row["repository_identity"]
-            if stored_identity and requested_identity and stored_identity != requested_identity:
+            if (
+                stored_identity
+                and requested_identity
+                and not _repository_identities_match(stored_identity, requested_identity, requested)
+            ):
                 raise ValueError(
                     f"canonical root mismatch; repository identity mismatch for project '{name}': the requested checkout "
                     "does not match the brain's bound repository"

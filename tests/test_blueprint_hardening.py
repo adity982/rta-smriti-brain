@@ -87,6 +87,34 @@ class RtaBrainBlueprintHardeningTests(unittest.TestCase):
             self.assertEqual(repository.repository_identity(root), identity)
             self.assertFalse((root / repository.IDENTITY_DIR).exists())
 
+    def test_existing_stable_project_ignores_legacy_git_local_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.com"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
+            (root / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "main.py"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "initial"], check=True)
+
+            conn = db.connect(Path(tmp) / "brain.sqlite")
+            try:
+                payload = db.init_project(conn, "demo", str(root))
+                stable_identity = payload["project"]["repository_identity"]
+                self.assertTrue(stable_identity.startswith("git:"))
+
+                _repo_root, _git_dir, common_dir = repository._git_layout(root)
+                (common_dir / repository.GIT_IDENTITY_FILE).write_text(
+                    "a" * 32 + "\n", encoding="ascii"
+                )
+                self.assertTrue(repository.repository_identity(root).startswith("git-local:"))
+
+                reopened = db.init_project(conn, "demo", str(root))
+                self.assertEqual(reopened["project"]["repository_identity"], stable_identity)
+            finally:
+                conn.close()
+
     def test_project_auto_relocates_only_when_identity_matches_and_old_root_is_gone(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "before"

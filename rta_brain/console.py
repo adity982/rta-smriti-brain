@@ -24,7 +24,7 @@ from .diagnostics import retrieval_diagnostics
 from .parsers import ParserRegistry
 from .project import mcp_config_payload, runtime_shell, shell_cli_command, projects_list, self_check
 from .repository import canonical_root, canonical_root_key, repository_state, trusted_git_candidates
-from .governance import create_policy, list_policies, list_receipts, preflight, retire_policy
+from .governance import build_operational_context, create_policy, list_policies, list_receipts, preflight, retire_policy
 from .hooks import install_git_hooks, uninstall_git_hooks
 from .lifecycle import apply_memory_feedback, run_conservative_decay
 from .portability import export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_verify
@@ -465,7 +465,8 @@ def publish_readiness(tool_root: Path) -> dict:
             "python -m compileall -q rta_brain tests scripts",
             "pip install -e . --dry-run --no-deps",
             "git init",
-            "git add .",
+            "git status --short",
+            "git add -- <reviewed release files only>",
             "git commit -m \"feat: launch rta-smriti brain\"",
         ],
     }
@@ -956,6 +957,10 @@ def make_handler(config: ConsoleConfig):
                             completed_checks=payload.get("completed_checks") or [],
                             override_reason=payload.get("override_reason"),
                             actor=payload.get("actor", "operator"),
+                            operational_context=(
+                                build_operational_context(conn, payload["project"], db_path=resolve_brain_db(config, payload["db_path"]))
+                                if bool(payload.get("include_operational_context")) else None
+                            ),
                         ))
                     finally:
                         conn.close()
