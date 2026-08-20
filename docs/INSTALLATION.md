@@ -60,16 +60,18 @@ The repository includes a reproducible PyInstaller specification. The release
 workflow builds and smoke-tests separate Windows, macOS, and Linux artifacts,
 renames them with version/OS/architecture, and uploads a `SHA256SUMS.txt`
 manifest. The formal
-[`v0.4.0-alpha` release](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.4.0-alpha)
-contains the universal wheel, Windows x64, Linux x64, and macOS ARM64 binaries,
-the combined checksum manifest, and the synthetic public-benchmark result.
+[`v0.5.0-alpha` release](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.5.0-alpha)
+contains Windows x64, Linux x64, and macOS binaries plus the combined checksum
+manifest.
 
-Those assets were refreshed from the green Windows, Ubuntu, and macOS matrix
-for commit `358e76b51652b2074580f0f183826691e8a9f686`
-([CI run 32302463544](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32302463544)).
-The published files were then downloaded through their public release URLs,
-checked against `SHA256SUMS.txt`, and the staged Windows binary passed
-`--version` plus `doctor` before publication.
+Those assets were built from commit
+`be534d98e26dcc29e4028fb1027f904c8df30187` after the hosted Windows, Ubuntu,
+and macOS matrix passed
+([CI run 32407147824](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32407147824)).
+The native binaries were built and smoke-tested by
+[Native binaries run 32417096347](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32417096347).
+The Windows binary was then downloaded through its public release URL, checked
+against `SHA256SUMS.txt`, and passed `--version`.
 
 Maintainers can build the executable for the current operating system with:
 

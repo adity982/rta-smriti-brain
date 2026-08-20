@@ -1,8 +1,10 @@
-# Rta-Smriti Brain v0.5.0-alpha Candidate
+# Rta-Smriti Brain v0.5.0-alpha
 
-This is the candidate note for the next formal prerelease. It should become the
-GitHub Release body only after the reviewed commit is tagged and hosted CI
-passes.
+Release commit: `be534d98e26dcc29e4028fb1027f904c8df30187`
+
+Hosted CI: <https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32407147824>
+
+Native binaries: <https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32417096347>
 
 ## Theme
 
@@ -56,9 +58,9 @@ operator loop:
   private project paths, capability tokens, context packs, daemon state, and
   scratch artifacts are not release assets.
 
-## Candidate Gates
+## Release Gates
 
-Before tagging `v0.5.0-alpha`, run:
+The local release candidate passed:
 
 ```powershell
 npm audit --audit-level=high
@@ -77,6 +79,8 @@ python -m rta_brain.cli publish-readiness --json
 git diff --check
 ```
 
-Then commit the reviewed tree, wait for hosted Windows/macOS/Linux CI, create
-the annotated `v0.5.0-alpha` tag, build/upload release assets, verify
-`SHA256SUMS.txt`, and perform a clean install from the public release page.
+The annotated `v0.5.0-alpha` tag now points to the reviewed commit. Hosted
+Windows/macOS/Linux CI passed, native binaries were built and smoke-tested by
+GitHub Actions, the public release contains `SHA256SUMS.txt`, and the Windows
+binary was redownloaded from the public release page, checksum-verified, and
+smoke-tested with `--version`.

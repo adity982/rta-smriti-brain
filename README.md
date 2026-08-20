@@ -7,7 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/sulabhdubey/rta-smriti-brain?include_prereleases&label=release)](https://github.com/sulabhdubey/rta-smriti-brain/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
 
-**A local project brain for AI coding agents. Main is now prepared as the `v0.5.0-alpha` Trust + Retrieval Intelligence candidate.**
+**A local project brain for AI coding agents. `v0.5.0-alpha` is now published as the Trust + Retrieval Intelligence prerelease.**
 
 [Latest prerelease assets](https://github.com/sulabhdubey/rta-smriti-brain/releases) · [Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second product demo](launch-assets/product-hunt/rta-smriti-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Public benchmark](docs/PUBLIC_BENCHMARK.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
 
@@ -19,26 +19,25 @@ It is built for the moment every AI-assisted developer knows too well:
 
 Rta-Smriti gives each project a memory that stays on your machine.
 
-## Latest Release And Main Candidate
+## Latest Release
 
-`v0.4.0-alpha` remains the latest formal GitHub prerelease until a new tag is
-created. The refreshed v0.4 release points to
-commit `358e76b51652b2074580f0f183826691e8a9f686` and was verified by
-[GitHub Actions run 32302463544](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32302463544)
+[`v0.5.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.5.0-alpha)
+is the latest formal GitHub prerelease. It points to
+commit `be534d98e26dcc29e4028fb1027f904c8df30187` and was verified by
+[GitHub Actions run 32407147824](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32407147824)
 on Windows, macOS, and Ubuntu across Python 3.11, 3.12, and 3.13.
 
-The release includes a universal wheel, Windows x64, Linux x64, and macOS
-ARM64 standalone binaries, a public benchmark result, and `SHA256SUMS.txt`.
-The release refresh adds the managed continuity lifecycle, resumable local
-Codex transcript capture, structured checkpoints, work-state reconciliation,
-operational readiness checks, refreshed release assets, and the multi-project
-MCP gateway on top of the original v0.4 alpha feature set.
+The prerelease includes Windows x64, Linux x64, and macOS standalone binaries
+plus `SHA256SUMS.txt`. The native binaries were built and smoke-tested by
+[Native binaries run 32417096347](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32417096347).
+The Windows binary was also downloaded from the public release URL, checksum
+verified, and smoke-tested locally with `--version`.
 
-Main now carries the `v0.5.0-alpha` candidate. It keeps the v0.4 continuity
-foundation and adds pre-action operational warnings, explainable retrieval
-selection reasons, exact dashboard default-brain selection, safer managed-console
-startup parsing, and one-command onboarding that starts Codex continuity capture
-when the local sessions folder is available.
+This alpha keeps the v0.4 continuity foundation and adds pre-action operational
+warnings, explainable retrieval selection reasons, exact dashboard
+default-brain selection, safer managed-console startup parsing, and one-command
+onboarding that starts Codex continuity capture when the local sessions folder
+is available.
 
 ## What It Does
 
