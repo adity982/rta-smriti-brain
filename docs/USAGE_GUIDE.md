@@ -286,7 +286,7 @@ Ingest a long thread or handoff, then generate a focused pack for the next chat.
 
 **Switch agents without starting over**
 
-Generate one universal pack or label it for Codex, Claude Code, Cursor, Copilot, Gemini CLI, or another agent. The brain stays agent-neutral; the target is handoff metadata, not a lock-in.
+Generate one universal pack or label it for Codex, Claude Code, Cursor, GitHub Copilot CLI, Gemini CLI, or another agent. The brain stays agent-neutral; the target is handoff metadata, not a lock-in.
 
 **Understand an unfamiliar repository**
 

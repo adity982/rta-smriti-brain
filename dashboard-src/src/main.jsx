@@ -60,7 +60,7 @@ const targetAgents = [
   { value: "codex", label: "OpenAI Codex" },
   { value: "claude-code", label: "Claude Code" },
   { value: "cursor", label: "Cursor" },
-  { value: "github-copilot", label: "GitHub Copilot" },
+  { value: "github-copilot", label: "GitHub Copilot CLI" },
   { value: "gemini-cli", label: "Gemini CLI" },
   { value: "windsurf", label: "Windsurf" },
   { value: "cline", label: "Cline" },

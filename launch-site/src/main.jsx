@@ -33,7 +33,7 @@ const ciRunUrl = `${repositoryUrl}/actions/runs/32407147824`;
 const productHuntUrl = "https://www.producthunt.com/products/rta-smriti-brain?launch=rta-smriti-brain&utm_source=website&utm_medium=referral&utm_campaign=v050_release";
 
 const installCommand = "python -m pip install .";
-const agents = ["Codex", "Claude Code", "Cursor", "Copilot", "Gemini CLI", "Aider", "Cline", "Any MCP agent"];
+const agents = ["Codex", "Claude Code", "Cursor", "GitHub Copilot CLI", "Gemini CLI", "Aider", "Cline", "Any MCP agent"];
 const pramana = {
   pratyaksha: ["Observed", "Code, tests, files, and tool output", "#5eead4"],
   sabda: ["Trusted", "Human instruction and authoritative documentation", "#38bdf8"],
@@ -308,7 +308,7 @@ function LandingPage() {
 const assetContent = {
   social: ["Give every project a memory.", "Private, evidence-aware project memory with continuity for any AI coding agent.", "dashboard"],
   "gallery-1": ["Your AI starts with project memory.", "Repo evidence, durable decisions, long-session handoffs, and structured checkpoints — compiled locally for the next task.", "dashboard"],
-  "gallery-2": ["One brain. Any agent.", "Codex · Claude Code · Cursor · Copilot · Gemini CLI · Aider · Cline · MCP", "agents"],
+  "gallery-2": ["One brain. Any agent.", "Codex · Claude Code · Cursor · GitHub Copilot CLI · Gemini CLI · Aider · Cline · MCP", "agents"],
   "gallery-3": ["Evidence, not vibes.", "Observed facts, trusted instructions, inferences, memories, and hypotheses stay meaningfully different.", "pramana"],
   "gallery-4": ["10,000 synthetic files. One focused pack.", "A public, reproducible performance fixture exercises bounded local retrieval without exposing a private repository.", "performance"],
 };

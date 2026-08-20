@@ -205,7 +205,7 @@ The daily loop is the same for every agent:
 1. Select the project.
 2. Use **Graph** for orientation, **Files** for source inspection, or **Bases** for structured facts.
 3. Add relevant files to the objective and describe the work.
-4. Choose `Universal / Any Agent`, Codex, Claude Code, Cursor, Copilot, Gemini CLI, Windsurf, Cline, Aider, OpenCode, Continue, or a custom agent.
+4. Choose `Universal / Any Agent`, Codex, Claude Code, Cursor, GitHub Copilot CLI, Gemini CLI, Windsurf, Cline, Aider, OpenCode, Continue, or a custom agent.
 5. Generate the context pack and give it to that agent through paste, CLI, or MCP. Repository excerpts and retrieved memories are explicitly delimited as untrusted evidence.
 
 For a new project:
