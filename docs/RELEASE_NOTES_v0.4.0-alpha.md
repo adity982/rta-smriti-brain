@@ -2,6 +2,20 @@
 
 This alpha turns repository memory from a manual snapshot into an operator-controlled living index while preserving local-first defaults.
 
+## Refresh
+
+The public `v0.4.0-alpha` prerelease was refreshed in place at commit
+`358e76b51652b2074580f0f183826691e8a9f686` after the continuity hardening
+batch passed the hosted matrix in
+[CI run 32302463544](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32302463544).
+The refreshed assets are the release source of truth: universal wheel, Windows
+x64 binary, Linux x64 binary, macOS ARM64 binary, public benchmark JSON, and
+`SHA256SUMS.txt`.
+
+This refresh promotes managed Codex transcript capture, structured checkpoints,
+work-state reconciliation, operational readiness, and the fail-closed
+multi-project MCP gateway into the current public alpha.
+
 ## New
 
 - Foreground `watch-repo` plus managed-background `watcher` lifecycle commands using incremental manifests, event-scoped content hashing, and periodic polling verification

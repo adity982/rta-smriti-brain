@@ -64,11 +64,12 @@ manifest. The formal
 contains the universal wheel, Windows x64, Linux x64, and macOS ARM64 binaries,
 the combined checksum manifest, and the synthetic public-benchmark result.
 
-Those assets were built and smoke-tested by the green Windows, Ubuntu, and
-macOS matrix for commit `b9215466beb0f3db41681239c7809832883abcc6`. The
-published files were then downloaded through their public release URLs, checked
-against `SHA256SUMS.txt`, and the wheel completed a clean 20-check operator
-smoke, forced upgrade, and uninstall on Windows.
+Those assets were refreshed from the green Windows, Ubuntu, and macOS matrix
+for commit `358e76b51652b2074580f0f183826691e8a9f686`
+([CI run 32302463544](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32302463544)).
+The published files were then downloaded through their public release URLs,
+checked against `SHA256SUMS.txt`, and the staged Windows binary passed
+`--version` plus `doctor` before publication.
 
 Maintainers can build the executable for the current operating system with:
 

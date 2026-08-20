@@ -7,28 +7,28 @@ for the behavior it directly exercises.
 | --- | --- | --- |
 | Managed console lifecycle and recovery | Released and verified | `tests/test_managed_console.py`, installed distribution smoke, final hosted matrix |
 | Optional login startup | Released and verified | `tests/test_autostart.py` and final hosted OS matrix |
-| Canonical-root one-command onboarding | Locally proven | `tests/test_onboarding.py`, installed distribution smoke |
-| Watcher, cache, fail-closed ingestion, rollback | Locally proven | resilience, ingestion-security, and next-release suites |
-| Lexical, hash-hybrid, optional semantic diagnostics | Locally proven | retrieval diagnostics and public benchmark suites |
-| Tree-sitter, regex, and pluggable LSP parsing | Locally proven | parser registry and five-ecosystem extraction tests |
-| Structured checkpoints and provenance | Locally proven | blueprint, feedback, context, CLI, API, and MCP tests |
-| Pramana-aware action governance | Locally proven | governance unit/API/MCP tests and rendered block/override journey |
-| Bounded graph, dependents, impact, evidence, relevance | Locally proven | release-intelligence tests and rendered graph/reference journey |
-| Privacy-safe public benchmark | Locally proven | packaged corpus digest, multimode metrics, quality gates |
-| Reinforcement and conservative decay | Locally proven | lifecycle tests and rendered operator action |
-| Isolated multi-brain workspaces | Locally proven | workspace tests and persisted rendered workflow |
-| Selective redacted export/import | Locally proven | staged validation, hostile bundle tests, rendered preview/export |
-| Authenticated local snapshots | Locally proven | tamper/size/link tests and rendered create/verify |
-| Opt-in Git hooks | Locally proven | linked-worktree/security tests and rendered on/off workflow |
-| Accessibility and responsive behavior | Locally proven | destination-wide axe WCAG checks, tab/navigation state, focus containment, live announcements, clipboard failure, reduced motion, forced-colors structure, and zero-overlap mobile Canvas |
-| Small-to-large resource evidence | Locally proven | `benchmarks/performance-baseline-v1.json` and bounded CI probe |
-| Install, upgrade/reinstall, uninstall | Locally proven | isolated wheel lifecycle smoke |
-| Shell-safe generated commands and exact bootstrap identity | Locally proven | executable PowerShell/POSIX hostile-path tests plus rendered duplicate-root and failed-verification scenarios |
+| Canonical-root one-command onboarding | Released and verified | `tests/test_onboarding.py`, installed distribution smoke, final hosted matrix |
+| Watcher, cache, fail-closed ingestion, rollback | Released and verified | resilience, ingestion-security, continuity, and hosted release suites |
+| Lexical, hash-hybrid, optional semantic diagnostics | Released and verified | retrieval diagnostics and public benchmark suites |
+| Tree-sitter, regex, and pluggable LSP parsing | Released and verified | parser registry and five-ecosystem extraction tests |
+| Structured checkpoints and provenance | Released and verified | blueprint, feedback, context, CLI, API, MCP, and continuity tests |
+| Pramana-aware action governance | Released and verified | governance unit/API/MCP tests and rendered block/override journey |
+| Bounded graph, dependents, impact, evidence, relevance | Released and verified | release-intelligence tests and rendered graph/reference journey |
+| Privacy-safe public benchmark | Released and verified | packaged corpus digest, multimode metrics, quality gates, and published benchmark asset |
+| Reinforcement and conservative decay | Released and verified | lifecycle tests and rendered operator action |
+| Isolated multi-brain workspaces | Released and verified | workspace tests and persisted rendered workflow |
+| Selective redacted export/import | Released and verified | staged validation, hostile bundle tests, rendered preview/export |
+| Authenticated local snapshots | Released and verified | tamper/size/link tests and rendered create/verify |
+| Opt-in Git hooks | Released and verified | linked-worktree/security tests and rendered on/off workflow |
+| Accessibility and responsive behavior | Released and verified | destination-wide axe WCAG checks, tab/navigation state, focus containment, live announcements, clipboard failure, reduced motion, forced-colors structure, and zero-overlap mobile Canvas |
+| Small-to-large resource evidence | Released and verified | `benchmarks/performance-baseline-v1.json` and bounded CI probe |
+| Install, upgrade/reinstall, uninstall | Released and verified | isolated wheel lifecycle smoke |
+| Shell-safe generated commands and exact bootstrap identity | Released and verified | executable PowerShell/POSIX hostile-path tests plus rendered duplicate-root and failed-verification scenarios |
 | Final security review | Released and verified | full-candidate and exact runtime-diff Codex Security scans completed with zero findings; test-only follow-up changed no runtime code |
-| Privacy-safe launch website and media | Locally proven | screenshots are generated by the real synthetic operator journey; gallery claims use only public synthetic fixtures; website and Product Hunt video/poster copies match byte-for-byte |
-| Windows, macOS, Linux execution | Released and verified | final `main` run 32 passed Windows x64, macOS ARM64, and Ubuntu with Python 3.11, 3.12, and 3.13 |
+| Privacy-safe launch website and media | Released and verified | screenshots are generated by the real synthetic operator journey; gallery claims use only public synthetic fixtures; website and Product Hunt video/poster copies match byte-for-byte |
+| Windows, macOS, Linux execution | Released and verified | CI run `32302463544` passed Windows x64, macOS ARM64, and Ubuntu with Python 3.11, 3.12, and 3.13 |
 | Release artifacts for every OS | Released and verified | CI-built wheel and three native binaries are attached with a combined SHA-256 manifest |
-| Tag, formal GitHub Release, links, post-publish install | Complete | annotated `v0.4.0-alpha` tag and prerelease point to `b921546`; public checksums, Windows binary, clean wheel install, 20-check smoke, upgrade, and uninstall passed |
+| Tag, formal GitHub Release, links, post-publish install | Complete | annotated `v0.4.0-alpha` tag and prerelease point to `358e76b`; refreshed public checksums match the wheel, Windows, Linux, macOS, and benchmark assets; staged Windows binary doctor passed |
 
 ## Residual Risks
 

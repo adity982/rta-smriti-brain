@@ -28,6 +28,8 @@ import {
 import "./styles.css";
 
 const repositoryUrl = import.meta.env.VITE_REPOSITORY_URL || "https://github.com/sulabhdubey/rta-smriti-brain";
+const releaseUrl = `${repositoryUrl}/releases/tag/v0.4.0-alpha`;
+const ciRunUrl = `${repositoryUrl}/actions/runs/32302463544`;
 const productHuntUrl = "https://www.producthunt.com/products/rta-smriti-brain?launch=rta-smriti-brain&utm_source=website&utm_medium=referral&utm_campaign=v040_launch";
 
 const installCommand = "python -m pip install .";
@@ -80,17 +82,17 @@ function Hero() {
       <div className="heroScrim" />
       <HeroGraph />
       <div className="heroContent shell">
-        <div className="eyebrow"><LockKeyhole size={14} /> Local-first. Agent-neutral. Evidence-aware.</div>
+        <div className="eyebrow"><LockKeyhole size={14} /> v0.4 alpha refreshed · Local-first · Agent-neutral</div>
         <h1>Rta-Smriti Brain</h1>
-        <p className="heroLead">Give every software project a private memory that survives new chats, agent switches, and context compaction.</p>
+        <p className="heroLead">Give every software project a private memory that survives new chats, agent switches, context compaction, and interrupted work.</p>
         <div className="heroActions">
-          <a className="primaryAction" href="#install"><TerminalSquare size={18} /> Get started <ArrowRight size={17} /></a>
+          <a className="primaryAction" href={releaseUrl}><TerminalSquare size={18} /> Download v0.4 alpha <ArrowRight size={17} /></a>
           <a className="secondaryAction" href="#demo"><Play size={17} /> Watch the product</a>
         </div>
         <a className="launchConversation" href={productHuntUrl}><MessageCircle size={15} /> Live on Product Hunt <span>Join the conversation</span><ExternalLink size={13} /></a>
         <div className="heroProof" aria-label="Product proof points">
-          <span><strong>6</strong> synthetic benchmark queries</span>
-          <span><strong>10,000</strong> synthetic files profiled</span>
+          <span><strong>358e76b</strong> release commit</span>
+          <span><strong>5</strong> hosted OS/Python lanes passed</span>
           <span><strong>0</strong> cloud accounts required</span>
         </div>
       </div>
@@ -127,7 +129,7 @@ function ProblemBand() {
           <h2>Every new AI chat forgets the project.</h2>
         </div>
         <div className="problemCopy">
-          <p>Architecture, release rules, prior failures, and human decisions disappear across sessions. Developers pay the tax in repeated explanations, broad repo scans, and tokens spent rebuilding context.</p>
+          <p>Architecture, release rules, prior failures, browser work, and human decisions disappear across sessions. Developers pay the tax in repeated explanations, broad repo scans, and tokens spent rebuilding context.</p>
           <p className="solutionLine"><Sparkles size={19} /> Rta-Smriti moves memory out of the chat and into the project.</p>
         </div>
       </div>
@@ -138,7 +140,7 @@ function ProblemBand() {
 const featureTabs = [
   ["graph", "Graph", Network, "See files, imports, symbols, memories, and evidence as one inspectable project system."],
   ["files", "Files", FileCode2, "Browse the real indexed tree, preview source, and add exact paths to the next task."],
-  ["memory", "Memory", Database, "Keep durable decisions and constraints separate from transient chat history."],
+  ["memory", "Memory", Database, "Keep durable decisions, structured checkpoints, and work-state records separate from transient chat history."],
   ["packs", "Context Packs", Zap, "Compile only the evidence relevant to the next agent objective."],
 ];
 
@@ -168,8 +170,8 @@ function Architecture() {
   const stages = [
     ["Inputs", "Repositories, threads, decisions", GitBranch],
     ["Local brain", "SQLite, FTS5, graph, evidence", Database],
-    ["Context compiler", "Bounded, task-specific retrieval", Sparkles],
-    ["Any agent", "Paste, CLI, skill, or MCP", BrainCircuit],
+    ["Continuity layer", "Transcript capture, checkpoints, reconciliation", Sparkles],
+    ["Any agent", "Paste, CLI, skill, or MCP gateway", BrainCircuit],
   ];
   return (
     <section className="architecture" id="architecture">
@@ -187,7 +189,7 @@ function Architecture() {
           ))}
         </div>
         <div className="architectureFacts">
-          <span><Check size={15} /> Python 3.11+</span><span><Check size={15} /> Zero runtime dependencies</span><span><Check size={15} /> Local SQLite</span><span><Check size={15} /> Stdio MCP</span><span><Check size={15} /> Packaged React console</span>
+          <span><Check size={15} /> Python 3.11+</span><span><Check size={15} /> Zero runtime dependencies</span><span><Check size={15} /> Local SQLite</span><span><Check size={15} /> Multi-project MCP gateway</span><span><Check size={15} /> Packaged React console</span>
         </div>
       </div>
     </section>
@@ -225,7 +227,7 @@ function Difference() {
     ["Code indexer", "File search", "Durable memory + task-specific packs"],
     ["Vector memory", "Similar text", "Evidence class + freshness + inspectability"],
     ["Agent chat memory", "One vendor", "Agent-neutral project layer"],
-    ["MCP memory server", "Tools only", "CLI + MCP + console + bootstrap + checks"],
+    ["MCP memory server", "Tools only", "CLI + MCP gateway + console + bootstrap + checks"],
   ];
   return (
     <section className="difference" id="difference">
@@ -256,8 +258,8 @@ function Demo() {
           <h2>From a large repository to one focused handoff.</h2>
           <ol>
             <li><span>1</span>Select the project brain.</li>
-            <li><span>2</span>Inspect files, evidence, and memory.</li>
-            <li><span>3</span>Describe one concrete objective.</li>
+            <li><span>2</span>Inspect files, evidence, memory, and readiness.</li>
+            <li><span>3</span>Save or refresh the structured checkpoint.</li>
             <li><span>4</span>Generate a pack for any agent.</li>
           </ol>
         </div>
@@ -276,7 +278,7 @@ function Install() {
   return (
     <section className="installSection" id="install">
       <div className="shell installGrid">
-        <div><span className="sectionIndex">07 / START LOCAL</span><h2>Your first project brain is one command away.</h2><p>Clone the repository, install locally, then bootstrap one private SQLite brain per project.</p></div>
+        <div><span className="sectionIndex">07 / START LOCAL</span><h2>Your first project brain is one command away.</h2><p>Download the refreshed v0.4 alpha or install from source, then bootstrap one private SQLite brain per project.</p><p><a href={releaseUrl}>Release assets</a> · <a href={ciRunUrl}>CI verification</a></p></div>
         <div className="terminalBlock">
           <div className="terminalHeader"><span><i /> <i /> <i /></span><strong>PowerShell</strong><CopyButton value={installCommand} /></div>
           <code><span>$</span> {installCommand}</code>
@@ -304,8 +306,8 @@ function LandingPage() {
 }
 
 const assetContent = {
-  social: ["Give every project a memory.", "Private, evidence-aware project memory for any AI coding agent.", "dashboard"],
-  "gallery-1": ["Your AI starts with project memory.", "Repo evidence, durable decisions, and long-session handoffs — compiled locally for the next task.", "dashboard"],
+  social: ["Give every project a memory.", "Private, evidence-aware project memory with continuity for any AI coding agent.", "dashboard"],
+  "gallery-1": ["Your AI starts with project memory.", "Repo evidence, durable decisions, long-session handoffs, and structured checkpoints — compiled locally for the next task.", "dashboard"],
   "gallery-2": ["One brain. Any agent.", "Codex · Claude Code · Cursor · Copilot · Gemini CLI · Aider · Cline · MCP", "agents"],
   "gallery-3": ["Evidence, not vibes.", "Observed facts, trusted instructions, inferences, memories, and hypotheses stay meaningfully different.", "pramana"],
   "gallery-4": ["10,000 synthetic files. One focused pack.", "A public, reproducible performance fixture exercises bounded local retrieval without exposing a private repository.", "performance"],
@@ -323,7 +325,7 @@ function AssetBoard({ name }) {
       {content[2] === "agents" && <div className="assetAgentOrbit"><BrainCircuit />{agents.slice(0, 7).map((agent, i) => <span key={agent} style={{ "--i": i }}>{agent}</span>)}</div>}
       {content[2] === "pramana" && <div className="assetPramana">{Object.entries(pramana).map(([key, value]) => <span key={key} style={{ "--color": value[2] }}><i />{key}<small>{value[0]}</small></span>)}</div>}
       {content[2] === "performance" && <div className="assetMetric"><span><strong>10,000</strong>synthetic files</span><ArrowRight /><span><strong>1</strong>task-specific pack</span></div>}
-      <div className="assetFooter"><span>Private SQLite · FTS5 · Graph · MCP</span><strong>rta-smriti</strong></div>
+      <div className="assetFooter"><span>Private SQLite · FTS5 · Graph · MCP Gateway</span><strong>rta-smriti</strong></div>
     </div>
   );
 }

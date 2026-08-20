@@ -8,11 +8,13 @@ CI, and post-publication installation proof.
 
 - Source version: `0.4.0-alpha` (`0.4.0a1` in Python package metadata)
 - Published branch: `main`
-- Frozen release commit: `b9215466beb0f3db41681239c7809832883abcc6`
+- Frozen release commit: `358e76b51652b2074580f0f183826691e8a9f686`
 - Formal Git tag: `v0.4.0-alpha` (annotated and verified against the frozen commit)
 - Formal GitHub Release: [`Rta-Smriti Brain v0.4.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.4.0-alpha)
-- Release state: published prerelease
-- Current `main` status: post-release continuity hardening candidate, pending hosted CI and optional release-asset refresh
+- Release state: published prerelease, refreshed in place from the green hosted matrix
+- Current `main` status: public README, documentation, and launch-site source
+  describe the formal prerelease; the release tag and assets remain bound to the
+  frozen commit above
 
 The release contains the universal wheel, Windows x64, Linux x64, and macOS
 ARM64 binaries, a combined SHA-256 manifest, and the synthetic public-benchmark
@@ -54,8 +56,10 @@ gitleaks dir --redact --no-banner launch-site/public
 
 ## Current Verified Snapshot
 
-Verified locally and through GitHub Actions on 2026-08-16. The final `main`
-workflow run is [CI run 32](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/31959287286).
+Verified locally and through GitHub Actions. The refreshed formal release is
+bound to [CI run 32302463544](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32302463544),
+which passed on Windows, macOS, Ubuntu Python 3.11, Ubuntu Python 3.12, and
+Ubuntu Python 3.13 before the tag and assets were refreshed.
 
 | Gate | Result |
 | --- | --- |
@@ -70,13 +74,15 @@ workflow run is [CI run 32](https://github.com/sulabhdubey/rta-smriti-brain/acti
 | Editable Python package dry-run | Resolved `rta-smriti-brain-0.4.0a1` |
 | Installed package lifecycle | Clean wheel install and 20-check first-run smoke passed; forced upgrade/reinstall and uninstall were then verified from an unrelated working directory |
 | Standalone Windows binary | Built from the versioned spec; CLI, SQLite/FTS, MCP dispatch, packaged dashboard assets, public benchmark, managed background sync, and managed console lifecycle passed |
-| Windows executable SHA-256 | `a246d081d76b654395cecdd9d6f20ca683fc74bd5ffa6b9699716434e9acc7c1` |
-| Universal wheel SHA-256 | `e487fe47f044c2d113a91012eeba32701ff854ac08a5a98d5a3d149b5ad16dc2` |
+| Windows executable SHA-256 | `f934f74c251dd2dbaca21ef26ad03ab21635bf725c5598bb361fe7419f23d406` |
+| Linux executable SHA-256 | `73723745b84efeb2a0db6f58f1e6859c6c1daae04869ea1a2aa0b5dc0e2ef1ff` |
+| macOS executable SHA-256 | `4875357a5bb4b3f4d07c954f3398179fb6175ee9f6f4b80c03d59cd31e8dd7ab` |
+| Universal wheel SHA-256 | `a371e9f8050e4b6ee079e476ab40002b1aceb64adf53b94390081cf4cac9ce5c` |
 | Automated rendered operator acceptance | Playwright exercised every primary destination, destination-wide axe checks, onboarding/selection, root-conflict and empty-project recovery, Graph, Files, Canvas, task handoff, clipboard failure, watcher controls, governance receipts, Intelligence, workspaces, vault, hooks, persistence, keyboard focus, reduced motion, forced-colors structure, and 720/390 px layouts. A second failure-injection scenario proves that failed post-bootstrap identity verification clears the previous project; 2 scenarios passed with no unexpected page or console errors |
 | Manual operator browser workflow | Six local projects loaded; Graph, Files, Canvas, Bases, references, task handoff, agent selection, context packs, release checks, bootstrap, settings, and watcher controls passed at desktop and 390 px |
 | Accessibility repair | Intelligence and Bases tabs expose tab semantics and roving keyboard focus; Bases exposes table, row-group, row, header, and cell relationships; exactly one route is current; toolbar toggles expose state; graph search and workspace fields have names; status changes are live; modal focus is trapped/restored; keyboard Canvas inspection focuses and reveals the mobile inspector; normal-mode WCAG scans passed every destination; mobile Canvas cards had zero overlaps |
 | Performance and resource probe | Sanitized synthetic baselines passed at 100, 1,000, and 10,000 files; the committed JSON reports indexing, deep freshness, search/context-pack p95, SQLite size, and traced peak memory without hostnames or absolute paths |
-| Publication privacy scan | Passed across 165 public candidates, including the website, screenshots, gallery, poster, and video |
+| Publication privacy scan | Passed across 169 public candidates, including the website, screenshots, gallery, poster, and video |
 | Launch-site operator acceptance | Built-site Playwright journey passed at desktop and 390 px: product and evidence tabs, mobile navigation, media metadata, local asset links, horizontal overflow, WCAG axe scans, and console/page errors |
 | Public benchmark | Six synthetic documents and queries; lexical and dependency-free hash-hybrid regression gates passed; this is not superiority evidence |
 | Codex Security remediation scan | A frozen pre-fix snapshot reviewed 18 changed runtime artifacts across eight threat surfaces and reproduced one low-severity stale-selection issue (`bf16b280-16e1-4d67-8d2a-08e7f83fab4e`). The issue is fixed and covered by a failing-then-passing rendered test. This scan is remediation evidence, not the final clean-tree gate |
@@ -84,8 +90,8 @@ workflow run is [CI run 32](https://github.com/sulabhdubey/rta-smriti-brain/acti
 | Built-in publish-readiness command | 11/11 structural and clean-tree checks passed on the candidate before publication |
 | Git whitespace validation | Passed |
 | Hosted compatibility | Final `main` matrix passed Windows x64, macOS ARM64, and Ubuntu with Python 3.11, 3.12, and 3.13 |
-| Published assets | Six release assets uploaded; GitHub asset digests match the recomputed combined manifest |
-| Post-publish installation | Every public asset redownloaded and checksum-verified; Windows binary doctor passed; published wheel completed 20 operator checks, forced upgrade, and clean uninstall |
+| Published assets | Six refreshed release assets uploaded from the green hosted run; public downloads match the recomputed combined manifest |
+| Post-publish installation | Every refreshed public asset redownloaded and checksum-verified; staged Windows binary `--version` and `doctor` passed |
 
 The six local skips are explicit platform or privilege conditions. Windows
 cannot exercise POSIX mode bits, and this account cannot create the symlinks
@@ -96,7 +102,7 @@ controls remain exercised on Windows.
 Each hosted job performed the dashboard builds, privacy scan, Python regression
 suite, bytecode compilation, package-resolution check, clean-wheel install and
 first-run smoke, and built-in publish-readiness check. The final matrix passed
-before the release tag was created.
+before the release tag was refreshed.
 
 Gitleaks, Bandit, Ruff, and Semgrep were unavailable in the current shell, so
 this page does not claim fresh results from any of them. The bundled privacy
@@ -109,18 +115,18 @@ poster copies match byte-for-byte; private-project scale claims are not accepted
 as launch evidence.
 
 The final wheel and three native binaries were produced and smoke-tested by the
-hosted matrix from the approved commit. Their workflow ZIP digests and enclosed
-manifests were verified before upload. The six public release assets were then
+hosted matrix from the approved commit. The six public release assets were then
 downloaded again, and every file matched the published `SHA256SUMS.txt`.
 
-## Post-Release Main Candidate
+## Refreshed v0.4 Alpha Scope
 
-The continuity hardening batch after the published tag adds managed transcript
-capture, append-only session events, structured work-state reconciliation,
-operational readiness, and a multi-project MCP gateway. Local Windows
-verification for that batch covered unit tests, bytecode compilation, dashboard
-and launch builds, dependency audits, wheel and binary smoke tests, privacy
-scan, presentation-mode media sanitization, and six-project daemon status.
+The refreshed `v0.4.0-alpha` release includes the continuity hardening batch:
+managed transcript capture, append-only session events, structured work-state
+reconciliation, operational readiness, and a fail-closed multi-project MCP
+gateway. Local verification for that batch covered unit tests, bytecode
+compilation, dashboard and launch builds, dependency audits, wheel and binary
+smoke tests, privacy scan, presentation-mode media sanitization, and six-project
+daemon status. Hosted CI then passed on the refreshed commit before publication.
 
 Gitleaks is an optional release-environment check and is not claimed in this
 snapshot. The bundled privacy scanner remains a required gate and passed; this
@@ -128,8 +134,8 @@ page does not imply that the two tools are equivalent.
 
 Codex host configuration was generated, added to the local Codex configuration,
 parsed successfully, and exercised against the multi-project MCP gateway over
-stdio. Native tool discovery in a newly started Codex task remains a publication
-gate because an already-running task cannot dynamically acquire MCP tools.
+stdio. Existing Codex tasks still cannot dynamically acquire newly registered
+MCP tools; a fresh task must be started after host configuration changes.
 
 ## Privacy Boundary
 

@@ -7,7 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/sulabhdubey/rta-smriti-brain?include_prereleases&label=release)](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.4.0-alpha)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
 
-**A local project brain for AI coding agents.**
+**A local project brain for AI coding agents. Current prerelease: `v0.4.0-alpha`, refreshed at commit `358e76b`.**
 
 [Download v0.4.0-alpha](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.4.0-alpha) · [Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second product demo](launch-assets/product-hunt/rta-smriti-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Public benchmark](docs/PUBLIC_BENCHMARK.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
 
@@ -18,6 +18,20 @@ It is built for the moment every AI-assisted developer knows too well:
 > "New chat. Same project. Same explanations. Same lost context."
 
 Rta-Smriti gives each project a memory that stays on your machine.
+
+## Latest Release
+
+`v0.4.0-alpha` is the current public alpha. The refreshed release points to
+commit `358e76b51652b2074580f0f183826691e8a9f686` and was verified by
+[GitHub Actions run 32302463544](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32302463544)
+on Windows, macOS, and Ubuntu across Python 3.11, 3.12, and 3.13.
+
+The release includes a universal wheel, Windows x64, Linux x64, and macOS
+ARM64 standalone binaries, a public benchmark result, and `SHA256SUMS.txt`.
+The release refresh adds the managed continuity lifecycle, resumable local
+Codex transcript capture, structured checkpoints, work-state reconciliation,
+operational readiness checks, refreshed release assets, and the multi-project
+MCP gateway on top of the original v0.4 alpha feature set.
 
 ## What It Does
 
@@ -354,9 +368,7 @@ See [SECURITY.md](SECURITY.md) and [docs/PUBLISHING_PRIVACY.md](docs/PUBLISHING_
 
 Alpha, local-first, working developer tool.
 
-Verified in the current Windows release-candidate run; the same checked-in
-workflow defines Windows, Ubuntu, and macOS jobs that must pass after the
-owner-approved push:
+Verified by the current public prerelease and hosted CI matrix:
 
 - Python CLI
 - SQLite schema and FTS search
@@ -372,6 +384,10 @@ owner-approved push:
 - configurable fail-closed large-file policy
 - canonical-root protection and Git checkout awareness
 - structured checkpoints, claim provenance, and compact freshness receipts
+- managed Codex continuity capture with resumable cursors, redaction, backlog bounds, and conservative interruption checkpoints
+- structured work-state reconciliation for assets, jobs, approvals, blockers, QA decisions, fallbacks, and next actions
+- operational readiness that separates database health from continuation readiness
+- multi-project MCP gateway with fail-closed project selection
 - managed console lifecycle, optional login startup, and one-command onboarding
 - evidence-aware Action Gate with hash-backed policies and short-lived decision receipts
 - retrieval diagnostics, bounded graph queries, and a packaged privacy-safe benchmark harness
