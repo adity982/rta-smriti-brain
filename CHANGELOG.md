@@ -5,6 +5,9 @@
 - Added append-only Codex session events, resumable transcript cursors, structured work-state reconciliation, and operational readiness.
 - Added a managed continuity daemon with canonical-project session binding, partial-write recovery, payload redaction/bounds, heartbeat validation, and conservative automatic checkpoints.
 - Added dashboard and MCP lifecycle controls plus one fail-closed multi-project MCP gateway.
+- Added optional Ed25519 public-key snapshot signatures and cross-platform snapshot key generation while keeping HMAC snapshots compatible.
+- Added shareable Markdown output for the public benchmark.
+- Added continuity binding diagnostics that explain when recent Codex sessions exist outside the canonical project root without exposing foreign paths.
 
 All notable changes are documented here. The project follows semantic versioning while APIs remain alpha.
 

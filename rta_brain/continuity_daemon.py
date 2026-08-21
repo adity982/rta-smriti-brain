@@ -69,6 +69,11 @@ def continuity_status(db_path: Path, project: str) -> dict:
         payload["process_alive"] = process_alive
         if not process_alive or not heartbeat_fresh:
             state = "stale"
+    if payload.get("root") and payload.get("sessions_root"):
+        payload["binding_diagnostics"] = continuity_binding_diagnostics(
+            Path(str(payload["sessions_root"])), Path(str(payload["root"])),
+            lookback_days=float(payload.get("lookback_days", 30) or 30),
+        )
     return {"status": "ok", **payload, "state": state}
 
 
@@ -253,6 +258,90 @@ def validate_codex_session_binding(path: Path, sessions_root: Path, project_root
     return session_id
 
 
+def _recent_session_candidates(
+    sessions_root: Path,
+    *,
+    lookback_days: float = 30,
+    now: float | None = None,
+) -> list[Path]:
+    sessions = sessions_root.expanduser().resolve()
+    if not sessions.is_dir():
+        return []
+    current_time = time.time() if now is None else float(now)
+    cutoff = None if float(lookback_days) == 0 else current_time - float(lookback_days) * 86400
+    if cutoff is None:
+        candidates = sessions.rglob("*.jsonl")
+    else:
+        candidate_set = set(sessions.glob("*.jsonl"))
+        current_day = datetime.fromtimestamp(current_time, timezone.utc).date()
+        for offset in range(int(float(lookback_days)) + 2):
+            day = current_day - timedelta(days=offset)
+            candidate_set.update((sessions / f"{day.year:04d}" / f"{day.month:02d}" / f"{day.day:02d}").rglob("*.jsonl"))
+        candidates = sorted(candidate_set)
+    bounded = []
+    for path in candidates:
+        if path.is_symlink() or not path.is_file():
+            continue
+        if cutoff is not None and path.stat().st_mtime < cutoff:
+            continue
+        bounded.append(path)
+    return bounded
+
+
+def continuity_binding_diagnostics(
+    sessions_root: Path,
+    project_root: Path,
+    *,
+    lookback_days: float = 30,
+    now: float | None = None,
+) -> dict:
+    """Explain Codex session discovery without exposing foreign working paths."""
+    sessions = sessions_root.expanduser().resolve()
+    root = project_root.expanduser().resolve()
+    if not sessions.is_dir():
+        return {
+            "status": "ok", "sessions_root_present": False, "project_root_present": root.is_dir(),
+            "recent_sessions": 0, "matching_sessions": 0, "foreign_sessions": 0,
+            "invalid_sessions": 0, "hint": "Codex sessions directory was not found.",
+        }
+    if not root.is_dir():
+        return {
+            "status": "ok", "sessions_root_present": True, "project_root_present": False,
+            "recent_sessions": 0, "matching_sessions": 0, "foreign_sessions": 0,
+            "invalid_sessions": 0, "hint": "Canonical project root was not found.",
+        }
+    recent = matching = foreign = invalid = 0
+    for path in _recent_session_candidates(sessions, lookback_days=lookback_days, now=now):
+        identity = _session_identity(path)
+        if identity is None:
+            invalid += 1
+            continue
+        recent += 1
+        _, cwd = identity
+        try:
+            cwd.relative_to(root)
+        except ValueError:
+            foreign += 1
+        else:
+            matching += 1
+    hint = "Codex continuity can capture sessions for this canonical project root."
+    if recent == 0:
+        hint = "No recent Codex session metadata was found in the configured sessions directory."
+    elif matching == 0 and foreign:
+        hint = (
+            "Recent Codex sessions exist, but their working directories are outside the canonical project root. "
+            "Start the Codex task from this repository root or explicitly ingest the intended transcript."
+        )
+    elif invalid and matching == 0:
+        hint = "Recent session files were found, but none had usable session metadata for this project."
+    return {
+        "status": "ok", "sessions_root_present": True, "project_root_present": True,
+        "recent_sessions": recent, "matching_sessions": matching,
+        "foreign_sessions": foreign, "invalid_sessions": invalid,
+        "hint": hint,
+    }
+
+
 def discover_codex_sessions(
     sessions_root: Path,
     project_root: Path,
@@ -266,22 +355,7 @@ def discover_codex_sessions(
     if not sessions_root.is_dir() or not project_root.is_dir():
         return []
     found = []
-    current_time = time.time() if now is None else float(now)
-    cutoff = None if float(lookback_days) == 0 else current_time - float(lookback_days) * 86400
-    if cutoff is None:
-        candidates = sessions_root.rglob("*.jsonl")
-    else:
-        candidate_set = set(sessions_root.glob("*.jsonl"))
-        current_day = datetime.fromtimestamp(current_time, timezone.utc).date()
-        for offset in range(int(float(lookback_days)) + 2):
-            day = current_day - timedelta(days=offset)
-            candidate_set.update((sessions_root / f"{day.year:04d}" / f"{day.month:02d}" / f"{day.day:02d}").rglob("*.jsonl"))
-        candidates = sorted(candidate_set)
-    for path in candidates:
-        if path.is_symlink() or not path.is_file():
-            continue
-        if cutoff is not None and path.stat().st_mtime < cutoff:
-            continue
+    for path in _recent_session_candidates(sessions_root, lookback_days=lookback_days, now=now):
         identity = _session_identity(path)
         if identity is None:
             continue

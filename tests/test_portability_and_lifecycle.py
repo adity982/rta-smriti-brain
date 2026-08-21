@@ -11,7 +11,7 @@ from rta_brain.db import connect, init_project, remember, save_checkpoint
 from rta_brain.governance import create_policy
 from rta_brain.hooks import install_git_hooks, uninstall_git_hooks
 from rta_brain.lifecycle import apply_memory_feedback, run_conservative_decay
-from rta_brain.portability import export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_verify
+from rta_brain.portability import export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_keygen, snapshot_verify
 from rta_brain.workspaces import add_project_to_workspace, create_workspace, get_workspace, search_workspace
 
 
@@ -159,6 +159,59 @@ class PortabilityAndLifecycleTests(unittest.TestCase):
             authenticated["manifest"]["project_count"] = 999
             snapshot.write_bytes(json.dumps(authenticated).encode("ascii") + b"\n" + payload)
             self.assertFalse(snapshot_verify(snapshot, key_path=key)["valid"])
+
+    def test_snapshot_can_use_optional_public_key_signature(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_db = root / "source.sqlite"
+            conn = connect(source_db)
+            try:
+                init_project(conn, "demo", str(root / "repo"))
+                remember(conn, "Public-key snapshot fixture", project="demo")
+            finally:
+                conn.close()
+
+            private_key = root / "snapshot-ed25519-private.pem"
+            public_key = root / "snapshot-ed25519-public.pem"
+            try:
+                generated = snapshot_keygen(private_key, public_key)
+            except ValueError as exc:
+                if "cryptography" in str(exc):
+                    self.skipTest("cryptography optional dependency is not installed")
+                raise
+            snapshot = root / "snapshot.rta"
+
+            self.assertEqual(generated["signature_algorithm"], "Ed25519")
+            self.assertTrue(private_key.exists())
+            self.assertTrue(public_key.exists())
+            created = snapshot_create(source_db, snapshot, private_key_path=private_key)
+            self.assertEqual(created["signature_algorithm"], "Ed25519")
+            verified = snapshot_verify(snapshot, public_key_path=public_key)
+            self.assertTrue(verified["valid"], verified)
+            self.assertEqual(verified["manifest"]["signature_algorithm"], "Ed25519")
+
+            header, payload = snapshot.read_bytes().split(b"\n", 1)
+            authenticated = json.loads(header)
+            authenticated["manifest"]["project_count"] = 999
+            snapshot.write_bytes(json.dumps(authenticated).encode("ascii") + b"\n" + payload)
+            self.assertFalse(snapshot_verify(snapshot, public_key_path=public_key)["valid"])
+
+    def test_snapshot_auth_material_must_be_unambiguous(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_db = root / "source.sqlite"
+            conn = connect(source_db)
+            try:
+                init_project(conn, "demo", str(root / "repo"))
+            finally:
+                conn.close()
+            key = root / "snapshot.key"
+            private_key = root / "private.pem"
+            private_key.write_text("not a real key", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "exactly one"):
+                snapshot_create(source_db, root / "snapshot.rta", key_path=key, private_key_path=private_key)
+            with self.assertRaisesRegex(ValueError, "exactly one"):
+                snapshot_verify(root / "snapshot.rta", key_path=key, public_key_path=root / "public.pem")
 
     def test_unsigned_bundle_import_downgrades_memories_and_quarantines_authority(self):
         with tempfile.TemporaryDirectory() as tmp:

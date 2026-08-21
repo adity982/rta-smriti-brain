@@ -5,6 +5,7 @@ clean wheels, and standalone artifacts can run the same privacy-safe regression.
 
 ```bash
 rta-brain benchmark --json
+rta-brain benchmark --report rta-smriti-benchmark.md --json
 ```
 
 The corpus contains no private repositories, user paths, generated context packs,
@@ -48,3 +49,8 @@ behavior, not as independent proof that Rta-Smriti outperforms another product.
 Release CI stores the JSON result from Ubuntu/Python 3.11 as an artifact while
 also running the same benchmark on Windows, macOS, and supported Python versions.
 Required CI remains dependency-free and does not request the optional model.
+
+Use `--report` when you need a shareable Markdown summary for release notes,
+issue triage, or a local regression record. The report contains only aggregate
+metrics from the packaged synthetic corpus plus its digest; it does not embed
+private repository content or local project memories.

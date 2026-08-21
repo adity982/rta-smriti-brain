@@ -36,8 +36,8 @@ for the behavior it directly exercises.
   public benchmark reports unavailable/not-requested states instead of inventing semantic scores.
 - Native LSP quality depends on the operator-selected adapter command. Rta-Smriti bounds and exposes
   the adapter but cannot certify arbitrary third-party language servers.
-- HMAC snapshots authenticate with a shared secret; they are not encrypted and are not public-key
-  signatures.
+- Snapshots authenticate with either compatible HMAC shared keys or optional Ed25519 public-key
+  signatures; they are not encrypted and are not safe public exports.
 - Performance evidence is synthetic and environment-specific. It is useful for regression detection,
   not a promise for every repository or machine.
 - Automated WCAG and keyboard checks do not substitute for testing every operating-system screen

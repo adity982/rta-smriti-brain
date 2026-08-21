@@ -460,11 +460,12 @@ When `--source-path` points inside the canonical project root, Rta-Smriti hashes
 & $RtaBrain --db "$BrainDir\project-name.sqlite" retrieval-diagnostics "authentication boundary" --project project-name --json
 & $RtaBrain --db "$BrainDir\project-name.sqlite" graph-query authorize --project project-name --type impact --depth 2 --limit 100 --json
 & $RtaBrain benchmark --json
+& $RtaBrain benchmark --report .\rta-smriti-benchmark.md --json
 # Optional: requires the embeddings extra and an available local model
 & $RtaBrain benchmark --include-semantic --semantic-model all-MiniLM-L6-v2 --json
 ```
 
-Graph calls are approximate hints. Verify consequential changes against source and tests. The packaged benchmark is a synthetic regression harness, not competitive proof.
+Graph calls are approximate hints. Verify consequential changes against source and tests. The packaged benchmark is a synthetic regression harness, not competitive proof. The `--report` output is intended for public release notes and issue triage because it contains only the packaged synthetic corpus digest and aggregate metrics.
 
 ## Search Multiple Project Brains
 
@@ -497,7 +498,16 @@ Authenticated snapshots contain the complete SQLite brain. Keep both the snapsho
 & $RtaBrain snapshot verify .\project-brain.rta-snapshot --key "$BrainDir\snapshot.key" --json
 ```
 
-HMAC-SHA256 detects tampering; it does not encrypt the snapshot or provide public-key identity. Snapshot databases are capped at 64 MiB and legacy envelopes at 16 MiB; authentication and bounded reads occur before payload acceptance.
+HMAC-SHA256 detects tampering with a shared local key. For public-key identity, install the optional signing extra and use an Ed25519 key pair:
+
+```powershell
+python -m pip install ".[signing]"
+& $RtaBrain snapshot keygen "$BrainDir\snapshot-ed25519-private.pem" --public-key "$BrainDir\snapshot-ed25519-public.pem" --json
+& $RtaBrain --db "$BrainDir\project-name.sqlite" snapshot create .\project-brain.rta-snapshot --private-key "$BrainDir\snapshot-ed25519-private.pem" --json
+& $RtaBrain snapshot verify .\project-brain.rta-snapshot --public-key "$BrainDir\snapshot-ed25519-public.pem" --json
+```
+
+Snapshots are not encrypted and are not safe to publish. Snapshot databases are capped at 64 MiB and legacy envelopes at 16 MiB; authentication and bounded reads occur before payload acceptance.
 
 ## Opt In To Checkpoints And Feedback
 

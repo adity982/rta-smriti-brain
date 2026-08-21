@@ -27,7 +27,7 @@ from .repository import canonical_root, canonical_root_key, repository_state, tr
 from .governance import build_operational_context, create_policy, list_policies, list_receipts, preflight, retire_policy
 from .hooks import install_git_hooks, uninstall_git_hooks
 from .lifecycle import apply_memory_feedback, run_conservative_decay
-from .portability import export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_verify
+from .portability import export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_keygen, snapshot_verify
 from .watch_daemon import start_watcher, stop_watcher, watcher_status
 from .workspaces import add_project_to_workspace, create_workspace, get_workspace, list_workspaces, search_workspace
 from .continuity_daemon import continuity_status, start_continuity, stop_continuity
@@ -1062,14 +1062,25 @@ def make_handler(config: ConsoleConfig):
                         conn.close()
                     return
                 if self.path == "/api/snapshot":
-                    db_path = resolve_brain_db(config, payload["db_path"])
                     action = str(payload.get("action", "create")).strip().lower()
-                    if action == "create":
-                        self._json(snapshot_create(db_path, Path(payload["path"]), key_path=Path(payload["key_path"])))
+                    if action == "keygen":
+                        self._json(snapshot_keygen(Path(payload["path"]), Path(payload["public_key_path"])))
+                    elif action == "create":
+                        db_path = resolve_brain_db(config, payload["db_path"])
+                        self._json(snapshot_create(
+                            db_path,
+                            Path(payload["path"]),
+                            key_path=Path(payload["key_path"]) if payload.get("key_path") else None,
+                            private_key_path=Path(payload["private_key_path"]) if payload.get("private_key_path") else None,
+                        ))
                     elif action == "verify":
-                        self._json(snapshot_verify(Path(payload["path"]), key_path=Path(payload["key_path"])))
+                        self._json(snapshot_verify(
+                            Path(payload["path"]),
+                            key_path=Path(payload["key_path"]) if payload.get("key_path") else None,
+                            public_key_path=Path(payload["public_key_path"]) if payload.get("public_key_path") else None,
+                        ))
                     else:
-                        raise ValueError("snapshot action must be create or verify")
+                        raise ValueError("snapshot action must be create, verify, or keygen")
                     return
                 if self.path == "/api/git-hooks":
                     action = str(payload.get("action", "install")).strip().lower()

@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import secrets
 import tempfile
 from pathlib import Path, PurePosixPath
 from statistics import median
@@ -244,3 +246,91 @@ def run_public_benchmark(
         "modes": modes,
         "quality_gates": _quality_gates(),
     }
+
+
+def _metric(value) -> str:
+    if isinstance(value, (int, float)):
+        return f"{float(value):.3f}"
+    return "NA"
+
+
+def benchmark_report_markdown(result: dict) -> str:
+    """Render a bounded, shareable report for the synthetic public benchmark."""
+    corpus = result.get("corpus") or {}
+    modes = result.get("modes") or {}
+    gates = result.get("quality_gates") or {}
+    lines = [
+        "# Rta-Smriti Public Benchmark",
+        "",
+        "This report summarizes the packaged synthetic reproducibility and regression harness. "
+        "It is not external proof of superiority over other memory systems.",
+        "",
+        f"- Dataset: `{result.get('dataset', 'public corpus')}`",
+        f"- Dataset digest: `{result.get('dataset_digest', 'unknown')}`",
+        f"- Corpus: {int(corpus.get('documents') or 0)} documents, {int(corpus.get('queries') or 0)} queries",
+        f"- Synthetic: {bool(corpus.get('synthetic'))}",
+        "",
+        "| Mode | Status | NDCG@K | Recall@K | MRR@K | Precision@K | P50 ms | P95 ms |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for name in ("no_memory", "lexical", "hash_hybrid", "optional_semantic"):
+        metrics = modes.get(name) or {}
+        status = str(metrics.get("status") or "ok")
+        latency = metrics.get("latency_ms") if isinstance(metrics.get("latency_ms"), dict) else {}
+        lines.append(
+            "| "
+            + " | ".join((
+                name,
+                status,
+                _metric(metrics.get("ndcg_at_k")),
+                _metric(metrics.get("recall_at_k")),
+                _metric(metrics.get("mrr_at_k")),
+                _metric(metrics.get("precision_at_k")),
+                _metric(latency.get("p50")),
+                _metric(latency.get("p95")),
+            ))
+            + " |"
+        )
+    lines.extend([
+        "",
+        "## Quality Gates",
+        "",
+        "| Gate | Score |",
+        "| --- | ---: |",
+    ])
+    for name in sorted(gates):
+        lines.append(f"| {name} | {_metric(gates[name])} |")
+    lines.extend([
+        "",
+        "Optional Sentence Transformers comparison is reported only when explicitly requested and available locally.",
+        "No private repository content, local home paths, API keys, or credentials are required by this corpus.",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def write_benchmark_report(result: dict, output: Path) -> dict:
+    requested = Path(output).expanduser()
+    if requested.is_symlink():
+        raise ValueError("refusing to replace a linked benchmark report")
+    destination = requested.resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        stat = destination.stat()
+        if destination.is_symlink() or stat.st_nlink > 1:
+            raise ValueError("refusing to replace a linked benchmark report")
+    temporary = destination.with_name(f".{destination.name}.{secrets.token_hex(8)}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    descriptor = os.open(temporary, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(benchmark_report_markdown(result))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return {"status": "ok", "path": str(destination), "format": "markdown"}

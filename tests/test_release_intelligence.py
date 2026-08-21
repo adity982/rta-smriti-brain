@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from rta_brain.benchmark import default_public_benchmark_path, run_public_benchmark
+from rta_brain.benchmark import benchmark_report_markdown, default_public_benchmark_path, run_public_benchmark
 from rta_brain.db import connect, graph_query, ingest_repo, init_project, remember, update_project_settings
 from rta_brain.diagnostics import retrieval_diagnostics
 from rta_brain.parsers import RegexParser
@@ -110,6 +110,31 @@ class ReleaseIntelligenceTests(unittest.TestCase):
         self.assertEqual(optional["status"], "unavailable")
         self.assertEqual(optional["provider"], "sentence-transformers")
         self.assertNotIn("private details", str(optional))
+
+    def test_public_benchmark_can_render_a_shareable_markdown_report(self):
+        result = run_public_benchmark(default_public_benchmark_path())
+        report = benchmark_report_markdown(result)
+
+        self.assertIn("# Rta-Smriti Public Benchmark", report)
+        self.assertIn(result["dataset_digest"], report)
+        self.assertIn("| Mode | Status | NDCG@K | Recall@K | MRR@K | Precision@K | P50 ms | P95 ms |", report)
+        self.assertIn("hash_hybrid", report)
+        self.assertIn("synthetic reproducibility and regression harness", report)
+        self.assertNotIn(str(Path.home()), report)
+        self.assertNotIn("token", report.lower())
+
+    def test_public_benchmark_report_refuses_linked_output(self):
+        from rta_brain.benchmark import write_benchmark_report
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target.md"
+            target.write_text("keep\n", encoding="utf-8")
+            linked = root / "linked.md"
+            linked.hardlink_to(target)
+            with self.assertRaisesRegex(ValueError, "linked benchmark report"):
+                write_benchmark_report(run_public_benchmark(default_public_benchmark_path()), linked)
+            self.assertEqual(target.read_text(encoding="utf-8"), "keep\n")
 
     def test_public_benchmark_rejects_oversized_or_unbounded_corpora(self):
         with tempfile.TemporaryDirectory() as tmp:

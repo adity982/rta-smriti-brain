@@ -6,7 +6,7 @@ from pathlib import Path
 from . import __version__
 from .autostart import autostart_status, disable_autostart, enable_autostart
 from .context import build_context_pack, build_continuation_prompt
-from .benchmark import default_public_benchmark_path, run_public_benchmark
+from .benchmark import default_public_benchmark_path, run_public_benchmark, write_benchmark_report
 from .console import publish_readiness, run_dashboard
 from .console_daemon import (
     console_status,
@@ -32,7 +32,7 @@ from .diagnostics import retrieval_diagnostics
 from .hooks import install_git_hooks, uninstall_git_hooks
 from .lifecycle import apply_memory_feedback, run_conservative_decay
 from .onboarding import SUPPORTED_TARGET_AGENTS, onboard_project
-from .portability import export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_verify
+from .portability import export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_keygen, snapshot_verify
 from .project import bootstrap_project, install_local, mcp_config_payload, mcp_gateway_config_payload, projects_list, self_check
 from .watch import watch_repository
 from .watch_daemon import run_watcher_worker, start_watcher, stop_watcher, watcher_status
@@ -185,6 +185,7 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_cmd.add_argument("--dataset", default=str(default_public_benchmark_path()))
     benchmark_cmd.add_argument("--include-semantic", action="store_true")
     benchmark_cmd.add_argument("--semantic-model", default="all-MiniLM-L6-v2")
+    benchmark_cmd.add_argument("--report", help="Write a shareable Markdown benchmark report")
 
     workspace_cmd = sub.add_parser("workspace", help="Create and use a multi-project workspace")
     add_common_options(workspace_cmd)
@@ -213,9 +214,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     snapshot_cmd = sub.add_parser("snapshot", help="Create or verify an authenticated local brain snapshot")
     add_common_options(snapshot_cmd)
-    snapshot_cmd.add_argument("action", choices=("create", "verify"))
+    snapshot_cmd.add_argument("action", choices=("create", "verify", "keygen"))
     snapshot_cmd.add_argument("path")
-    snapshot_cmd.add_argument("--key", required=True)
+    snapshot_cmd.add_argument("--key", help="Shared HMAC key path for compatible private snapshots")
+    snapshot_cmd.add_argument("--private-key", help="Ed25519 private PEM key path for public-key snapshot creation")
+    snapshot_cmd.add_argument("--public-key", help="Ed25519 public PEM key path for public-key snapshot verification")
 
     hooks_cmd = sub.add_parser("git-hooks", help="Opt in or out of managed Git checkpoint hooks")
     add_common_options(hooks_cmd)
@@ -614,6 +617,50 @@ def main(argv=None) -> int:
             else:
                 print(f"error: {exc}", file=sys.stderr)
             return 1
+    if args.command == "benchmark":
+        try:
+            payload = run_public_benchmark(
+                Path(args.dataset), include_semantic=args.include_semantic,
+                semantic_model=args.semantic_model,
+            )
+            if args.report:
+                payload = {**payload, "report": write_benchmark_report(payload, Path(args.report))}
+            emit(payload, args.json)
+            return 0
+        except Exception as exc:
+            error = {"status": "error", "error": {"type": exc.__class__.__name__, "message": str(exc)}}
+            if getattr(args, "json", False):
+                print(json.dumps(error, indent=2, sort_keys=True), file=sys.stderr)
+            else:
+                print(f"error: {exc}", file=sys.stderr)
+            return 1
+    if args.command == "snapshot":
+        try:
+            if args.action == "keygen":
+                if not args.public_key:
+                    raise ValueError("snapshot keygen requires --public-key")
+                payload = snapshot_keygen(Path(args.path), Path(args.public_key))
+            elif args.action == "create":
+                payload = snapshot_create(
+                    Path(args.db), Path(args.path),
+                    key_path=Path(args.key) if args.key else None,
+                    private_key_path=Path(args.private_key) if args.private_key else None,
+                )
+            else:
+                payload = snapshot_verify(
+                    Path(args.path),
+                    key_path=Path(args.key) if args.key else None,
+                    public_key_path=Path(args.public_key) if args.public_key else None,
+                )
+            emit(payload, args.json)
+            return 0
+        except Exception as exc:
+            error = {"status": "error", "error": {"type": exc.__class__.__name__, "message": str(exc)}}
+            if getattr(args, "json", False):
+                print(json.dumps(error, indent=2, sort_keys=True), file=sys.stderr)
+            else:
+                print(f"error: {exc}", file=sys.stderr)
+            return 1
     exit_code = 0
     try:
         conn = connect(Path(args.db))
@@ -678,11 +725,6 @@ def main(argv=None) -> int:
                 )
             elif args.command == "retrieval-diagnostics":
                 payload = retrieval_diagnostics(conn, args.query, project=args.project, limit=args.limit)
-            elif args.command == "benchmark":
-                payload = run_public_benchmark(
-                    Path(args.dataset), include_semantic=args.include_semantic,
-                    semantic_model=args.semantic_model,
-                )
             elif args.command == "workspace":
                 if args.action == "list":
                     payload = list_workspaces(conn)
@@ -712,11 +754,6 @@ def main(argv=None) -> int:
                 payload = (
                     inspect_bundle(Path(args.source), conn=conn)
                     if args.preview else import_bundle(conn, Path(args.source), conflict=args.conflict)
-                )
-            elif args.command == "snapshot":
-                payload = (
-                    snapshot_create(Path(args.db), Path(args.path), key_path=Path(args.key))
-                    if args.action == "create" else snapshot_verify(Path(args.path), key_path=Path(args.key))
                 )
             elif args.command == "git-hooks":
                 payload = (

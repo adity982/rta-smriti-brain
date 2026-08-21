@@ -156,6 +156,9 @@ python -m pip install ".[watcher]"
 
 # Local Sentence Transformers retrieval
 python -m pip install ".[embeddings]"
+
+# Ed25519 public-key snapshot signatures
+python -m pip install ".[signing]"
 ```
 
 No optional package is downloaded or activated without an explicit install and

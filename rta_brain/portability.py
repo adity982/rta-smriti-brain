@@ -1,4 +1,4 @@
-"""Selective bundles and HMAC-authenticated local brain snapshots."""
+"""Selective bundles and authenticated local brain snapshots."""
 
 from __future__ import annotations
 
@@ -25,6 +25,8 @@ MAX_SNAPSHOT_HEADER_BYTES = 16 * 1024
 MAX_SNAPSHOT_FILE_BYTES = MAX_SNAPSHOT_HEADER_BYTES + 1 + ((MAX_SNAPSHOT_DATABASE_BYTES + 2) // 3) * 4
 MAX_LEGACY_SNAPSHOT_BYTES = 16 * 1024 * 1024
 MAX_SNAPSHOT_KEY_BYTES = 4096
+MAX_PUBLIC_KEY_BYTES = 4096
+MAX_PRIVATE_KEY_BYTES = 8192
 MAX_BUNDLE_PROJECTS = 100
 MAX_BUNDLE_RECORDS = 100_000
 ALLOWED_BUNDLE_SECTIONS = frozenset({"memories", "checkpoints", "policies"})
@@ -567,7 +569,102 @@ def _read_or_create_key(key_path: Path, *, create: bool) -> bytes:
     return key
 
 
-def snapshot_create(db_path: Path, output: Path, *, key_path: Path) -> dict:
+def _read_required_key_file(key_path: Path, *, label: str, limit: int) -> bytes:
+    requested = Path(key_path).expanduser()
+    if requested.is_symlink():
+        raise ValueError(f"linked {label} keys are not allowed")
+    path = requested.resolve()
+    if not path.exists():
+        raise ValueError(f"{label} key does not exist: {path}")
+    stat = path.stat()
+    if stat.st_nlink > 1:
+        raise ValueError(f"linked {label} keys are not allowed")
+    if stat.st_size > limit:
+        raise ValueError(f"{label} key exceeds the {limit:,} byte limit")
+    return path.read_bytes()
+
+
+def _load_ed25519_private_key(private_key_path: Path):
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    except ImportError as exc:
+        raise ValueError(
+            "Ed25519 snapshots require the optional cryptography package; "
+            "install rta-smriti-brain[signing] locally"
+        ) from exc
+    key_bytes = _read_required_key_file(private_key_path, label="snapshot private", limit=MAX_PRIVATE_KEY_BYTES)
+    try:
+        key = serialization.load_pem_private_key(key_bytes, password=None)
+    except ValueError as exc:
+        raise ValueError("snapshot private key must be an unencrypted Ed25519 PEM key") from exc
+    if not isinstance(key, Ed25519PrivateKey):
+        raise ValueError("snapshot private key must be an Ed25519 key")
+    return key
+
+
+def _load_ed25519_public_key(public_key_path: Path):
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    except ImportError as exc:
+        raise ValueError(
+            "Ed25519 snapshot verification requires the optional cryptography package; "
+            "install rta-smriti-brain[signing] locally"
+        ) from exc
+    key_bytes = _read_required_key_file(public_key_path, label="snapshot public", limit=MAX_PUBLIC_KEY_BYTES)
+    try:
+        key = serialization.load_pem_public_key(key_bytes)
+    except ValueError as exc:
+        raise ValueError("snapshot public key must be an Ed25519 PEM key") from exc
+    if not isinstance(key, Ed25519PublicKey):
+        raise ValueError("snapshot public key must be an Ed25519 key")
+    return key
+
+
+def snapshot_keygen(private_key_path: Path, public_key_path: Path) -> dict:
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    except ImportError as exc:
+        raise ValueError(
+            "Ed25519 snapshot key generation requires the optional cryptography package; "
+            "install rta-smriti-brain[signing] locally"
+        ) from exc
+    private_key = Ed25519PrivateKey.generate()
+    private_bytes = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("ascii")
+    public_bytes = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    _write_private_text(private_key_path, private_bytes)
+    _write_private_text(public_key_path, public_bytes)
+    return {
+        "status": "ok",
+        "signature_algorithm": "Ed25519",
+        "private_key": str(Path(private_key_path).expanduser().resolve()),
+        "public_key": str(Path(public_key_path).expanduser().resolve()),
+    }
+
+
+def _exactly_one_auth(**values) -> None:
+    selected = [name for name, value in values.items() if value is not None]
+    if len(selected) != 1:
+        raise ValueError("provide exactly one snapshot authentication material option")
+
+
+def snapshot_create(
+    db_path: Path,
+    output: Path,
+    *,
+    key_path: Path | None = None,
+    private_key_path: Path | None = None,
+) -> dict:
+    _exactly_one_auth(key_path=key_path, private_key_path=private_key_path)
     requested_source = Path(db_path).expanduser()
     if requested_source.is_symlink():
         raise ValueError("linked brain databases are not allowed for snapshots")
@@ -576,7 +673,8 @@ def snapshot_create(db_path: Path, output: Path, *, key_path: Path) -> dict:
         raise ValueError(f"brain database does not exist: {source_path}")
     if source_path.stat().st_nlink > 1:
         raise ValueError("linked brain databases are not allowed for snapshots")
-    key = _read_or_create_key(key_path, create=True)
+    key = _read_or_create_key(key_path, create=True) if key_path is not None else None
+    private_key = _load_ed25519_private_key(private_key_path) if private_key_path is not None else None
     with tempfile.TemporaryDirectory(prefix="rta-snapshot-") as tmp:
         consistent = Path(tmp) / "brain.sqlite"
         source = sqlite3.connect(str(source_path))
@@ -603,10 +701,14 @@ def snapshot_create(db_path: Path, output: Path, *, key_path: Path) -> dict:
         manifest = {
             "schema_version": 2, "kind": "rta-smriti-signed-snapshot", "created_at": now_iso(),
             "database_sha256": database_hash.hexdigest(), "database_bytes": database_bytes,
-            "project_count": project_count, "signature_algorithm": "HMAC-SHA256",
+            "project_count": project_count,
+            "signature_algorithm": "Ed25519" if private_key is not None else "HMAC-SHA256",
             "payload_encoding": "base64-lines",
         }
-        signature = hmac.new(key, _canonical_json(manifest), hashlib.sha256).hexdigest()
+        if private_key is not None:
+            signature = base64.b64encode(private_key.sign(_canonical_json(manifest))).decode("ascii")
+        else:
+            signature = hmac.new(key, _canonical_json(manifest), hashlib.sha256).hexdigest()
         requested_destination = Path(output).expanduser()
         if requested_destination.is_symlink():
             raise ValueError("refusing to replace a linked portability artifact")
@@ -635,7 +737,7 @@ def snapshot_create(db_path: Path, output: Path, *, key_path: Path) -> dict:
                 temporary.unlink()
     return {
         "status": "ok", "path": str(destination), "schema_version": 2,
-        "signature_algorithm": "HMAC-SHA256", "project_count": project_count,
+        "signature_algorithm": manifest["signature_algorithm"], "project_count": project_count,
         "database_bytes": database_bytes,
     }
 
@@ -655,8 +757,10 @@ def _validate_snapshot_manifest(manifest, *, schema_version: int) -> tuple[dict 
         return None, "unsupported snapshot schema version"
     if manifest.get("kind") != "rta-smriti-signed-snapshot":
         return None, "not an Rta-Smriti snapshot"
-    if manifest.get("signature_algorithm") != "HMAC-SHA256":
+    if manifest.get("signature_algorithm") not in {"HMAC-SHA256", "Ed25519"}:
         return None, "unsupported snapshot signature algorithm"
+    if schema_version == 1 and manifest.get("signature_algorithm") != "HMAC-SHA256":
+        return None, "unsupported legacy snapshot signature algorithm"
     if schema_version == 2 and manifest.get("payload_encoding") != "base64-lines":
         return None, "unsupported snapshot payload encoding"
     created_at = manifest.get("created_at")
@@ -676,18 +780,38 @@ def _validate_snapshot_manifest(manifest, *, schema_version: int) -> tuple[dict 
     return manifest, None
 
 
-def _authenticate_manifest(header, key: bytes, *, schema_version: int) -> tuple[dict | None, str | None]:
+def _authenticate_manifest(
+    header,
+    *,
+    key: bytes | None = None,
+    public_key_path: Path | None = None,
+    schema_version: int,
+) -> tuple[dict | None, str | None]:
     if not isinstance(header, dict) or set(header) != {"manifest", "signature"}:
         return None, "snapshot header fields are missing or unsupported"
     manifest, error = _validate_snapshot_manifest(header.get("manifest"), schema_version=schema_version)
     if error:
         return None, error
     signature = header.get("signature")
-    if not isinstance(signature, str) or not re.fullmatch(r"[0-9a-f]{64}", signature):
-        return None, "snapshot signature is invalid"
-    expected = hmac.new(key, _canonical_json(manifest), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(signature, expected):
-        return None, "snapshot manifest authentication failed"
+    algorithm = manifest.get("signature_algorithm")
+    if algorithm == "HMAC-SHA256":
+        if key is None:
+            return None, "snapshot HMAC key is required for this snapshot"
+        if not isinstance(signature, str) or not re.fullmatch(r"[0-9a-f]{64}", signature):
+            return None, "snapshot signature is invalid"
+        expected = hmac.new(key, _canonical_json(manifest), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            return None, "snapshot manifest authentication failed"
+    elif algorithm == "Ed25519":
+        if public_key_path is None:
+            return None, "snapshot public key is required for this snapshot"
+        if not isinstance(signature, str) or not re.fullmatch(r"[A-Za-z0-9+/=]{40,200}", signature):
+            return None, "snapshot signature is invalid"
+        public_key = _load_ed25519_public_key(public_key_path)
+        try:
+            public_key.verify(base64.b64decode(signature, validate=True), _canonical_json(manifest))
+        except Exception:
+            return None, "snapshot manifest authentication failed"
     return manifest, None
 
 
@@ -730,8 +854,14 @@ def _legacy_base64_chunks(payload: str):
         yield payload[offset : offset + 64 * 1024].encode("ascii")
 
 
-def snapshot_verify(source: Path, *, key_path: Path) -> dict:
-    key = _read_or_create_key(key_path, create=False)
+def snapshot_verify(
+    source: Path,
+    *,
+    key_path: Path | None = None,
+    public_key_path: Path | None = None,
+) -> dict:
+    _exactly_one_auth(key_path=key_path, public_key_path=public_key_path)
+    key = _read_or_create_key(key_path, create=False) if key_path is not None else None
     requested = Path(source).expanduser()
     if requested.is_symlink():
         return {"status": "ok", "valid": False, "reason": "linked snapshot inputs are not allowed"}
@@ -747,7 +877,9 @@ def snapshot_verify(source: Path, *, key_path: Path) -> dict:
             if first_line.endswith(b"\n"):
                 header = json.loads(first_line[:-1].decode("ascii"))
                 if isinstance(header, dict) and "database_base64" not in header:
-                    manifest, error = _authenticate_manifest(header, key, schema_version=2)
+                    manifest, error = _authenticate_manifest(
+                        header, key=key, public_key_path=public_key_path, schema_version=2,
+                    )
                     if error:
                         return {"status": "ok", "valid": False, "reason": error}
                     valid, reason = _verify_base64_chunks(_fixed_base64_chunks(handle), manifest=manifest)
@@ -767,7 +899,7 @@ def snapshot_verify(source: Path, *, key_path: Path) -> dict:
         if not isinstance(envelope, dict):
             raise ValueError("snapshot envelope must be an object")
         header = {"manifest": envelope.get("manifest"), "signature": envelope.get("signature")}
-        manifest, error = _authenticate_manifest(header, key, schema_version=1)
+        manifest, error = _authenticate_manifest(header, key=key, public_key_path=public_key_path, schema_version=1)
         if error:
             return {"status": "ok", "valid": False, "reason": error}
         payload = envelope.get("database_base64")

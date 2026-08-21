@@ -9,6 +9,7 @@ from unittest.mock import patch
 from rta_brain import db
 from rta_brain.continuity_daemon import (
     capture_cycle,
+    continuity_binding_diagnostics,
     continuity_paths,
     continuity_status,
     discover_codex_sessions,
@@ -91,6 +92,28 @@ class ContinuityDaemonTests(unittest.TestCase):
             found = discover_codex_sessions(sessions, project)
             self.assertEqual([item["session_id"] for item in found], ["one", "two"])
             self.assertEqual({Path(item["path"]).name for item in found}, {"matching.jsonl", "nested.jsonl"})
+
+    def test_continuity_status_explains_recent_sessions_outside_project_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            project = base / "project"
+            other = base / "other"
+            sessions = base / "sessions"
+            project.mkdir()
+            other.mkdir()
+            sessions.mkdir()
+            (sessions / "foreign.jsonl").write_text(
+                json.dumps({"type": "session_meta", "payload": {"id": "foreign", "cwd": str(other)}}) + "\n",
+                encoding="utf-8",
+            )
+
+            diagnostics = continuity_binding_diagnostics(sessions, project)
+
+        self.assertEqual(diagnostics["recent_sessions"], 1)
+        self.assertEqual(diagnostics["matching_sessions"], 0)
+        self.assertEqual(diagnostics["foreign_sessions"], 1)
+        self.assertIn("outside the canonical project root", diagnostics["hint"])
+        self.assertNotIn(str(other), json.dumps(diagnostics))
 
     def test_discovery_bounds_initial_history_unless_explicitly_requested(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -265,7 +265,7 @@ benchmark         Run the packaged reproducible public benchmark
 workspace         Create, inspect, and search an isolated multi-brain workspace
 bundle-export     Preview or export selected memories, checkpoints, and policies with redaction
 bundle-import     Preview or atomically import a verified bundle with an explicit conflict policy
-snapshot          Create or verify an authenticated HMAC-SHA256 brain snapshot
+snapshot          Create, verify, or keygen an authenticated brain snapshot
 git-hooks         Opt in or out of the managed post-commit checkpoint hook
 memory-feedback   Record an operator-confirmed helpful, neutral, or harmful outcome
 memory-decay      Conservatively age eligible unverified inference and hypothesis memories
@@ -410,18 +410,18 @@ Intentional design constraints:
 - Retrieval and reflection are inspectable and deterministic by default. The main bootstrap flow selects the dependency-free local hash provider by default and operators can choose lexical-only or an installed Sentence Transformers model; reflection remains conservative rather than a full semantic judge.
 - Eligible source files above the 512 KB per-file cap are reported as `Blocked`. Freshness remains fail-closed until the operator changes the source or ingestion policy.
 
-Current alpha limitations:
+Advanced modes and safety boundaries:
 
-- Managed sync and console processes are user-level, not privileged services. Login startup is optional and must be enabled explicitly.
-- Hybrid retrieval is dependency-free in the recommended bootstrap flow through the built-in hash provider. Sentence Transformers remains optional and requires a separately installed local package and model.
-- Auto parsing is the default: installed Tree-sitter grammars are used for supported languages, with deterministic regex fallback. LSP integration requires an explicitly configured local adapter command.
-- The first deep SHA-256 pass can still take several minutes on repositories with tens of thousands of files. Later checks reuse hashes when file size and modification time are unchanged.
-- Watchdog events content-hash each touched path even when size and timestamp appear unchanged. Polling-only workers force a periodic deep verification at least every five minutes, so same-stat changes may be detected on that cadence rather than immediately.
-- The per-file ingestion cap is configurable up to 16 MB. Files above the selected cap remain blocked and keep freshness fail-closed.
-- Call edges are approximate and use deterministic parsing fallbacks; they are impact hints, not compiler-perfect call graphs.
-- Authenticated snapshots use a local shared HMAC key. They detect tampering but are not public-key signatures, encrypted backups, or safe to publish.
+- Managed sync, continuity, and console processes are user-level local processes. Login startup is opt-in because Rta-Smriti does not install privileged services.
+- Hybrid retrieval works dependency-free through the built-in hash provider. Sentence Transformers remains an explicit local extra for operators who want model-backed comparison.
+- Auto parsing uses installed Tree-sitter grammars for supported languages, then deterministic regex fallback. LSP integration remains explicit through a local adapter command.
+- Deep SHA-256 uses a size/mtime hash cache after the first pass. Very large repositories can still take minutes on the initial verification.
+- Filesystem-event workers hash touched paths to catch same-stat edits. Polling-only workers also force periodic deep verification, so some same-stat changes are detected on cadence rather than instantly.
+- The per-file ingestion cap is configurable up to 16 MB. Oversized files stay blocked and keep freshness fail-closed until the operator changes policy or source shape.
+- Call edges are deterministic impact hints, not compiler-perfect call graphs. Use them to find likely blast radius, then verify consequential changes against source and tests.
+- Snapshots support compatible HMAC-SHA256 authentication and optional Ed25519 public-key signatures via the `signing` extra. Snapshots are authenticated local backups, not encrypted artifacts or safe public exports.
 - Snapshot verification accepts at most a 64 MiB SQLite payload; legacy snapshot envelopes are capped at 16 MiB. Selective bundle inputs are capped at 25 MB and consumed through stable bounded reads.
-- The public benchmark is a small synthetic reproducibility and regression harness. Optional Sentence Transformers comparison is explicit and reports `not_requested` or `unavailable` honestly. It is not external proof of superiority over other memory systems.
+- The public benchmark can emit JSON or a shareable Markdown report. It is a small synthetic reproducibility and regression harness, not external proof of superiority over other memory systems.
 
 See [ROADMAP.md](ROADMAP.md) for planned improvements. Local-first operation and inspectable evidence remain non-negotiable.
 
@@ -445,6 +445,9 @@ python -m pip install -e ".[tree-sitter]"
 
 # Or install both optional local backends.
 python -m pip install -e ".[all-local]"
+
+# Optional public-key snapshot signing.
+python -m pip install -e ".[signing]"
 ```
 
 ## Development

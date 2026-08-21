@@ -33,11 +33,13 @@ embeddings = ["sentence-transformers>=5.6.1,<6"]
 tokenization = ["tiktoken>=0.9,<1"]
 watcher = ["watchdog>=6,<7"]
 binary = ["pyinstaller>=6.14,<7"]
+signing = ["cryptography>=43,<46"]
 all-local = [
   "tree-sitter-language-pack>=1.13.3,<2",
   "sentence-transformers>=5.6.1,<6",
   "tiktoken>=0.9,<1",
-  "watchdog>=6,<7"
+  "watchdog>=6,<7",
+  "cryptography>=43,<46"
 ]
 
 [project.urls]
