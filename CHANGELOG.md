@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.6.0-alpha] - 2026-08-21
 
 - Added bounded Codex `turn_context` rebinding so a task started elsewhere can be captured after it enters the canonical project, without importing the earlier foreign transcript.
 - Added an MCP doctor that probes the exact generated stdio command through initialize, tools/list, and ping before host registration.
@@ -26,7 +26,7 @@ All notable changes are documented here. The project follows semantic versioning
 - Added shareable Markdown output for the public benchmark.
 - Added continuity binding diagnostics that explain when recent Codex sessions exist outside the canonical project root without exposing foreign paths.
 
-## [0.4.0-alpha] - Unreleased
+## [0.4.0-alpha] - 2026-08-16
 
 - Added foreground and managed-background incremental repository sync with optional filesystem events, portable polling fallback, lifecycle status, heartbeat, and a persistent stat-keyed SHA-256 cache.
 - Made repository refresh transactional so parser or indexing failures cannot leave a partial new snapshot visible.

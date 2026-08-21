@@ -1,16 +1,16 @@
 # Release Verification
 
 This page records the reproducible checks and publication evidence for the
-formal `v0.5.0-alpha` prerelease. It distinguishes local verification, hosted
+formal `v0.6.0-alpha` prerelease. It distinguishes local verification, hosted
 CI, native binary workflow proof, and post-publication installation proof.
 
 ## Publication State
 
-- Source version: `0.5.0-alpha` (`0.5.0a1` in Python package metadata)
+- Source version: `0.6.0-alpha` (`0.6.0a1` in Python package metadata)
 - Published branch: `main`
-- Frozen release commit: `be534d98e26dcc29e4028fb1027f904c8df30187`
-- Formal Git tag: `v0.5.0-alpha` (annotated and verified against the frozen commit)
-- Formal GitHub Release: [`Rta-Smriti Brain v0.5.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.5.0-alpha)
+- Frozen release commit: `6c086f5e421f8ec5506e7ee6e6cb0296ca43fed3`
+- Formal Git tag: `v0.6.0-alpha` (annotated and verified against the frozen commit)
+- Formal GitHub Release: [`Rta-Smriti Brain v0.6.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.6.0-alpha)
 - Release state: published prerelease from the green hosted matrix
 - Current `main` status: public README, documentation, and launch-site source
   describe the formal prerelease; the release tag and assets remain bound to the
@@ -20,12 +20,12 @@ The release contains Windows x64, Linux x64, and macOS binaries plus a combined
 SHA-256 manifest. GitHub-generated source archives are also available from the
 tag.
 
-## v0.5.0-alpha Release State
+## v0.6.0-alpha Release State
 
-This release adds the Trust + Retrieval Intelligence batch on top of the
-published v0.4 continuity foundation: operational preflight warnings, retrieval selection
-reasons, exact dashboard default-brain selection, root-level managed-console
-`--db` parsing, and one-command onboarding continuity capture.
+This release adds safer automatic continuity capture, warmed hash caching,
+metadata-only oversized-file isolation, bundled Tree-sitter grammars, bounded
+native LSP discovery, encrypted portable snapshots, MCP diagnostics, historical
+benchmark reports, and resilient multi-project workspaces.
 
 Latest release evidence from the C-drive release checkout:
 
@@ -36,24 +36,24 @@ Latest release evidence from the C-drive release checkout:
 | Dashboard unit tests | 5 passed |
 | Operator browser QA | 2 passed |
 | Launch-site browser QA | Passed: desktop, mobile, interactions, media, links, accessibility |
-| Python unittest discovery | 224 tests passed, 9 skipped |
+| Python unittest discovery | 251 tests passed, 9 platform-specific skips |
 | Python bytecode compilation | Passed |
 | npm audit high severity gate | 0 vulnerabilities |
-| Editable install dry run | Would install `rta-smriti-brain-0.5.0a1` |
+| Editable install dry run | Would install `rta-smriti-brain-0.6.0a1` |
 | Installed-distribution smoke | Passed install, upgrade, and uninstall lifecycle |
 | Public benchmark | Synthetic corpus passed lexical, hash-hybrid, continuation, contradiction, stale, and governance gates |
-| Privacy scan | 170 candidate files passed |
+| Privacy scan | 174 candidate files passed |
 | Git diff whitespace check | Passed with only Windows LF-to-CRLF warnings |
 | Built-in publish-readiness | Structural checks passed before publication; clean tree after commit and push |
-| Dogfood brain freshness | 147 indexed sources fresh; 0 added, 0 changed, 0 missing |
-| Hosted CI | [Run 32407147824](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32407147824) passed Ubuntu Python 3.11, 3.12, 3.13, macOS Python 3.11, and Windows Python 3.11 |
-| Native binaries | [Run 32417096347](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32417096347) built and smoke-tested Windows, Linux, and macOS artifacts |
-| Published release assets | `rta-brain-v0.5.0-alpha-windows-x64.exe`, `rta-brain-v0.5.0-alpha-linux-x64`, `rta-brain-v0.5.0-alpha-macos`, and `SHA256SUMS.txt` uploaded |
-| Public release smoke | Windows asset redownloaded from the public release URL, checksum-verified, and `--version` returned `rta-brain 0.5.0a1` |
+| Hosted CI | [Run 32484754948](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32484754948) passed Ubuntu Python 3.11, 3.12, 3.13, macOS Python 3.11, and Windows Python 3.11 |
+| Native binaries | [Run 32487134222](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32487134222) built and smoke-tested Windows, Linux, and macOS artifacts |
+| Published release assets | `rta-brain-v0.6.0-alpha-windows-x64.exe`, `rta-brain-v0.6.0-alpha-linux-x64`, `rta-brain-v0.6.0-alpha-macos`, and `SHA256SUMS.txt` uploaded |
+| Public release smoke | All three binaries were redownloaded and matched `SHA256SUMS.txt`; Windows returned `rta-brain 0.6.0a1` and passed a clean `doctor` run |
 
-Do not claim Gitleaks, Bandit, Ruff, or Semgrep unless those tools were
-available and actually run in the release shell. This v0.5 release does not
-claim fresh results from those unavailable tools.
+Gitleaks `8.30.1`, actionlint, the repository privacy scanner, npm audit, and an
+isolated Python runtime dependency audit passed for this release candidate.
+Bandit, Ruff, and Semgrep are not claimed because they were not part of this
+release gate.
 
 ## Verification Commands
 
@@ -93,7 +93,7 @@ gitleaks dir --redact --no-banner launch-site/public
 ## v0.4 Historical Verified Snapshot
 
 The following snapshot is retained for the refreshed `v0.4.0-alpha` release.
-It is historical evidence and must not be interpreted as the current v0.5
+It is historical evidence and must not be interpreted as the current v0.6
 release state.
 
 Verified locally and through GitHub Actions. The refreshed formal release is

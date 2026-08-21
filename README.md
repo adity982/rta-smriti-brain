@@ -7,7 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/sulabhdubey/rta-smriti-brain?include_prereleases&label=release)](https://github.com/sulabhdubey/rta-smriti-brain/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
 
-**A local project brain for AI coding agents. `v0.5.0-alpha` is now published as the Trust + Retrieval Intelligence prerelease.**
+**A local project brain for AI coding agents. `v0.6.0-alpha` is now published with lower-friction indexing, safer continuity, encrypted snapshots, and multi-project operation.**
 
 [Latest prerelease assets](https://github.com/sulabhdubey/rta-smriti-brain/releases) · [Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second product demo](launch-assets/product-hunt/rta-smriti-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Public benchmark](docs/PUBLIC_BENCHMARK.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
 
@@ -21,23 +21,23 @@ Rta-Smriti gives each project a memory that stays on your machine.
 
 ## Latest Release
 
-[`v0.5.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.5.0-alpha)
+[`v0.6.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.6.0-alpha)
 is the latest formal GitHub prerelease. It points to
-commit `be534d98e26dcc29e4028fb1027f904c8df30187` and was verified by
-[GitHub Actions run 32407147824](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32407147824)
+commit `6c086f5e421f8ec5506e7ee6e6cb0296ca43fed3` and was verified by
+[GitHub Actions run 32484754948](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32484754948)
 on Windows, macOS, and Ubuntu across Python 3.11, 3.12, and 3.13.
 
 The prerelease includes Windows x64, Linux x64, and macOS standalone binaries
 plus `SHA256SUMS.txt`. The native binaries were built and smoke-tested by
-[Native binaries run 32417096347](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32417096347).
-The Windows binary was also downloaded from the public release URL, checksum
-verified, and smoke-tested locally with `--version`.
+[Native binaries run 32487134222](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32487134222).
+All three binaries were downloaded from their public release URLs and matched
+the published manifest. The Windows binary also passed `--version` and a clean
+`doctor` smoke test.
 
-This alpha keeps the v0.4 continuity foundation and adds pre-action operational
-warnings, explainable retrieval selection reasons, exact dashboard
-default-brain selection, safer managed-console startup parsing, and one-command
-onboarding that starts Codex continuity capture when the local sessions folder
-is available.
+This alpha adds bounded continuity capture, warmed hash caching, metadata-only
+oversized-file isolation, bundled Tree-sitter grammars, native LSP discovery,
+encrypted portable snapshots, MCP diagnostics, historical benchmark reports,
+and resilient multi-project workspaces.
 
 ## What It Does
 
@@ -172,7 +172,7 @@ sessions, or pass `--sessions-root` when Codex stores sessions somewhere else.
 
 The dashboard runs on `127.0.0.1` and includes:
 
-![Rta-Smriti v0.4 operator console with evidence graph and retrieval diagnostics](launch-assets/screenshots/operator-console-v0.4.png)
+![Rta-Smriti v0.6 operator console with evidence graph and retrieval diagnostics](launch-assets/screenshots/operator-console-v0.6.png)
 
 - **Project switcher**: every local brain, readiness, file count, memory count
 - **Canonical-root and Git identity**: bound project root, repository root, branch, HEAD, dirty-file count, and duplicate-root warnings

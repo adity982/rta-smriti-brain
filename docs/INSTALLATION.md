@@ -60,18 +60,18 @@ The repository includes a reproducible PyInstaller specification. The release
 workflow builds and smoke-tests separate Windows, macOS, and Linux artifacts,
 renames them with version/OS/architecture, and uploads a `SHA256SUMS.txt`
 manifest. The formal
-[`v0.5.0-alpha` release](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.5.0-alpha)
+[`v0.6.0-alpha` release](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.6.0-alpha)
 contains Windows x64, Linux x64, and macOS binaries plus the combined checksum
 manifest.
 
 Those assets were built from commit
-`be534d98e26dcc29e4028fb1027f904c8df30187` after the hosted Windows, Ubuntu,
+`6c086f5e421f8ec5506e7ee6e6cb0296ca43fed3` after the hosted Windows, Ubuntu,
 and macOS matrix passed
-([CI run 32407147824](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32407147824)).
+([CI run 32484754948](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32484754948)).
 The native binaries were built and smoke-tested by
-[Native binaries run 32417096347](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32417096347).
-The Windows binary was then downloaded through its public release URL, checked
-against `SHA256SUMS.txt`, and passed `--version`.
+[Native binaries run 32487134222](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32487134222).
+All three public binaries were downloaded and checked against `SHA256SUMS.txt`.
+The Windows artifact also passed `--version` and a clean `doctor` smoke test.
 
 Maintainers can build the executable for the current operating system with:
 
@@ -83,9 +83,10 @@ python scripts/package_release_artifacts.py --include-wheel
 ```
 
 The result is `dist/rta-brain.exe` on Windows and `dist/rta-brain` on macOS or
-Linux. Standalone artifacts intentionally contain the dependency-free parser,
-token estimator, FTS, and feature-hash retrieval path; optional ML and parser
-packages remain available through the Python installation.
+Linux. Standalone artifacts include the common Tree-sitter grammar pack,
+Ed25519 cryptography, token estimation, FTS, and feature-hash retrieval.
+Sentence Transformers and external language servers remain optional local
+integrations.
 
 Verify a downloaded artifact against the `SHA256SUMS.txt` file shipped in the
 same release before running it. Alpha binaries are not platform code-signed, so

@@ -1,6 +1,12 @@
-# Rta-Smriti Brain v0.6.0-alpha Candidate
+# Rta-Smriti Brain v0.6.0-alpha
 
-Status: local release candidate under verification. This document does not claim a published tag, GitHub Release, hosted v0.6 CI result, or public binary until those gates actually complete.
+Release commit: `6c086f5e421f8ec5506e7ee6e6cb0296ca43fed3`
+
+Hosted CI: <https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32484754948>
+
+Native binaries: <https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32487134222>
+
+Formal prerelease: <https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.6.0-alpha>
 
 ## Lower-Friction, Evidence-Honest Indexing
 
@@ -39,13 +45,16 @@ The synthetic public benchmark can append a bounded local JSONL history and rend
 
 Workspaces now report member health, return degraded partial search when one brain is unavailable, support member removal and workspace deletion, and expose read-only health through MCP. These actions change workspace metadata only; they never delete project brains.
 
-## Verification Gate
+## Verification Evidence
 
-Before publication this candidate must pass the complete Python and frontend suites, clean wheel installation, installed-package CLI/MCP/dashboard workflows, browser operator QA, Windows/macOS/Linux hosted CI, packaging and binary smoke tests, privacy and secret scans, and an exact owner-reviewed release diff. Public README, website, screenshots, tag, binaries, checksums, and GitHub prerelease remain post-approval actions.
+The reviewed candidate passed `251` Python tests with `9` platform-specific
+skips, dashboard unit and production builds, two rendered operator scenarios,
+desktop/mobile launch-site QA, clean install-upgrade-uninstall smoke, the bounded
+`100`/`1,000`-file performance probe, Windows frozen-binary smoke, Gitleaks,
+actionlint, the repository privacy scanner, and isolated npm/Python runtime
+dependency audits.
 
-The local candidate has passed `251` Python tests with `9` platform-specific skips, dashboard unit
-and production builds, two rendered operator scenarios, desktop/mobile launch-site QA, clean
-install-upgrade-uninstall smoke, the bounded `100`/`1,000`-file performance probe, Windows frozen
-binary smoke, Gitleaks, actionlint, the repository privacy scanner, and isolated npm/Python runtime
-dependency audits. Hosted Windows/macOS/Linux CI and the exact owner-reviewed publication diff remain
-required before the tag or prerelease is created.
+The hosted matrix then passed on Windows, macOS, and Ubuntu. The native workflow
+built and smoke-tested all three platform artifacts. Each public binary was
+redownloaded and matched `SHA256SUMS.txt`; the Windows artifact also returned
+`rta-brain 0.6.0a1` and passed a clean `doctor` run.

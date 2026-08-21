@@ -133,7 +133,7 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect(page).toHaveTitle("Rta-Smriti Brain");
     await expect(page.getByText("operator-demo", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("Brain Status: Healthy", { exact: true })).toBeVisible();
-    await captureLaunchScreenshot(page, "operator-console-v0.4.png");
+    await captureLaunchScreenshot(page, "operator-console-v0.6.png");
     const operatorNavigation = page.getByRole("navigation", { name: "Operator console navigation" });
 
     const navigation = [
@@ -272,7 +272,7 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect(page.getByLabel("Objective")).toContainText("Relevant file: README.md");
     await page.locator(".inspectorTabs").getByRole("button", { name: "Evidence", exact: true }).click();
     await page.evaluate(() => window.scrollTo(0, 0));
-    await captureLaunchScreenshot(page, "operator-files-v0.4.png");
+    await captureLaunchScreenshot(page, "operator-files-v0.6.png");
 
     await operatorNavigation.getByRole("button", { name: /^Action Gate/ }).click();
     await page.getByLabel("Intended action").fill("Publish release");
@@ -387,7 +387,7 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect(page.getByText("Brain Status: Healthy", { exact: true })).toBeVisible();
     await reloadedNavigation.getByRole("button", { name: "Graph", exact: true }).click();
     await page.evaluate(() => window.scrollTo(0, 0));
-    await captureLaunchScreenshot(page, "operator-console-mobile-v0.4.png");
+    await captureLaunchScreenshot(page, "operator-console-mobile-v0.6.png");
     await reloadedNavigation.getByRole("button", { name: "Canvas", exact: true }).click();
     const mobileCanvas = page.getByRole("region", { name: "Spatial project canvas" });
     await expect(mobileCanvas.locator(".canvasCard").first()).toBeVisible();
