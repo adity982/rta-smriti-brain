@@ -188,6 +188,40 @@ class ContinuityDaemonTests(unittest.TestCase):
             finally:
                 conn.close()
 
+    def test_opt_in_local_compaction_is_derived_unverified_and_non_authoritative(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp); project = base / "project"; sessions = base / "sessions"
+            project.mkdir(); sessions.mkdir(); transcript = sessions / "thread.jsonl"
+            rows = [
+                {"type": "session_meta", "payload": {"id": "thread-compact", "cwd": str(project)}},
+                {"type": "response_item", "payload": {"type": "message", "role": "user", "content": "Finish release verification"}},
+                {"type": "event_msg", "payload": {"type": "task_complete", "message": "Done"}},
+            ]
+            transcript.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+            conn = db.connect(base / "brain.sqlite")
+            try:
+                db.init_project(conn, "demo", str(project))
+                db.update_project_settings(conn, "demo", {"compaction_provider": "ollama"})
+                compacted = {
+                    "status": "ok", "provider": "ollama", "model": "qwen3:0.6b",
+                    "summary": "Objective: finish release verification", "verification_status": "unverified",
+                    "input_events": 3, "redactions": 0,
+                }
+                with patch("rta_brain.continuity_daemon.compact_session_events", return_value=compacted):
+                    result = capture_cycle(conn, sessions, project, "demo", inactivity_seconds=3600)
+                self.assertEqual(result["checkpoints_created"], 1)
+                checkpoint = db.latest_checkpoint(conn, "demo")
+                self.assertEqual(checkpoint["verified_evidence"], "")
+                self.assertIn("Local-model summary (unverified)", checkpoint["remaining_gaps"])
+                event = conn.execute(
+                    "SELECT source, verification_status FROM session_events "
+                    "WHERE event_type = 'continuity_compaction'"
+                ).fetchone()
+                self.assertEqual(event["source"], "ollama-local")
+                self.assertEqual(event["verification_status"], "unverified")
+            finally:
+                conn.close()
+
     def test_resumed_session_uses_new_inactivity_checkpoint_after_old_terminal(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp); project = base / "project"; sessions = base / "sessions"

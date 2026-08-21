@@ -15,9 +15,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .continuity import ingest_codex_session, init_continuity_schema
-from .db import ensure_project, now_iso, save_checkpoint
+from .continuity import append_event, ingest_codex_session, init_continuity_schema
+from .db import ensure_project, get_project_settings, now_iso, save_checkpoint
 from .db import connect
+from .compaction import compact_session_events
 from .watch_daemon import (
     _SPAWNED_PROCESSES,
     _clear_stale_control,
@@ -501,6 +502,36 @@ def _checkpoint_for_session(
     gap = "Automatically captured session state is unverified; review tool outcomes and source evidence before relying on it."
     if truncated:
         gap += " Earlier transcript history was intentionally truncated during bounded recovery and requires explicit operator acknowledgement."
+    settings = get_project_settings(conn, project)
+    compaction = None
+    if settings.get("compaction_provider") == "ollama":
+        compactable = [
+            {"event_type": row["event_type"], "payload": json.loads(row["payload_json"])}
+            for row in rows[-250:]
+            if row["event_type"] in {"message", "tool_event", "agent_event", "history_truncated"}
+        ]
+        try:
+            compaction = compact_session_events(
+                compactable,
+                model=str(settings["compaction_model"]),
+                endpoint=str(settings["compaction_endpoint"]),
+                timeout_seconds=float(settings["compaction_timeout_seconds"]),
+            )
+            append_event(
+                conn,
+                project,
+                session_id,
+                f"compaction:{int(event['id'])}:{settings['compaction_model']}",
+                "continuity_compaction",
+                compaction,
+                source="ollama-local",
+                verification_status="unverified",
+                _commit=False,
+                _project_id=project_id,
+            )
+            gap += f" Local-model summary (unverified): {compaction['summary'][:4_000]}"
+        except Exception:
+            gap += " Local-model compaction was unavailable; the deterministic checkpoint was preserved."
     try:
         result = save_checkpoint(
             conn,

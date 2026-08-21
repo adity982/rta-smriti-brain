@@ -29,8 +29,8 @@ import "./styles.css";
 
 const repositoryUrl = import.meta.env.VITE_REPOSITORY_URL || "https://github.com/sulabhdubey/rta-smriti-brain";
 const releaseUrl = `${repositoryUrl}/releases`;
-const ciRunUrl = `${repositoryUrl}/actions/runs/32407147824`;
-const productHuntUrl = "https://www.producthunt.com/products/rta-smriti-brain?launch=rta-smriti-brain&utm_source=website&utm_medium=referral&utm_campaign=v050_release";
+const ciRunUrl = `${repositoryUrl}/actions`;
+const productHuntUrl = "https://www.producthunt.com/products/rta-smriti-brain?launch=rta-smriti-brain&utm_source=website&utm_medium=referral&utm_campaign=v060_release";
 
 const installCommand = "python -m pip install .";
 const agents = ["Codex", "Claude Code", "Cursor", "GitHub Copilot CLI", "Gemini CLI", "Aider", "Cline", "Any MCP agent"];
@@ -82,7 +82,7 @@ function Hero() {
       <div className="heroScrim" />
       <HeroGraph />
       <div className="heroContent shell">
-        <div className="eyebrow"><LockKeyhole size={14} /> v0.5 alpha release · Local-first · Agent-neutral</div>
+        <div className="eyebrow"><LockKeyhole size={14} /> v0.6 alpha candidate · Local-first · Agent-neutral</div>
         <h1>Rta-Smriti Brain</h1>
         <p className="heroLead">Give every software project a private memory that survives new chats, agent switches, context compaction, and interrupted work.</p>
         <div className="heroActions">
@@ -91,7 +91,7 @@ function Hero() {
         </div>
         <a className="launchConversation" href={productHuntUrl}><MessageCircle size={15} /> Live on Product Hunt <span>Join the conversation</span><ExternalLink size={13} /></a>
         <div className="heroProof" aria-label="Product proof points">
-          <span><strong>v0.5</strong> prerelease live</span>
+          <span><strong>v0.6</strong> candidate verified locally</span>
           <span><strong>hosted</strong> CI green</span>
           <span><strong>0</strong> cloud accounts required</span>
         </div>
@@ -178,7 +178,7 @@ function Architecture() {
       <div className="shell">
         <div className="sectionHeading rowHeading">
           <div><span className="sectionIndex">03 / ARCHITECTURE</span><h2>Small enough to understand. Strong enough to reuse.</h2></div>
-          <p>Deterministic local infrastructure first. Models and embeddings remain optional layers, not runtime dependencies.</p>
+          <p>Inspectable local infrastructure first. Cloud models remain optional; standard installs include AST parsing and modern snapshot cryptography.</p>
         </div>
         <div className="architectureFlow">
           {stages.map(([title, copy, Icon], index) => (
@@ -189,7 +189,7 @@ function Architecture() {
           ))}
         </div>
         <div className="architectureFacts">
-          <span><Check size={15} /> Python 3.11+</span><span><Check size={15} /> Zero runtime dependencies</span><span><Check size={15} /> Local SQLite</span><span><Check size={15} /> Multi-project MCP gateway</span><span><Check size={15} /> Packaged React console</span>
+          <span><Check size={15} /> Python 3.11+</span><span><Check size={15} /> Bundled Tree-sitter</span><span><Check size={15} /> Local SQLite</span><span><Check size={15} /> Multi-project MCP gateway</span><span><Check size={15} /> Ed25519 + encrypted snapshots</span>
         </div>
       </div>
     </section>
@@ -278,7 +278,7 @@ function Install() {
   return (
     <section className="installSection" id="install">
       <div className="shell installGrid">
-        <div><span className="sectionIndex">07 / START LOCAL</span><h2>Your first project brain is one command away.</h2><p>Download the latest alpha or install from source, then bootstrap one private SQLite brain per project.</p><p><a href={releaseUrl}>Release assets</a> · <a href={ciRunUrl}>Published v0.5 CI evidence</a></p></div>
+        <div><span className="sectionIndex">07 / START LOCAL</span><h2>Your first project brain is one command away.</h2><p>Download the latest published alpha or install the v0.6 candidate from source, then bootstrap one private SQLite brain per project.</p><p><a href={releaseUrl}>Release assets</a> · <a href={ciRunUrl}>CI evidence</a></p></div>
         <div className="terminalBlock">
           <div className="terminalHeader"><span><i /> <i /> <i /></span><strong>PowerShell</strong><CopyButton value={installCommand} /></div>
           <code><span>$</span> {installCommand}</code>

@@ -286,10 +286,17 @@ def self_check(conn: sqlite3.Connection, project: str, check_files: bool = False
     entities = int(conn.execute("SELECT COUNT(*) AS c FROM entities WHERE project_id = ?", (project_id,)).fetchone()["c"])
     if check_files:
         fresh = stale_check(conn, project=project, deep=True)
-        freshness = {"mode": "file-hash", "state": fresh["state"], "fresh": fresh["fresh"], "changed": fresh["changed"], "missing": fresh["missing"], "added": fresh["added"]}
+        freshness = {
+            "mode": "file-hash", "state": fresh["state"], "fresh": fresh["fresh"],
+            "changed": fresh["changed"], "missing": fresh["missing"], "added": fresh["added"],
+            "metadata_only": fresh.get("metadata_only", 0),
+        }
     else:
         freshness = {"mode": "summary", "fresh": None, "changed": None, "missing": None}
-    ready = bool(health["fts_enabled"] and (sources > 0 or memories > 0) and (not check_files or freshness.get("state") == "fresh"))
+    ready = bool(
+        health["fts_enabled"] and (sources > 0 or memories > 0)
+        and (not check_files or freshness.get("state") in {"fresh", "fresh_with_warnings"})
+    )
     operational = operational_readiness(conn, project, include_event_count=False)
     return {
         "status": "ok",

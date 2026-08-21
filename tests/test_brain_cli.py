@@ -185,6 +185,11 @@ class RtaBrainCliTests(unittest.TestCase):
             (root / "core.py").write_text("READY = True\n", encoding="utf-8")
             db = Path(tmp) / "brain.sqlite"
 
+            policy = run_cli(
+                "--db", str(db), "settings", "--project", "demo",
+                "--large-file-policy", "block",
+            )
+            self.assertEqual(policy.returncode, 0, policy.stderr)
             indexed = run_cli("--db", str(db), "ingest-repo", str(root), "--project", "demo")
             self.assertEqual(indexed.returncode, 0, indexed.stderr)
             (root / "unread_gate.py").write_text("x" * 512_001, encoding="utf-8")

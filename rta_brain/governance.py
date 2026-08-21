@@ -328,7 +328,15 @@ def _operational_preflight_matches(action: str, operational_context: dict | None
             f"Git worktree has {dirty_count} dirty file(s) on {branch} @ {head}; inspect them before acting.",
         ))
     freshness = context.get("freshness") if isinstance(context.get("freshness"), dict) else {}
-    if str(freshness.get("state") or "").casefold() not in {"", "fresh"}:
+    freshness_state = str(freshness.get("state") or "").casefold()
+    if freshness_state == "fresh_with_warnings":
+        metadata_only = int(freshness.get("metadata_only") or 0)
+        matches.append(_operational_match(
+            "metadata_only_sources",
+            "Some oversized source content is intentionally not indexed.",
+            f"{metadata_only} oversized source file(s) are tracked by metadata only; inspect them directly before relying on their content.",
+        ))
+    elif freshness_state not in {"", "fresh"}:
         changed = int(freshness.get("changed") or 0)
         missing = int(freshness.get("missing") or 0)
         added = int(freshness.get("added") or 0)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -38,6 +39,13 @@ def main() -> int:
             ).stdout
         )
         db_path = Path(bootstrap["db_path"])
+        indexed_db = sqlite3.connect(db_path)
+        try:
+            parser_metadata = json.loads(indexed_db.execute(
+                "SELECT metadata_json FROM sources WHERE kind = 'file' AND title = 'main.py'"
+            ).fetchone()[0])
+        finally:
+            indexed_db.close()
         request = '{"jsonrpc":"2.0","id":1,"method":"ping"}\n'
         response = json.loads(
             run(executable, "mcp-server", "--db", str(db_path), "--project", "smoke", stdin=request).stdout
@@ -70,6 +78,21 @@ def main() -> int:
             ).stdout
         )
         restored_exists = restored.is_file()
+        signing_private = root / "snapshot-ed25519-private.pem"
+        signing_public = root / "snapshot-ed25519-public.pem"
+        signed = root / "brain-signed.rta-snapshot"
+        signing_keys = json.loads(run(
+            executable, "--json", "snapshot", "keygen", str(signing_private),
+            "--public-key", str(signing_public),
+        ).stdout)
+        signed_result = json.loads(run(
+            executable, "--db", str(db_path), "--json", "snapshot", "create", str(signed),
+            "--private-key", str(signing_private),
+        ).stdout)
+        signed_verify = json.loads(run(
+            executable, "--json", "snapshot", "verify", str(signed),
+            "--public-key", str(signing_public),
+        ).stdout)
         watcher = json.loads(
             run(
                 executable, "--db", str(db_path), "--json", "watcher", "start", str(project),
@@ -119,12 +142,16 @@ def main() -> int:
         or set(benchmark.get("modes", {})) != {"no_memory", "lexical", "hash_hybrid", "optional_semantic"}
         or benchmark.get("modes", {}).get("optional_semantic", {}).get("status") != "not_requested"
         or response.get("result") != {}
+        or parser_metadata.get("parser") != "auto:tree-sitter"
         or not mcp_probe.get("ready")
         or generated_passphrase.get("entropy_bits") != 256
         or encrypted_result.get("encryption") != "AES-256-GCM"
         or not encrypted_verify.get("valid")
         or not encrypted_restore.get("valid")
         or not restored_exists
+        or signing_keys.get("signature_algorithm") != "Ed25519"
+        or signed_result.get("signature_algorithm") != "Ed25519"
+        or not signed_verify.get("valid")
         or watcher.get("state") != "running"
         or stopped.get("state") != "stopped"
         or managed.get("state") != "running"
@@ -136,7 +163,7 @@ def main() -> int:
         raise RuntimeError("standalone binary smoke contract failed")
     print(
         "Standalone binary smoke passed: CLI, SQLite/FTS, MCP dispatch, public benchmark, "
-        "encrypted snapshots, background sync, and managed console lifecycle."
+        "bundled Tree-sitter, encrypted and Ed25519 snapshots, background sync, and managed console lifecycle."
     )
     return 0
 

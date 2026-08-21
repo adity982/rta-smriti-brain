@@ -51,13 +51,16 @@ A named project is bound to a portable repository identity plus one resolved can
 
 `ParserRegistry` ships with:
 
-- automatic parsing, using Tree-sitter when installed and supported, then deterministic regex fallback
+- automatic parsing, using bundled Tree-sitter grammars when supported, then deterministic regex fallback
 - deterministic regex parsing, always available
-- an optional `tree-sitter-language-pack` adapter
-- an explicit local command adapter for LSP-derived symbols and imports
+- a standard-install `tree-sitter-language-pack` adapter for Python, JavaScript, TypeScript/TSX, Go, Rust, and Java
+- opt-in PATH discovery and bounded JSON-RPC for Pyright, gopls, TypeScript Language Server, and rust-analyzer; project-local executables are rejected and the resolved executable identity is bound into the manifest and rechecked before launch
+- a compatible explicit local JSON command adapter for custom symbol/import providers
 - Python entry points in the `rta_smriti.parsers` group
 
-Unavailable or failed optional parsers fall back to regex and emit warnings in the ingestion receipt.
+Discovered executables inside the project root are rejected, native LSP execution
+never uses a shell, and frames, process time, and response sizes are bounded.
+Unavailable or failed parsers fall back to regex and emit warnings in the ingestion receipt.
 
 ## Retrieval
 
@@ -79,7 +82,7 @@ Ingestion records files, symbols, imports, calls, tests, configuration, memories
 
 A workspace is metadata owned by one brain database that references explicitly selected projects in independent local brain databases. Health checks report availability without returning member database paths. Search opens available external databases in SQLite query-only mode, writes no recall receipts, returns grouped results, and reports unavailable members as a degraded partial result instead of losing healthy-project recall. Members can be removed and workspace metadata can be deleted without deleting project brains; project identity and storage remain isolated.
 
-Selective bundles contain only chosen memories, checkpoints, and policies. Source code is excluded. Export redacts home paths and common credential patterns by default and attaches a SHA-256 content digest for integrity, not authentication. Preview mode reports contents, warnings, conflicts, and the digest without mutating disk or a destination brain. Import verifies the envelope, validates bounded schemas, and stages every change in an in-memory SQLite copy before one atomic commit under an explicit rename, merge, or fail conflict strategy. Because bundles are unsigned, imported memories are downgraded to unverified `smriti`; imported checkpoints and policies are quarantined for owner review rather than gaining authority. Bundle inputs are limited to 25 MB and read through a stable descriptor. Private bundle and snapshot writes reject linked paths and use restrictive atomic writes. Authenticated snapshots use a consistent SQLite backup plus either compatible HMAC-SHA256 shared-key authentication or optional Ed25519 public-key signatures through the `signing` extra. Encrypted v3 snapshots derive a 256-bit key from a separate passphrase file with scrypt, stream the database through AES-256-GCM, optionally sign the manifest with Ed25519, and restore only through authenticated digest and SQLite integrity checks to a new path. Verification authenticates manifests before accepting content, caps decoded databases at 64 MiB and legacy envelopes at 16 MiB, and uses bounded reads. HMAC and signature-only snapshots detect tampering but remain private unencrypted artifacts; encrypted snapshots protect content at rest but still must not be published with their passphrase.
+Selective bundles contain only chosen memories, checkpoints, and policies. Source code is excluded. Export redacts home paths and common credential patterns by default and attaches a SHA-256 content digest for integrity, not authentication. Preview mode reports contents, warnings, conflicts, and the digest without mutating disk or a destination brain. Import verifies the envelope, validates bounded schemas, and stages every change in an in-memory SQLite copy before one atomic commit under an explicit rename, merge, or fail conflict strategy. Because bundles are unsigned, imported memories are downgraded to unverified `smriti`; imported checkpoints and policies are quarantined for owner review rather than gaining authority. Bundle inputs are limited to 25 MB and read through a stable descriptor. Private bundle and snapshot writes reject linked paths and use restrictive atomic writes. Authenticated snapshots use a consistent SQLite backup plus either compatible HMAC-SHA256 shared-key authentication or standard-install Ed25519 public-key signatures. Encrypted v3 snapshots derive a 256-bit key from a separate passphrase file with scrypt, stream the database through AES-256-GCM, optionally sign the manifest with Ed25519, and restore only through authenticated digest and SQLite integrity checks to a new path. Verification authenticates manifests before accepting content, caps decoded databases at 64 MiB and legacy envelopes at 16 MiB, and uses bounded reads. HMAC and signature-only snapshots detect tampering but remain private unencrypted artifacts; encrypted snapshots protect content at rest but still must not be published with their passphrase.
 
 ## Memory Lifecycle
 
@@ -111,4 +114,9 @@ One stdio MCP process can receive a brain directory instead of one database. Eac
 
 ## Trust Boundary
 
-The HTTP console binds only to loopback, requires a per-launch capability token, validates local origins, and confines database paths to its configured brain directory. Retrieved repository text is evidence, not executable instruction. Blocked or uninspectable sources keep freshness fail-closed.
+The HTTP console binds only to loopback, requires a per-launch capability token, validates local origins, and confines database paths to its configured brain directory. Retrieved repository text is evidence, not executable instruction. Oversized files default to metadata-only records with `fresh_with_warnings`; their content is never represented as indexed. Strict-policy, linked, or otherwise uninspectable sources keep freshness fail-closed.
+
+Optional continuity compaction calls Ollama only through a validated HTTP(S)
+loopback base URL. Inputs and outputs are redacted and bounded, failures preserve
+the deterministic checkpoint, source events remain append-only, and summaries
+are stored as unverified derived evidence rather than verified facts.

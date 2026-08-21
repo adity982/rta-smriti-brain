@@ -232,8 +232,8 @@ only workspace metadata; it never deletes a project brain.
 ### Create An Encrypted Snapshot
 
 Generate a private 256-bit passphrase file outside the repository, keep it
-separate from the snapshot, and install the signing extra
-(`pip install ".[signing]"`). Generation refuses to replace an existing file.
+separate from the snapshot. Cryptography and Ed25519 support ship with the
+standard install. Generation refuses to replace an existing file.
 
 ```powershell
 & $RtaBrain snapshot passphrase-keygen "$BrainDir\project-name.snapshot.passphrase" --json
@@ -289,7 +289,7 @@ Filters the graph by node type.
 
 **Settings**
 
-Controls the active project's indexing policy, repository watcher, and task-continuity service. Auto parsing uses an installed Tree-sitter grammar when supported and safely falls back to built-in regex. You can also select regex explicitly, configure an LSP bridge, change hybrid retrieval, or adjust the fail-closed source cap. External providers are never installed automatically.
+Controls the active project's indexing policy, repository watcher, and task-continuity service. Auto parsing uses bundled Tree-sitter grammars when supported and safely falls back to built-in regex. You can select regex explicitly, opt into a detected local language server, choose metadata-only or strict oversized-file handling, change hybrid retrieval, or enable loopback-only Ollama compaction. External providers are never installed automatically.
 
 **Context-Pack Studio**
 
@@ -297,7 +297,7 @@ The main daily workflow. Choose `Universal / Any Agent`, a named agent, or a cus
 
 **Evidence Inspector**
 
-Open the detail-panel button in the graph toolbar to see what is selected, must-know memories, measured freshness counts, canonical root, Git branch, HEAD, dirty-file count, repo tree hints, and publish readiness. A `Blocked` freshness count means an eligible source could not be safely inspected, such as an oversized or symlinked source. Use the refresh action to incrementally update the selected repo index.
+Open the detail-panel button in the graph toolbar to see what is selected, must-know memories, measured freshness counts, canonical root, Git branch, HEAD, dirty-file count, repo tree hints, and publish readiness. `Metadata only` means an oversized eligible source is tracked without reading or representing its content. `Blocked` is reserved for strict-policy or unsafe sources that could not be inspected. Use the refresh action to incrementally update the selected repo index.
 
 **References**
 
@@ -479,7 +479,7 @@ The managed worker survives terminal and dashboard closure. It is not a privileg
 
 ## Configure Retrieval And Parsing
 
-The recommended bootstrap defaults are automatic Tree-sitter-with-regex-fallback parsing, FTS5 plus dependency-free hash hybrid retrieval, and a 512 KB source cap. A raw `init` remains lexical-only until configured. Read the active policy:
+The recommended bootstrap defaults are bundled Tree-sitter-with-regex-fallback parsing, FTS5 plus dependency-free hash hybrid retrieval, a 512 KB content cap, and metadata-only tracking for larger eligible files. A raw `init` remains lexical-only until configured. Read the active policy:
 
 ```powershell
 & $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json settings --project project-name
@@ -491,13 +491,32 @@ Enable the dependency-free local hash provider and a 1 MB source cap:
 & $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json settings --project project-name --embedding-provider hash --max-file-mb 1
 ```
 
-Changing an indexing policy invalidates the fast manifest. Run `ingest-repo` or use the dashboard refresh action to rebuild affected records. Sources above the selected cap remain visibly blocked.
+Changing an indexing policy invalidates the fast manifest. Run `ingest-repo` or use the dashboard refresh action to rebuild affected records. Sources above the selected cap remain visible as `metadata_only` warnings by default; select `--large-file-policy block` for the older strict behavior.
 
-Install optional local backends from the repository only when you need them:
+Tree-sitter is included. Install a model-backed retrieval option only when you need it:
 
 ```powershell
-python -m pip install -e ".[tree-sitter]"
 python -m pip install -e ".[embeddings]"
+```
+
+Use a supported language server already present on the operator PATH without
+writing an adapter command:
+
+```powershell
+& $RtaBrain --db "$BrainDir\project-name.sqlite" settings --project project-name --parser-adapter lsp --lsp-auto-discovery --json
+```
+
+Only enable LSP mode for operator-installed language servers you trust. Language servers can read
+repository files and project configuration. Rta-Smriti rejects project-local discovery, binds the
+resolved executable identity into the index manifest, and rechecks that identity before launch; it
+cannot certify the behavior of the external server itself.
+
+Optional local thread compaction is off by default. It accepts only a loopback
+Ollama base URL, redacts common sensitive values, preserves the source events,
+and stores the summary as unverified derived state:
+
+```powershell
+& $RtaBrain --db "$BrainDir\project-name.sqlite" settings --project project-name --compaction-provider ollama --compaction-model qwen3:0.6b --json
 ```
 
 ## Govern A High-Risk Action
@@ -557,10 +576,9 @@ Authenticated snapshots contain the complete SQLite brain. Keep both the snapsho
 & $RtaBrain snapshot verify .\project-brain.rta-snapshot --key "$BrainDir\snapshot.key" --json
 ```
 
-HMAC-SHA256 detects tampering with a shared local key. For public-key identity, install the optional signing extra and use an Ed25519 key pair:
+HMAC-SHA256 detects tampering with a shared local key. For public-key identity, use the included Ed25519 support:
 
 ```powershell
-python -m pip install ".[signing]"
 & $RtaBrain snapshot keygen "$BrainDir\snapshot-ed25519-private.pem" --public-key "$BrainDir\snapshot-ed25519-public.pem" --json
 & $RtaBrain --db "$BrainDir\project-name.sqlite" snapshot create .\project-brain.rta-snapshot --private-key "$BrainDir\snapshot-ed25519-private.pem" --json
 & $RtaBrain snapshot verify .\project-brain.rta-snapshot --public-key "$BrainDir\snapshot-ed25519-public.pem" --json

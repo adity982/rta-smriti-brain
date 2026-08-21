@@ -55,7 +55,7 @@ is available.
 - Runs independent MCP tool calls concurrently while preserving ordered mutation visibility.
 - Watches active repositories with foreground or managed-background incremental sync and reuses a persistent SHA-256 cache for deep freshness checks.
 - Supports optional local hybrid retrieval through a built-in deterministic hash provider or an installed Sentence Transformers model.
-- Supports built-in regex parsing plus optional Tree-sitter and explicit LSP adapter commands.
+- Ships Tree-sitter parsing for seven common source families, deterministic regex fallback, and opt-in discovery of supported local language servers.
 - Evaluates intended actions through an evidence-aware **Action Gate** that returns `allow`, `warn`, or `block` with policy, readiness, Git, and freshness signals.
 - Explains retrieval provider, embedding coverage, freshness, latency, lexical/semantic rank, and source-hash provenance instead of hiding ranking decisions.
 - Traverses bounded dependency, dependent, impact, evidence, and relevance subgraphs with explicit relation filters, including approximate calls and test links.
@@ -186,7 +186,7 @@ The dashboard runs on `127.0.0.1` and includes:
 - **Context-Pack Studio**: choose any supported or custom target agent, select a 2K/4K/8K/16K token budget, type a task, and generate a focused pack; pack text and receipt metadata remain in the current browser session only
 - **Evidence inspector**: open the optional detail panel for the selected node, must-know memories, and measured fresh/changed/missing/added/blocked source counts
 - **Incremental refresh**: update the selected repo index from the freshness control; filesystem events force a bounded content-hash check for touched paths, while unchanged projects use a fast stat manifest
-- **Indexing policy**: configure the fail-closed source-size cap, parser adapter, and optional local hybrid retrieval per project
+- **Indexing policy**: configure metadata-only or strict oversized-file handling, parser/LSP behavior, local thread compaction, and optional hybrid retrieval per project
 - **References and backlinks**: inspect why a node is connected and follow its visible relationships
 - **Action Gate**: evaluate a proposed action against trusted policies, required checks, expiry, scope, provenance, continuation readiness, Git state, and freshness; owner overrides create durable receipts
 - **Intelligence**: explain retrieval with source hashes and selection reasons, then run bounded dependency, dependent, impact, evidence, or relevance queries
@@ -390,7 +390,7 @@ Verified by the current public prerelease and hosted CI matrix:
 - incremental foreground and managed-background repository sync with SHA-256 cache
 - optional local hybrid retrieval
 - parser adapter registry with regex, Tree-sitter, LSP, and entry-point extension paths
-- configurable fail-closed large-file policy
+- metadata-only oversized-source isolation with an explicit strict-block mode
 - canonical-root protection and Git checkout awareness
 - structured checkpoints, claim provenance, and compact freshness receipts
 - managed Codex continuity capture with resumable cursors, redaction, backlog bounds, and conservative interruption checkpoints
@@ -408,18 +408,20 @@ Intentional design constraints:
 - Project brains stay in local SQLite files. There is no cloud sync or hosted account system.
 - The dashboard is loopback-only. Remote and LAN hosting are deliberately rejected.
 - Retrieval and reflection are inspectable and deterministic by default. The main bootstrap flow selects the dependency-free local hash provider by default and operators can choose lexical-only or an installed Sentence Transformers model; reflection remains conservative rather than a full semantic judge.
-- Eligible source files above the 512 KB per-file cap are reported as `Blocked`. Freshness remains fail-closed until the operator changes the source or ingestion policy.
+- Eligible source files above the 512 KB content cap are tracked by path, size, and modification time as `metadata_only` by default. Their content is never represented as indexed or verified. Operators can select strict-block mode or raise the cap to 16 MB.
 
 Advanced modes and safety boundaries:
 
 - Managed sync, continuity, and console processes are user-level local processes. Login startup is opt-in because Rta-Smriti does not install privileged services.
 - Hybrid retrieval works dependency-free through the built-in hash provider. Sentence Transformers remains an explicit local extra for operators who want model-backed comparison.
-- Auto parsing uses installed Tree-sitter grammars for supported languages, then deterministic regex fallback. LSP integration remains explicit through a local adapter command.
-- Deep SHA-256 uses a size/mtime hash cache after the first pass. Very large repositories can still take minutes on the initial verification.
+- Standard installs and standalone binaries include Tree-sitter grammars for Python, JavaScript, TypeScript/TSX, Go, Rust, and Java, with deterministic regex fallback for unsupported syntax.
+- LSP mode can discover `pyright-langserver`, `basedpyright-langserver`, `gopls`, `typescript-language-server`, or `rust-analyzer` from the operator PATH. Execution is opt-in, bounded, never uses a shell, and rejects project-local discovered executables; the legacy explicit JSON adapter remains available.
+- Repository ingestion warms the persistent SHA-256 cache while content is already being read. A following deep verification reuses unchanged hashes; only a legacy/cold cache or changed file requires another content read.
 - Filesystem-event workers hash touched paths to catch same-stat edits. Polling-only workers also force periodic deep verification, so some same-stat changes are detected on cadence rather than instantly.
-- The per-file ingestion cap is configurable up to 16 MB. Oversized files stay blocked and keep freshness fail-closed until the operator changes policy or source shape.
+- The per-file content cap is configurable up to 16 MB. Metadata-only sources produce `fresh_with_warnings`; strict mode keeps the previous fail-closed behavior.
 - Call edges are deterministic impact hints, not compiler-perfect call graphs. Use them to find likely blast radius, then verify consequential changes against source and tests.
-- Snapshots support compatible HMAC-SHA256 authentication and optional Ed25519 public-key signatures via the `signing` extra. Snapshots are authenticated local backups, not encrypted artifacts or safe public exports.
+- Standard installs include Ed25519 public-key signatures. Compatible HMAC-SHA256 snapshots remain available, while encrypted snapshots use scrypt plus AES-256-GCM and may also carry an Ed25519 signature. Private snapshots and keys are never safe public exports.
+- Optional Ollama compaction is restricted to an HTTP(S) loopback endpoint, redacts common secrets and home paths, bounds request/response sizes and time, preserves the append-only event record, and labels every derived summary unverified.
 - Snapshot verification accepts at most a 64 MiB SQLite payload; legacy snapshot envelopes are capped at 16 MiB. Selective bundle inputs are capped at 25 MB and consumed through stable bounded reads.
 - The public benchmark can emit JSON or a shareable Markdown report. It is a small synthetic reproducibility and regression harness, not external proof of superiority over other memory systems.
 
@@ -439,15 +441,23 @@ See [ROADMAP.md](ROADMAP.md) for planned improvements. Local-first operation and
 & $RtaBrain --db .\.rta-smriti\brain.sqlite --json watcher status --project demo
 & $RtaBrain --db .\.rta-smriti\brain.sqlite watcher stop --project demo
 
-# Auto mode will use optional Tree-sitter after the package is installed.
-python -m pip install -e ".[tree-sitter]"
+# Auto mode uses the Tree-sitter grammars included by the standard install.
 & $RtaBrain --db .\.rta-smriti\brain.sqlite --json settings --project demo --parser-adapter auto
+
+# Track oversized sources by metadata without claiming their content is indexed (default),
+# or opt back into strict blocking.
+& $RtaBrain --db .\.rta-smriti\brain.sqlite --json settings --project demo --large-file-policy metadata
+
+# Discover a supported language server already installed on the operator PATH.
+& $RtaBrain --db .\.rta-smriti\brain.sqlite --json settings --project demo --parser-adapter lsp --lsp-auto-discovery
+
+# Optional local-only transcript compaction through Ollama.
+& $RtaBrain --db .\.rta-smriti\brain.sqlite --json settings --project demo --compaction-provider ollama --compaction-model qwen3:0.6b
 
 # Or install both optional local backends.
 python -m pip install -e ".[all-local]"
 
-# Optional public-key snapshot signing.
-python -m pip install -e ".[signing]"
+# Ed25519 snapshot signing is included in the standard install.
 ```
 
 ## Development

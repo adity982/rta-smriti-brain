@@ -9,6 +9,9 @@
 - Language-aware Tree-sitter call extraction for supported languages
 - Resilient multi-project workspaces with member health and partial search
 - Human-operator dashboard workflows for each capability
+- Standard-install Tree-sitter and Ed25519 capabilities across wheel and native binaries
+- Metadata-only large-file isolation plus explicit strict blocking
+- Safe local language-server discovery and loopback-only Ollama continuity compaction
 
 ## Next After v0.6.0-alpha
 

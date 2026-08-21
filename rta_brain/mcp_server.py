@@ -643,18 +643,19 @@ class RtaBrainMcpServer:
             repair_deep_stale = bool(args.get("repair_deep_stale", False))
             if not force and not repair_deep_stale:
                 freshness = stale_check(conn, project=project, detail_limit=0)
-                if freshness.get("state") == "fresh":
+                if freshness.get("state") in {"fresh", "fresh_with_warnings"}:
                     payload = {
                         "status": "ok",
                         "project": project,
                         "root": str(root),
-                        "state": "fresh",
+                        "state": freshness.get("state"),
                         "indexed_files": int(freshness.get("fresh") or 0),
                         "updated_files": 0,
                         "unchanged_files": int(freshness.get("fresh") or 0),
                         "removed_files": 0,
                         "skipped_files": 0,
                         "blocked_files": int(freshness.get("uninspectable") or 0),
+                        "metadata_only_files": int(freshness.get("metadata_only") or 0),
                         "manifest_unchanged": True,
                         "mcp_short_circuit": True,
                         "freshness": freshness,

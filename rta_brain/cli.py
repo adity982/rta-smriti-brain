@@ -156,11 +156,17 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(settings)
     settings.add_argument("--project", default="default")
     settings.add_argument("--max-file-mb", type=float)
+    settings.add_argument("--large-file-policy", choices=("metadata", "block"))
     settings.add_argument("--parser-adapter", choices=("auto", "regex", "tree-sitter", "lsp"))
     settings.add_argument("--lsp-command")
+    settings.add_argument("--lsp-auto-discovery", action=argparse.BooleanOptionalAction, default=None)
     settings.add_argument("--embedding-provider", choices=("none", "hash", "sentence-transformers"))
     settings.add_argument("--embedding-model")
     settings.add_argument("--hybrid-weight", type=float)
+    settings.add_argument("--compaction-provider", choices=("none", "ollama"))
+    settings.add_argument("--compaction-model")
+    settings.add_argument("--compaction-endpoint")
+    settings.add_argument("--compaction-timeout", type=float)
 
     thread = sub.add_parser("ingest-thread", help="Index a long thread, transcript, JSONL session, or handoff file")
     add_common_options(thread)
@@ -757,11 +763,17 @@ def main(argv=None) -> int:
                 if args.max_file_mb is not None:
                     changes["max_file_bytes"] = round(args.max_file_mb * 1_000_000)
                 for argument, key in (
+                    (args.large_file_policy, "large_file_policy"),
                     (args.parser_adapter, "parser_adapter"),
                     (args.lsp_command, "lsp_command"),
+                    (args.lsp_auto_discovery, "lsp_auto_discovery"),
                     (args.embedding_provider, "embedding_provider"),
                     (args.embedding_model, "embedding_model"),
                     (args.hybrid_weight, "hybrid_weight"),
+                    (args.compaction_provider, "compaction_provider"),
+                    (args.compaction_model, "compaction_model"),
+                    (args.compaction_endpoint, "compaction_endpoint"),
+                    (args.compaction_timeout, "compaction_timeout_seconds"),
                 ):
                     if argument is not None:
                         changes[key] = argument

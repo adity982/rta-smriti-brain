@@ -1615,20 +1615,39 @@ function GraphSettings({
           </div>
         </label>
         <label>
+          <span>Oversized source handling</span>
+          <select value={settings.large_file_policy || "metadata"} onChange={(event) => updateSetting("large_file_policy", event.target.value)}>
+            <option value="metadata">Metadata only (recommended)</option>
+            <option value="block">Strict block</option>
+          </select>
+        </label>
+        <label>
           <span>Parser adapter</span>
           <select value={settings.parser_adapter || "auto"} onChange={(event) => updateSetting("parser_adapter", event.target.value)}>
-            <option value="auto">Auto (Tree-sitter with safe fallback)</option>
+            <option value="auto">Auto (bundled Tree-sitter)</option>
             <option value="regex">Regex (built in)</option>
-            <option value="tree-sitter">Tree-sitter (optional)</option>
-            <option value="lsp">LSP command (optional)</option>
+            <option value="tree-sitter">Tree-sitter</option>
+            <option value="lsp">Language server</option>
           </select>
           {parserStatus && <em className={parserStatus.available ? "available" : "optional"}>{parserStatus.available ? "Ready" : "Optional dependency"}</em>}
         </label>
         {settings.parser_adapter === "lsp" && (
-          <label className="lspCommand">
-            <span>LSP adapter command</span>
-            <input value={settings.lsp_command || ""} onChange={(event) => updateSetting("lsp_command", event.target.value)} placeholder="Command that accepts and returns JSON" />
-          </label>
+          <>
+            <label className="toggleLabel">
+              <input type="checkbox" checked={settings.lsp_auto_discovery !== false} onChange={(event) => updateSetting("lsp_auto_discovery", event.target.checked)} />
+              Auto-detect supported language servers
+            </label>
+            <label className="lspCommand">
+              <span>Legacy JSON adapter <em>optional override</em></span>
+              <input value={settings.lsp_command || ""} onChange={(event) => updateSetting("lsp_command", event.target.value)} placeholder="Leave blank to use a detected LSP server" />
+            </label>
+            <small className="detectedServers">
+              {(parserCapabilities.lsp?.detected_servers || []).length
+                ? `Detected: ${parserCapabilities.lsp.detected_servers.map((server) => server.name).join(", ")}`
+                : "No supported language server detected; parsing will fall back safely."}
+            </small>
+            <p className="blockedPolicyWarning"><ShieldCheck size={14} /> Use only language servers you trust. A server can read repository files and project configuration; Rta-Smriti rejects project-local discovery and verifies the selected executable has not changed before launch.</p>
+          </>
         )}
         <label>
           <span>Hybrid retrieval</span>
@@ -1638,10 +1657,23 @@ function GraphSettings({
             <option value="sentence-transformers">Sentence Transformers (optional)</option>
           </select>
         </label>
+        <label>
+          <span>Thread compaction</span>
+          <select value={settings.compaction_provider || "none"} onChange={(event) => updateSetting("compaction_provider", event.target.value)}>
+            <option value="none">Off (deterministic checkpoint only)</option>
+            <option value="ollama">Local Ollama (opt in)</option>
+          </select>
+        </label>
+        {settings.compaction_provider === "ollama" && (
+          <>
+            <label><span>Local model</span><input type="text" value={settings.compaction_model || "qwen3:0.6b"} onChange={(event) => updateSetting("compaction_model", event.target.value)} /></label>
+            <label><span>Loopback endpoint</span><input type="text" value={settings.compaction_endpoint || "http://127.0.0.1:11434"} onChange={(event) => updateSetting("compaction_endpoint", event.target.value)} /></label>
+          </>
+        )}
         <button className="savePolicyButton" onClick={onSave} disabled={!projectSettings || isSaving}>
           <ShieldCheck size={15} /> {isSaving ? "Saving..." : "Save Policy"}
         </button>
-        <p className="blockedPolicyWarning"><ShieldCheck size={14} /> Blocked files stay excluded and freshness remains fail-closed until this policy changes.</p>
+        <p className="blockedPolicyWarning"><ShieldCheck size={14} /> Metadata-only files remain visible as warnings and are never represented as content-verified. Strict block mode remains available.</p>
       </div>
       <div className="settingsGroup watcherSettings">
         <div className="watcherHeading">

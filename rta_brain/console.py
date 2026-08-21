@@ -674,9 +674,16 @@ def make_handler(config: ConsoleConfig):
                     conn = _open_db(resolve_brain_db(config, q["db_path"]))
                     try:
                         settings = get_project_settings(conn, q["project"])
+                        root_row = conn.execute(
+                            "SELECT root_path FROM projects WHERE name = ?", (q["project"],)
+                        ).fetchone()
                         self._json({
                             "status": "ok", "settings": settings,
-                            "parser_capabilities": ParserRegistry(lsp_command=settings["lsp_command"]).capabilities(),
+                            "parser_capabilities": ParserRegistry(
+                                lsp_command=settings["lsp_command"],
+                                lsp_auto_discovery=bool(settings["lsp_auto_discovery"]),
+                                lsp_discovery_excluded_root=Path(root_row["root_path"]) if root_row and root_row["root_path"] else None,
+                            ).capabilities(),
                         })
                     finally:
                         conn.close()
@@ -900,9 +907,16 @@ def make_handler(config: ConsoleConfig):
                     conn = _open_db(resolve_brain_db(config, payload["db_path"]))
                     try:
                         settings = update_project_settings(conn, payload["project"], payload.get("settings", {}))
+                        root_row = conn.execute(
+                            "SELECT root_path FROM projects WHERE name = ?", (payload["project"],)
+                        ).fetchone()
                         self._json({
                             "status": "ok", "settings": settings,
-                            "parser_capabilities": ParserRegistry(lsp_command=settings["lsp_command"]).capabilities(),
+                            "parser_capabilities": ParserRegistry(
+                                lsp_command=settings["lsp_command"],
+                                lsp_auto_discovery=bool(settings["lsp_auto_discovery"]),
+                                lsp_discovery_excluded_root=Path(root_row["root_path"]) if root_row and root_row["root_path"] else None,
+                            ).capabilities(),
                         })
                     finally:
                         conn.close()

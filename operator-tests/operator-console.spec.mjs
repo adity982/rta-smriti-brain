@@ -102,6 +102,7 @@ async function expectNoAxeViolations(page, label, disabledRules = []) {
 }
 
 test("real operator can inspect, govern, continue, and move a project brain", async ({ browser }) => {
+  test.setTimeout(100_000);
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "rta-operator-qa-"));
   const { child, ready } = startFixtureServer(tempRoot);
   const errors = [];
@@ -176,11 +177,31 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect(page.locator("#base-panel-memory").getByRole("button")).toHaveCount(0);
     await expect(page.getByRole("status").last()).toBeAttached();
     await operatorNavigation.getByRole("button", { name: "Settings", exact: true }).click();
+    const largeFilePolicy = page.getByLabel("Oversized source handling");
+    const parserAdapter = page.getByLabel("Parser adapter");
+    const compactionProvider = page.getByLabel("Thread compaction");
+    await expect(largeFilePolicy).toHaveValue("metadata");
+    await expect(parserAdapter.getByRole("option", { name: "Auto (bundled Tree-sitter)" })).toHaveCount(1);
+    await parserAdapter.selectOption("lsp");
+    await expect(page.getByLabel("Auto-detect supported language servers")).toBeChecked();
+    await expect(page.getByText(/language server detected|Detected:/)).toBeVisible();
+    await parserAdapter.selectOption("auto");
+    await compactionProvider.selectOption("ollama");
+    await expect(page.getByLabel("Local model")).toBeVisible();
+    await expect(page.getByLabel("Loopback endpoint")).toHaveValue("http://127.0.0.1:11434");
+    await compactionProvider.selectOption("none");
+    await largeFilePolicy.selectOption("block");
+    await page.getByRole("button", { name: "Save Policy", exact: true }).click();
+    await expect(page.getByRole("status").last()).toContainText("Indexing policy saved");
+    await page.reload();
+    await operatorNavigation.getByRole("button", { name: "Settings", exact: true }).click();
+    await expect(page.getByLabel("Oversized source handling")).toHaveValue("block");
     await page.getByRole("button", { name: "Start Sync", exact: true }).click();
     await expect(page.getByRole("button", { name: "Stop Sync", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Stop Sync", exact: true }).click();
     await expect(page.getByRole("button", { name: "Start Sync", exact: true })).toBeVisible();
 
+    await operatorNavigation.getByRole("button", { name: "Search", exact: true }).click();
     await operatorNavigation.getByRole("button", { name: "Graph", exact: true }).click();
     const stageToolbar = page.locator(".stageToolbar");
     const searchToggle = stageToolbar.getByRole("button", { name: "Search", exact: true });
@@ -212,6 +233,8 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     expect((await graphDownload).suggestedFilename()).toContain("operator-demo-graph.json");
 
     await graph.getByRole("button", { name: /queue_budget, call/ }).click();
+    const openInspector = stageToolbar.getByRole("button", { name: "Open detail panel", exact: true });
+    if (await openInspector.isVisible()) await openInspector.click();
     await page.getByRole("button", { name: "Refs", exact: true }).click();
     await expect(page.getByRole("heading", { name: "References & Backlinks", exact: true })).toBeVisible();
     const referencePanel = page.locator(".drawerContent").filter({ has: page.getByRole("heading", { name: "References & Backlinks" }) });

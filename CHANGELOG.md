@@ -9,6 +9,11 @@
 - Replaced regex-derived Tree-sitter call edges with language-aware syntax-tree call extraction for Python, JavaScript, TypeScript, TSX, Go, Rust, and Java.
 - Added workspace member health, degraded partial search, member removal, workspace deletion, and a read-only MCP health tool.
 - Added dashboard operator workflows for MCP probing, workspace health/member management, and encrypted snapshot key generation, create, verify, and restore.
+- Moved common Tree-sitter grammars and Ed25519 support into the standard package and native binary contract.
+- Added metadata-only oversized-source isolation with explicit `fresh_with_warnings` semantics and a compatible strict-block policy.
+- Added opt-in discovery and bounded native JSON-RPC for supported local language servers, with project-local executable rejection and conservative parser fallback.
+- Added opt-in loopback-only Ollama continuity compaction with redaction, request/response bounds, append-only provenance, and unverified derived-state labeling.
+- Added release regressions proving that completed ingestion warms every eligible SHA-256 cache entry before a deep verification.
 
 All notable changes are documented here. The project follows semantic versioning while APIs remain alpha.
 

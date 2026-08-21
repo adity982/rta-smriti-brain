@@ -28,11 +28,17 @@ MAX_SEARCH_LIMIT = 50
 MAX_GRAPH_LIMIT = 500
 DEFAULT_PROJECT_SETTINGS = {
     "max_file_bytes": 512_000,
+    "large_file_policy": "metadata",
     "parser_adapter": "auto",
     "lsp_command": "",
+    "lsp_auto_discovery": True,
     "embedding_provider": "none",
     "embedding_model": "all-MiniLM-L6-v2",
     "hybrid_weight": 0.45,
+    "compaction_provider": "none",
+    "compaction_model": "qwen3:0.6b",
+    "compaction_endpoint": "http://127.0.0.1:11434",
+    "compaction_timeout_seconds": 20.0,
 }
 
 
@@ -513,6 +519,11 @@ def _validate_project_settings(settings: dict) -> dict:
         if not 4_096 <= value <= 16_000_000:
             raise ValueError("max_file_bytes must be between 4,096 and 16,000,000")
         validated["max_file_bytes"] = value
+    if "large_file_policy" in settings:
+        value = str(settings["large_file_policy"]).strip().lower()
+        if value not in {"metadata", "block"}:
+            raise ValueError("large_file_policy must be metadata or block")
+        validated["large_file_policy"] = value
     if "parser_adapter" in settings:
         value = str(settings["parser_adapter"]).strip().lower()
         if value not in {"auto", "regex", "tree-sitter", "lsp"}:
@@ -520,6 +531,11 @@ def _validate_project_settings(settings: dict) -> dict:
         validated["parser_adapter"] = value
     if "lsp_command" in settings:
         validated["lsp_command"] = str(settings["lsp_command"]).strip()[:2_000]
+    if "lsp_auto_discovery" in settings:
+        value = settings["lsp_auto_discovery"]
+        if not isinstance(value, bool):
+            raise ValueError("lsp_auto_discovery must be a boolean")
+        validated["lsp_auto_discovery"] = value
     if "embedding_provider" in settings:
         value = str(settings["embedding_provider"]).strip().lower()
         if value not in {"none", "hash", "sentence-transformers"}:
@@ -535,6 +551,24 @@ def _validate_project_settings(settings: dict) -> dict:
         if not 0.0 <= value <= 1.0:
             raise ValueError("hybrid_weight must be between 0 and 1")
         validated["hybrid_weight"] = value
+    if "compaction_provider" in settings:
+        value = str(settings["compaction_provider"]).strip().lower()
+        if value not in {"none", "ollama"}:
+            raise ValueError("compaction_provider must be none or ollama")
+        validated["compaction_provider"] = value
+    if "compaction_model" in settings:
+        value = str(settings["compaction_model"]).strip()
+        if not value or len(value) > 200:
+            raise ValueError("compaction_model must contain between 1 and 200 characters")
+        validated["compaction_model"] = value
+    if "compaction_endpoint" in settings:
+        from .compaction import validate_ollama_endpoint
+        validated["compaction_endpoint"] = validate_ollama_endpoint(str(settings["compaction_endpoint"]))
+    if "compaction_timeout_seconds" in settings:
+        value = float(settings["compaction_timeout_seconds"])
+        if not 1 <= value <= 120:
+            raise ValueError("compaction_timeout_seconds must be between 1 and 120")
+        validated["compaction_timeout_seconds"] = value
     return validated
 
 
@@ -1068,6 +1102,27 @@ def _repo_stat_manifest(root: Path, max_file_bytes: int = 512_000) -> tuple[str,
     return sha256_text("\n".join(manifest_lines)), path_stats, rejected
 
 
+def _metadata_only_rejections(root: Path, rejected: list[dict[str, str]], policy: str) -> list[tuple[Path, object, str]]:
+    if policy != "metadata":
+        return []
+    items = []
+    for item in rejected:
+        reason = str(item.get("reason") or "")
+        if not reason.startswith("oversized:"):
+            continue
+        path = Path(str(item["path"]))
+        try:
+            resolved = path.resolve(strict=True)
+            resolved.relative_to(root)
+            stat = resolved.stat()
+            if path.is_symlink() or not resolved.is_file() or stat.st_nlink > 1:
+                continue
+        except (OSError, ValueError):
+            continue
+        items.append((resolved, stat, reason))
+    return items
+
+
 def _configured_manifest_digest(file_digest: str, settings: dict, parser_registry: ParserRegistry) -> str:
     parser_adapter = str(settings["parser_adapter"])
     parser_capability = parser_registry.capabilities().get(parser_adapter, {"available": False})
@@ -1079,9 +1134,19 @@ def _configured_manifest_digest(file_digest: str, settings: dict, parser_registr
     return sha256_text(json.dumps({
         "files": file_digest,
         "max_file_bytes": int(settings["max_file_bytes"]),
+        "large_file_policy": settings["large_file_policy"],
         "parser_adapter": parser_adapter,
         "parser_available": parser_capability["available"],
         "lsp_command": settings["lsp_command"],
+        "lsp_auto_discovery": bool(settings["lsp_auto_discovery"]),
+        "lsp_detected_servers": [
+            {
+                "name": item["name"],
+                "executable": item["executable"],
+                "identity": item["executable_identity"],
+            }
+            for item in parser_registry.capabilities().get("lsp", {}).get("detected_servers", [])
+        ],
         "embedding_provider": provider_name,
         "embedding_model": embedding_model,
     }, sort_keys=True))
@@ -1130,10 +1195,20 @@ def _ingest_repo_impl(
     embedding_provider_name = str(settings["embedding_provider"])
     embedding_model = str(settings["embedding_model"])
     provider = create_provider(embedding_provider_name, embedding_model)
-    parser_registry = ParserRegistry(load_entry_points=False, lsp_command=str(settings["lsp_command"]))
+    parser_registry = ParserRegistry(
+        load_entry_points=False,
+        lsp_command=str(settings["lsp_command"]),
+        lsp_auto_discovery=bool(settings["lsp_auto_discovery"]),
+        lsp_discovery_excluded_root=root,
+    )
     manifest_digest, path_stats, rejected = _repo_stat_manifest(root, max_file_bytes=max_file_bytes)
+    large_file_policy = str(settings["large_file_policy"])
+    metadata_only_items = _metadata_only_rejections(root, rejected, large_file_policy)
+    managed_file_count = len(path_stats) + len(metadata_only_items)
     manifest_digest = _configured_manifest_digest(manifest_digest, settings, parser_registry)
-    blocked_files = sum(item["reason"].startswith("oversized:") for item in rejected)
+    oversized_files = sum(item["reason"].startswith("oversized:") for item in rejected)
+    blocked_files = oversized_files if large_file_policy == "block" else 0
+    metadata_only_files = len(metadata_only_items)
     prior_manifest = conn.execute("SELECT digest, file_count FROM repo_manifests WHERE project_id = ?", (project_id,)).fetchone()
     embedding_index_ready = True
     if provider is not None:
@@ -1148,12 +1223,15 @@ def _ingest_repo_impl(
         embedding_index_ready = expected == actual
     if (
         not force and not repair_deep_stale and not changed_path_keys and embedding_index_ready and prior_manifest
-        and prior_manifest["digest"] == manifest_digest and int(prior_manifest["file_count"]) == len(path_stats)
+        and prior_manifest["digest"] == manifest_digest and int(prior_manifest["file_count"]) == managed_file_count
     ):
         return {
-            "status": "ok", "project": project, "root": str(root), "indexed_files": len(path_stats),
-            "updated_files": 0, "unchanged_files": len(path_stats), "removed_files": 0,
-            "skipped_files": len(rejected), "blocked_files": blocked_files, "max_file_bytes": max_file_bytes,
+            "status": "ok", "project": project, "root": str(root), "indexed_files": managed_file_count,
+            "content_indexed_files": len(path_stats),
+            "updated_files": 0, "unchanged_files": managed_file_count, "removed_files": 0,
+            "skipped_files": len(rejected) - metadata_only_files,
+            "blocked_files": blocked_files, "metadata_only_files": metadata_only_files,
+            "large_file_policy": large_file_policy, "max_file_bytes": max_file_bytes,
             "symbols": 0, "edges": 0, "chunks": 0, "embedded_chunks": 0,
             "parser_adapter": parser_adapter, "embedding_provider": embedding_provider_name,
             "parser_warnings": [], "manifest_unchanged": True,
@@ -1168,7 +1246,7 @@ def _ingest_repo_impl(
     updated_files = 0
     unchanged_files = 0
     removed_files = 0
-    skipped_files = len(rejected)
+    skipped_files = len(rejected) - metadata_only_files
     symbols = 0
     edges = 0
     chunks = 0
@@ -1250,6 +1328,7 @@ def _ingest_repo_impl(
             {
                 "relative_path": record.relative_path, "mtime_ns": stat.st_mtime_ns, "size": stat.st_size,
                 "parser": record.parser, "parser_warnings": list(record.parser_warnings),
+                "content_indexed": True,
             },
         )
         parser_warnings.extend(f"{record.relative_path}: {warning}" for warning in record.parser_warnings)
@@ -1295,6 +1374,36 @@ def _ingest_repo_impl(
             "sha256 = excluded.sha256, updated_at = excluded.updated_at",
             (project_id, path_key, stat.st_size, stat.st_mtime_ns, record.sha256, now_iso()),
         )
+    for path, stat, reason in metadata_only_items:
+        path_key = str(path)
+        relative_path = path.relative_to(root).as_posix()
+        seen_paths.add(path_key)
+        indexed_files += 1
+        metadata = {
+            "relative_path": relative_path,
+            "mtime_ns": stat.st_mtime_ns,
+            "size": stat.st_size,
+            "parser": "metadata-only",
+            "parser_warnings": [],
+            "content_indexed": False,
+            "reason": reason,
+        }
+        row = existing.get(path_key)
+        prior_metadata = {}
+        if row:
+            try:
+                prior_metadata = json.loads(row["metadata_json"] or "{}")
+            except json.JSONDecodeError:
+                prior_metadata = {}
+        if prior_metadata == metadata:
+            unchanged_files += 1
+            continue
+        if row:
+            conn.execute("DELETE FROM edges WHERE project_id = ? AND source_id = ?", (project_id, int(row["id"])))
+        metadata_hash = sha256_text(f"metadata-only\0{relative_path}\0{stat.st_size}\0{stat.st_mtime_ns}")
+        upsert_source(conn, project_id, "file", path_key, relative_path, metadata_hash, metadata)
+        conn.execute("DELETE FROM file_hash_cache WHERE project_id = ? AND path = ?", (project_id, path_key))
+        updated_files += 1
     for path_key, row in existing.items():
         if path_key in seen_paths:
             continue
@@ -1341,13 +1450,16 @@ def _ingest_repo_impl(
     conn.execute(
         "INSERT INTO repo_manifests(project_id, digest, file_count, updated_at) VALUES (?, ?, ?, ?) "
         "ON CONFLICT(project_id) DO UPDATE SET digest = excluded.digest, file_count = excluded.file_count, updated_at = excluded.updated_at",
-        (project_id, manifest_digest, len(path_stats), now_iso()),
+        (project_id, manifest_digest, managed_file_count, now_iso()),
     )
     conn.commit()
     return {
         "status": "ok", "project": project, "root": str(root), "indexed_files": indexed_files,
         "updated_files": updated_files, "unchanged_files": unchanged_files, "removed_files": removed_files,
-        "skipped_files": skipped_files, "blocked_files": blocked_files, "max_file_bytes": max_file_bytes,
+        "content_indexed_files": indexed_files - metadata_only_files,
+        "skipped_files": skipped_files, "blocked_files": blocked_files,
+        "metadata_only_files": metadata_only_files, "large_file_policy": large_file_policy,
+        "max_file_bytes": max_file_bytes,
         "symbols": symbols, "edges": edges, "chunks": chunks, "embedded_chunks": embedded_chunks,
         "parser_adapter": parser_adapter, "embedding_provider": embedding_provider_name,
         "parser_warnings": parser_warnings[:100], "manifest_unchanged": False,
@@ -1992,6 +2104,11 @@ def indexed_freshness(conn: sqlite3.Connection, project: str = "default") -> dic
         "SELECT COUNT(*) AS count FROM sources WHERE project_id = ? AND kind = 'file'",
         (project_id,),
     ).fetchone()["count"])
+    metadata_only = int(conn.execute(
+        "SELECT COUNT(*) AS count FROM sources WHERE project_id = ? AND kind = 'file' "
+        "AND json_extract(metadata_json, '$.content_indexed') = 0",
+        (project_id,),
+    ).fetchone()["count"])
     manifest = conn.execute(
         "SELECT file_count, updated_at FROM repo_manifests WHERE project_id = ?",
         (project_id,),
@@ -2007,8 +2124,9 @@ def indexed_freshness(conn: sqlite3.Connection, project: str = "default") -> dic
         "status": "ok",
         "project": project,
         "mode": "index-snapshot",
-        "state": "stale" if mismatch else ("fresh" if source_count else "unknown"),
-        "fresh": min(source_count, expected_count),
+        "state": "stale" if mismatch else ("fresh_with_warnings" if metadata_only else ("fresh" if source_count else "unknown")),
+        "fresh": max(0, min(source_count, expected_count) - metadata_only),
+        "metadata_only": metadata_only,
         "changed": 0,
         "missing": max(0, expected_count - source_count),
         "added": max(0, source_count - expected_count),
@@ -2032,12 +2150,12 @@ def stale_check(
         return {
             "status": "ok", "project": project, "mode": "sha256" if deep else "stat-manifest",
             "state": "unknown", "fresh": 0, "changed": 0, "missing": 0, "added": 0,
-            "hash_cache_hits": 0, "hash_cache_misses": 0, "details": [],
+            "metadata_only": 0, "hash_cache_hits": 0, "hash_cache_misses": 0, "details": [],
             "details_total": 0, "details_truncated": False, "fresh_details_omitted": 0,
         }
     settings = get_project_settings(conn, project)
     details = []
-    counts = {"fresh": 0, "changed": 0, "missing": 0, "added": 0, "uninspectable": 0}
+    counts = {"fresh": 0, "changed": 0, "missing": 0, "added": 0, "uninspectable": 0, "metadata_only": 0}
     indexed_titles = set()
     project_row = conn.execute("SELECT root_path FROM projects WHERE id = ?", (int(row["id"]),)).fetchone()
     root_path = Path(project_row["root_path"]).resolve() if project_row and project_row["root_path"] else None
@@ -2046,17 +2164,30 @@ def stale_check(
     manifest_digest = None
     if root_path and root_path.exists():
         manifest_digest, path_stats, rejected = _repo_stat_manifest(root_path, max_file_bytes=int(settings["max_file_bytes"]))
+        metadata_only_items = _metadata_only_rejections(
+            root_path, rejected, str(settings["large_file_policy"]),
+        )
         manifest_digest = _configured_manifest_digest(
             manifest_digest,
             settings,
-            ParserRegistry(load_entry_points=False, lsp_command=str(settings["lsp_command"])),
+            ParserRegistry(
+                load_entry_points=False,
+                lsp_command=str(settings["lsp_command"]),
+                lsp_auto_discovery=bool(settings["lsp_auto_discovery"]),
+                lsp_discovery_excluded_root=root_path,
+            ),
         )
         current_by_path = {str(path): stat for path, stat in path_stats}
+        current_by_path.update({str(path): stat for path, stat, _reason in metadata_only_items})
         if not deep:
             manifest = conn.execute("SELECT digest, file_count FROM repo_manifests WHERE project_id = ?", (int(row["id"]),)).fetchone()
-            if manifest and manifest["digest"] == manifest_digest and int(manifest["file_count"]) == len(path_stats):
+            if manifest and manifest["digest"] == manifest_digest and int(manifest["file_count"]) == len(path_stats) + len(metadata_only_items):
                 rejected_details = []
                 for item in rejected:
+                    metadata_warning = (
+                        str(settings["large_file_policy"]) == "metadata"
+                        and str(item["reason"]).startswith("oversized:")
+                    )
                     path = Path(item["path"])
                     try:
                         title = path.relative_to(root_path).as_posix()
@@ -2066,7 +2197,7 @@ def stale_check(
                         "source_id": None,
                         "path": item["path"],
                         "title": title,
-                        "status": "uninspectable",
+                        "status": "metadata_only" if metadata_warning else "uninspectable",
                         "reason": item["reason"],
                     })
                 compact_details = rejected_details
@@ -2082,9 +2213,12 @@ def stale_check(
                     ] + rejected_details
                 return {
                     "status": "ok", "project": project, "mode": "stat-manifest",
-                    "state": "stale" if rejected else "fresh",
+                    "state": "stale" if any(item["status"] == "uninspectable" for item in rejected_details)
+                    else ("fresh_with_warnings" if metadata_only_items else "fresh"),
                     "fresh": len(path_stats), "changed": 0, "missing": 0, "added": 0,
-                    "uninspectable": len(rejected), "hash_cache_hits": 0, "hash_cache_misses": 0,
+                    "uninspectable": sum(item["status"] == "uninspectable" for item in rejected_details),
+                    "metadata_only": len(metadata_only_items),
+                    "hash_cache_hits": 0, "hash_cache_misses": 0,
                     "details": compact_details[:detail_limit],
                     "details_total": len(compact_details),
                     "details_truncated": len(compact_details) > detail_limit,
@@ -2096,8 +2230,16 @@ def stale_check(
         path = Path(source["path"])
         indexed_titles.add(str(source["title"]).replace("\\", "/"))
         stat = current_by_path.get(str(path))
+        try:
+            metadata = json.loads(source["metadata_json"] or "{}")
+        except json.JSONDecodeError:
+            metadata = {}
         if stat is None:
             status = "missing"
+        elif metadata.get("content_indexed") is False:
+            status = "metadata_only" if (
+                metadata.get("mtime_ns") == stat.st_mtime_ns and metadata.get("size") == stat.st_size
+            ) else "changed"
         elif deep or refresh_hashes:
             cached = conn.execute(
                 "SELECT sha256 FROM file_hash_cache WHERE project_id = ? AND path = ? AND size = ? AND mtime_ns = ?",
@@ -2119,10 +2261,6 @@ def stale_check(
                     )
             status = "fresh" if current_hash == source["hash"] else "changed"
         else:
-            try:
-                metadata = json.loads(source["metadata_json"] or "{}")
-            except json.JSONDecodeError:
-                metadata = {}
             if metadata.get("mtime_ns") == stat.st_mtime_ns and metadata.get("size") == stat.st_size:
                 status = "fresh"
             else:
@@ -2133,13 +2271,21 @@ def stale_check(
                 status = "fresh" if stat.st_mtime <= indexed_at else "changed"
         counts[status] += 1
         if status != "fresh" or include_fresh_details:
-            details.append({"source_id": source["id"], "path": source["path"], "title": source["title"], "status": status})
+            detail = {"source_id": source["id"], "path": source["path"], "title": source["title"], "status": status}
+            if status == "metadata_only":
+                detail["reason"] = metadata.get("reason", "content intentionally not indexed")
+            details.append(detail)
     if root_path and root_path.exists():
         current_titles = {path.relative_to(root_path).as_posix() for path in map(Path, current_by_path)}
         for title in sorted(current_titles - indexed_titles):
             counts["added"] += 1
             details.append({"source_id": None, "path": str(root_path / title), "title": title, "status": "added"})
         for item in rejected:
+            if (
+                str(settings["large_file_policy"]) == "metadata"
+                and str(item["reason"]).startswith("oversized:")
+            ):
+                continue
             path = Path(item["path"])
             try:
                 title = path.relative_to(root_path).as_posix()
@@ -2153,9 +2299,11 @@ def stale_check(
                 "status": "uninspectable",
                 "reason": item["reason"],
             })
-    total = counts["fresh"] + counts["changed"] + counts["missing"]
+    total = counts["fresh"] + counts["changed"] + counts["missing"] + counts["metadata_only"]
     anomalies = counts["changed"] + counts["missing"] + counts["added"] + counts["uninspectable"]
-    state = "stale" if anomalies else ("unknown" if total == 0 else "fresh")
+    state = "stale" if anomalies else (
+        "unknown" if total == 0 else ("fresh_with_warnings" if counts["metadata_only"] else "fresh")
+    )
     if deep:
         conn.commit()
     details_total = len(details)

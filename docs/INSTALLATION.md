@@ -144,12 +144,12 @@ Register the emitted absolute command and arguments in Codex or another MCP host
 
 ## Optional Local Capabilities
 
+Tree-sitter grammars and Ed25519 snapshot support are included in the standard
+package and standalone binaries. No separate parser or signing extra is needed.
+
 ```bash
 # Precise context token counting
 python -m pip install ".[tokenization]"
-
-# Tree-sitter parsing with regex fallback
-python -m pip install ".[tree-sitter]"
 
 # Filesystem-event repository sync with polling fallback
 python -m pip install ".[watcher]"
@@ -157,13 +157,12 @@ python -m pip install ".[watcher]"
 # Local Sentence Transformers retrieval
 python -m pip install ".[embeddings]"
 
-# Ed25519 public-key snapshot signatures
-python -m pip install ".[signing]"
 ```
 
-No optional package is downloaded or activated without an explicit install and
-project setting. The built-in lexical search, feature-hash retrieval, regex
-parser, and conservative token estimator remain dependency-free.
+Optional tokenization, watchdog events, Sentence Transformers, LSP execution,
+and Ollama compaction are never activated without an explicit install or project
+setting. Lexical search, feature-hash retrieval, Tree-sitter with regex fallback,
+and Ed25519 signing work from the standard package.
 
 ## Legacy Wrapper Compatibility
 
@@ -179,7 +178,8 @@ not required by an installed wheel.
 - **The dashboard is unauthorized:** run `console open` so the current one-session capability reaches the browser.
 - **The requested port is occupied:** `console start` or `restart` selects an available loopback port and records it in status.
 - **A project identity mismatch appears:** verify that you selected the intended checkout; a different repository cannot be rebound over the existing brain.
-- **A project is blocked:** run `self-check --check-files`; blocked or changed files remain fail-closed until deliberately resolved.
+- **A project reports `fresh_with_warnings`:** inspect its metadata-only sources; raise the cap or inspect the files directly before relying on their content.
+- **A project is blocked:** run `self-check --check-files`; strict-policy, unsafe, or changed files remain fail-closed until deliberately resolved.
 - **MCP tools do not appear:** verify the generated absolute paths, restart the MCP host completely, and open a new task; running tasks cannot acquire a newly registered server.
 - **Continuity is stale:** run `continuity status`, then `continuity start`; stale PID state is rejected using both process liveness and heartbeat age.
 

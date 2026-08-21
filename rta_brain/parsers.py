@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
+import os
+import queue
 import re
 import shlex
+import shutil
 import subprocess
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -68,6 +73,215 @@ TREE_SITTER_CALL_NODES = {
     "rust": {"call_expression"},
     "java": {"method_invocation"},
 }
+
+LSP_SERVER_SPECS = (
+    {"name": "pyright", "executables": ("pyright-langserver", "basedpyright-langserver"), "arguments": ("--stdio",), "suffixes": (".py",)},
+    {"name": "gopls", "executables": ("gopls",), "arguments": (), "suffixes": (".go",)},
+    {"name": "typescript", "executables": ("typescript-language-server",), "arguments": ("--stdio",), "suffixes": (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")},
+    {"name": "rust-analyzer", "executables": ("rust-analyzer",), "arguments": (), "suffixes": (".rs",)},
+)
+LSP_LANGUAGE_IDS = {
+    ".py": "python", ".go": "go", ".js": "javascript", ".jsx": "javascriptreact",
+    ".mjs": "javascript", ".cjs": "javascript", ".ts": "typescript",
+    ".tsx": "typescriptreact", ".rs": "rust",
+}
+MAX_LSP_FRAME_BYTES = 8 * 1024 * 1024
+
+
+def discover_lsp_servers(finder=shutil.which, excluded_root: Path | None = None) -> list[dict]:
+    """Discover supported language servers from the operator's existing PATH."""
+    discovered = []
+    for spec in LSP_SERVER_SPECS:
+        executable = None
+        for candidate in spec["executables"]:
+            executable = finder(candidate)
+            if executable:
+                break
+        if not executable:
+            continue
+        resolved = Path(executable).expanduser().resolve()
+        if not resolved.is_absolute() or not resolved.is_file():
+            continue
+        if excluded_root is not None:
+            try:
+                resolved.relative_to(excluded_root.expanduser().resolve())
+            except ValueError:
+                pass
+            else:
+                continue
+        try:
+            stat = resolved.stat()
+        except OSError:
+            continue
+        discovered.append({
+            "name": spec["name"],
+            "executable": str(resolved),
+            "executable_identity": f"{stat.st_size}:{stat.st_mtime_ns}",
+            "command": [str(resolved), *spec["arguments"]],
+            "suffixes": list(spec["suffixes"]),
+        })
+    return discovered
+
+
+def _project_root(path: Path) -> Path:
+    markers = (".git", "pyproject.toml", "package.json", "go.mod", "Cargo.toml")
+    for candidate in (path.parent, *path.parents):
+        if any((candidate / marker).exists() for marker in markers):
+            return candidate
+    return path.parent
+
+
+def _read_lsp_frame(stream) -> dict:
+    headers = {}
+    consumed = 0
+    while True:
+        line = stream.readline()
+        if not line:
+            raise EOFError("language server closed stdout")
+        consumed += len(line)
+        if consumed > 16_384:
+            raise ValueError("language server header exceeds 16 KB")
+        if line in {b"\r\n", b"\n"}:
+            break
+        key, separator, value = line.decode("ascii", errors="strict").partition(":")
+        if not separator:
+            raise ValueError("invalid language server frame header")
+        headers[key.casefold().strip()] = value.strip()
+    length = int(headers.get("content-length", "0"))
+    if not 0 < length <= MAX_LSP_FRAME_BYTES:
+        raise ValueError("language server frame size is invalid")
+    payload = stream.read(length)
+    if len(payload) != length:
+        raise EOFError("language server response was truncated")
+    return json.loads(payload.decode("utf-8"))
+
+
+class _LspClient:
+    def __init__(self, command: list[str], root: Path, timeout: float = 15.0) -> None:
+        self.timeout = timeout
+        creationflags = 0x08000000 if os.name == "nt" else 0
+        self.process = subprocess.Popen(
+            command,
+            cwd=root,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            shell=False,
+            creationflags=creationflags,
+        )
+        self.messages: queue.Queue = queue.Queue()
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader.start()
+
+    def _read(self) -> None:
+        try:
+            while self.process.stdout is not None:
+                self.messages.put(_read_lsp_frame(self.process.stdout))
+        except (EOFError, OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+            self.messages.put(exc)
+
+    def send(self, payload: dict) -> None:
+        raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        if self.process.stdin is None:
+            raise RuntimeError("language server stdin is unavailable")
+        self.process.stdin.write(f"Content-Length: {len(raw)}\r\n\r\n".encode("ascii") + raw)
+        self.process.stdin.flush()
+
+    def request(self, request_id: int, method: str, params: dict) -> object:
+        self.send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+        deadline = time.monotonic() + self.timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"language server timed out during {method}")
+            try:
+                message = self.messages.get(timeout=remaining)
+            except queue.Empty as exc:
+                raise TimeoutError(f"language server timed out during {method}") from exc
+            if isinstance(message, Exception):
+                raise RuntimeError(str(message)) from message
+            if message.get("id") == request_id:
+                if message.get("error"):
+                    raise RuntimeError(f"language server error during {method}: {message['error']}")
+                return message.get("result")
+            if "id" in message and message.get("method"):
+                default = [] if message["method"] == "workspace/configuration" else None
+                self.send({"jsonrpc": "2.0", "id": message["id"], "result": default})
+
+    def close(self) -> None:
+        try:
+            if self.process.poll() is None:
+                try:
+                    normal_timeout = self.timeout
+                    self.timeout = min(self.timeout, 2.0)
+                    self.request(99, "shutdown", {})
+                    self.send({"jsonrpc": "2.0", "method": "exit"})
+                except (OSError, RuntimeError, TimeoutError, queue.Empty):
+                    pass
+                finally:
+                    self.timeout = normal_timeout
+                self.process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=2)
+        finally:
+            for stream in (self.process.stdin, self.process.stdout):
+                if stream is not None:
+                    stream.close()
+
+
+def _symbol_names(items) -> set[str]:
+    names = set()
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if name:
+            names.add(name)
+        names.update(_symbol_names(item.get("children")))
+    return names
+
+
+def _native_lsp_parse(path: Path, text: str, server: dict) -> ParseResult:
+    root = _project_root(path)
+    executable = Path(str(server["command"][0])).resolve()
+    expected_identity = str(server.get("executable_identity") or "")
+    if expected_identity:
+        try:
+            stat = executable.stat()
+        except OSError as exc:
+            raise RuntimeError("the discovered language server is no longer available") from exc
+        if f"{stat.st_size}:{stat.st_mtime_ns}" != expected_identity:
+            raise RuntimeError("the discovered language server changed after discovery")
+    client = _LspClient(list(server["command"]), root)
+    uri = path.resolve().as_uri()
+    root_uri = root.resolve().as_uri()
+    try:
+        client.request(1, "initialize", {
+            "processId": None,
+            "rootUri": root_uri,
+            "workspaceFolders": [{"uri": root_uri, "name": root.name}],
+            "capabilities": {"textDocument": {"documentSymbol": {"hierarchicalDocumentSymbolSupport": True}}},
+        })
+        client.send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+        client.send({
+            "jsonrpc": "2.0", "method": "textDocument/didOpen",
+            "params": {"textDocument": {"uri": uri, "languageId": LSP_LANGUAGE_IDS[path.suffix.lower()], "version": 1, "text": text}},
+        })
+        symbols = _symbol_names(client.request(2, "textDocument/documentSymbol", {"textDocument": {"uri": uri}}))
+    finally:
+        client.close()
+    structural = TreeSitterParser()
+    if structural.available and path.suffix.lower() in TREE_SITTER_LANGUAGES:
+        fallback = structural.parse(path, text)
+    else:
+        fallback = RegexParser().parse(path, text)
+    return ParseResult(
+        symbols=sorted(symbols, key=str.lower),
+        imports=fallback.imports,
+        calls=fallback.calls,
+        parser=f"lsp:{server['name']}",
+    )
 
 
 @dataclass
@@ -169,44 +383,73 @@ class TreeSitterParser:
 
 
 class LspParser:
-    """Adapter for explicit commands that return one JSON document-symbol response."""
+    """Explicit JSON adapter plus opt-in native LSP auto-discovery."""
 
     name = "lsp"
 
-    def __init__(self, command: str = "") -> None:
+    def __init__(
+        self,
+        command: str = "",
+        *,
+        auto_discovery: bool = False,
+        executable_finder=shutil.which,
+        discovery_excluded_root: Path | None = None,
+    ) -> None:
         self.command = command.strip()
+        self.auto_discovery = bool(auto_discovery)
+        self.detected_servers = discover_lsp_servers(
+            finder=executable_finder,
+            excluded_root=discovery_excluded_root,
+        ) if self.auto_discovery else []
 
     @property
     def available(self) -> bool:
-        return bool(self.command)
+        return bool(self.command or self.detected_servers)
 
     def parse(self, path: Path, text: str) -> ParseResult:
-        if not self.command:
-            raise RuntimeError("an LSP adapter command must be configured")
-        request = json.dumps({"path": str(path), "text": text})
-        completed = subprocess.run(
-            shlex.split(self.command), input=request, text=True, capture_output=True, timeout=30, check=False,
-        )
-        if completed.returncode:
-            raise RuntimeError(f"LSP adapter exited with code {completed.returncode}")
-        payload = json.loads(completed.stdout)
-        return ParseResult(
-            symbols=sorted({str(item) for item in payload.get("symbols", [])}, key=str.lower),
-            imports=sorted({str(item) for item in payload.get("imports", [])}, key=str.lower),
-            calls=sorted(
-                {str(item) for item in payload.get("calls", RegexParser().parse(path, text).calls)},
-                key=str.lower,
-            ),
-            parser=self.name,
-        )
+        if self.command:
+            request = json.dumps({"path": str(path), "text": text})
+            completed = subprocess.run(
+                shlex.split(self.command), input=request, text=True, capture_output=True, timeout=30, check=False,
+            )
+            if completed.returncode:
+                raise RuntimeError(f"LSP adapter exited with code {completed.returncode}")
+            payload = json.loads(completed.stdout)
+            return ParseResult(
+                symbols=sorted({str(item) for item in payload.get("symbols", [])}, key=str.lower),
+                imports=sorted({str(item) for item in payload.get("imports", [])}, key=str.lower),
+                calls=sorted(
+                    {str(item) for item in payload.get("calls", RegexParser().parse(path, text).calls)},
+                    key=str.lower,
+                ),
+                parser=self.name,
+            )
+        suffix = path.suffix.lower()
+        server = next((item for item in self.detected_servers if suffix in item["suffixes"]), None)
+        if server is None:
+            raise RuntimeError(f"no supported language server was discovered for {suffix or 'this file'}")
+        return _native_lsp_parse(path, text, server)
 
 
 class ParserRegistry:
-    def __init__(self, load_entry_points: bool = True, lsp_command: str = "") -> None:
+    def __init__(
+        self,
+        load_entry_points: bool = True,
+        lsp_command: str = "",
+        *,
+        lsp_auto_discovery: bool = False,
+        executable_finder=shutil.which,
+        lsp_discovery_excluded_root: Path | None = None,
+    ) -> None:
         self._parsers: dict[str, ParserAdapter] = {}
         self.register(RegexParser())
         self.register(TreeSitterParser())
-        self.register(LspParser(lsp_command))
+        self.register(LspParser(
+            lsp_command,
+            auto_discovery=lsp_auto_discovery,
+            executable_finder=executable_finder,
+            discovery_excluded_root=lsp_discovery_excluded_root,
+        ))
         if load_entry_points:
             self._load_entry_points()
 
@@ -231,6 +474,10 @@ class ParserRegistry:
             "source": "TreeSitterThenRegex",
             "tree_sitter_available": capabilities.get("tree-sitter", {}).get("available", False),
         }
+        lsp = self._parsers.get("lsp")
+        if isinstance(lsp, LspParser):
+            capabilities["lsp"]["auto_discovery"] = lsp.auto_discovery
+            capabilities["lsp"]["detected_servers"] = lsp.detected_servers
         return capabilities
 
     def parse(self, path: Path, text: str, parser_name: str = "regex") -> ParseResult:
@@ -241,7 +488,14 @@ class ParserRegistry:
                     result = tree_sitter.parse(path, text)
                     result.parser = "auto:tree-sitter"
                     return result
-                except (RuntimeError, ValueError, json.JSONDecodeError, subprocess.SubprocessError):
+                except (
+                    OSError,
+                    RuntimeError,
+                    TimeoutError,
+                    ValueError,
+                    json.JSONDecodeError,
+                    subprocess.SubprocessError,
+                ):
                     pass
             result = self._parsers["regex"].parse(path, text)
             result.parser = "auto:regex"
@@ -251,7 +505,14 @@ class ParserRegistry:
             raise ValueError(f"unknown parser adapter: {parser_name}")
         try:
             return parser.parse(path, text)
-        except (RuntimeError, ValueError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
+        except (
+            OSError,
+            RuntimeError,
+            TimeoutError,
+            ValueError,
+            json.JSONDecodeError,
+            subprocess.SubprocessError,
+        ) as exc:
             if parser_name == "regex":
                 raise
             fallback = self._parsers["regex"].parse(path, text)
