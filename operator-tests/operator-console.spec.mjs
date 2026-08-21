@@ -198,8 +198,10 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect(page.getByLabel("Oversized source handling")).toHaveValue("block");
     await page.getByRole("button", { name: "Start Sync", exact: true }).click();
     await expect(page.getByRole("button", { name: "Stop Sync", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop Sync", exact: true })).toHaveAttribute("aria-busy", "false");
     await page.getByRole("button", { name: "Stop Sync", exact: true }).click();
     await expect(page.getByRole("button", { name: "Start Sync", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Start Sync", exact: true })).toHaveAttribute("aria-busy", "false");
 
     await operatorNavigation.getByRole("button", { name: "Search", exact: true }).click();
     await operatorNavigation.getByRole("button", { name: "Graph", exact: true }).click();
@@ -443,6 +445,7 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     } else {
       await expect(page.getByRole("button", { name: "Start Sync", exact: true })).toBeVisible();
     }
+    await expect(page.getByRole("button", { name: "Start Sync", exact: true })).toHaveAttribute("aria-busy", "false");
 
     let healthMode = "conflict";
     await page.route("**/api/health", async (route) => {

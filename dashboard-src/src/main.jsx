@@ -1586,6 +1586,7 @@ function GraphSettings({
   const settings = projectSettings || {};
   const updateSetting = (key, value) => setProjectSettings((current) => ({ ...(current || {}), [key]: value }));
   const parserStatus = parserCapabilities[settings.parser_adapter];
+  const watcherRunning = watcher?.state === "running";
   return (
     <div className="graphSettings" id={id}>
       <div className="settingsGroup graphDisplaySettings">
@@ -1683,12 +1684,13 @@ function GraphSettings({
         <p>Keep the indexed brain current after this console closes.</p>
         {watcher?.last_error && <em className="watcherError" title={watcher.last_error}>Last cycle needs attention</em>}
         <button
-          className={watcher?.state === "running" ? "watcherStopButton" : "watcherStartButton"}
-          onClick={watcher?.state === "running" ? onStopWatcher : onStartWatcher}
+          className={watcherRunning ? "watcherStopButton" : "watcherStartButton"}
+          onClick={watcherRunning ? onStopWatcher : onStartWatcher}
           disabled={isChangingWatcher}
+          aria-busy={isChangingWatcher}
         >
-          {watcher?.state === "running" ? <CircleDot size={15} /> : <Activity size={15} />}
-          {isChangingWatcher ? "Working..." : watcher?.state === "running" ? "Stop Sync" : "Start Sync"}
+          {watcherRunning ? <CircleDot size={15} /> : <Activity size={15} />}
+          {watcherRunning ? "Stop Sync" : "Start Sync"}
         </button>
       </div>
       <div className="settingsGroup watcherSettings continuitySettings">
