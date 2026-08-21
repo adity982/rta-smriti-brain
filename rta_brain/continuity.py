@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .db import ensure_project, latest_checkpoint, now_iso
+from .db import ensure_project, integrity_diagnostics, latest_checkpoint, now_iso
 
 
 MAX_EVENT_BYTES = 256_000
@@ -497,11 +497,13 @@ def reconcile_work_items(conn, project: str) -> dict:
 
 def operational_readiness(
     conn, project: str, *, lifecycle: dict | None = None, include_event_count: bool = True,
+    active_root: str | Path | None = None,
 ) -> dict:
     init_continuity_schema(conn)
     project_id = ensure_project(conn, project)
     checkpoint = latest_checkpoint(conn, project)
     reconciliation = reconcile_work_items(conn, project)
+    integrity = integrity_diagnostics(conn, project=project, active_root=active_root)
     event_count = (
         int(conn.execute("SELECT COUNT(*) AS c FROM session_events WHERE project_id = ?", (project_id,)).fetchone()["c"])
         if include_event_count else None
@@ -518,6 +520,8 @@ def operational_readiness(
             reasons.append("continuity_history_truncated")
     if reconciliation["conflict_count"]:
         reasons.append("work_state_conflicts")
+    if not integrity["operationally_ready"]:
+        reasons.append("project_integrity")
     if lifecycle is not None:
         if lifecycle.get("state") != "running":
             reasons.append("continuity_not_running")
@@ -536,5 +540,6 @@ def operational_readiness(
         "latest_checkpoint": checkpoint,
         "event_count": event_count,
         "work_state_conflicts": reconciliation["conflicts"],
+        "integrity": integrity,
         "continuity": lifecycle,
     }

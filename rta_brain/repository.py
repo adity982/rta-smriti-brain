@@ -1,5 +1,6 @@
 import os
 import re
+import stat
 import subprocess
 import tempfile
 import uuid
@@ -9,6 +10,15 @@ from pathlib import Path
 IDENTITY_DIR = ".rta-smriti"
 IDENTITY_FILE = "brain_id"
 GIT_IDENTITY_FILE = "rta-smriti-brain-id"
+GIT_CHECKOUT_IDENTITY_FILE = "rta-smriti-checkout-id"
+
+
+def _is_reparse_point(path: Path) -> bool:
+    try:
+        attributes = path.lstat().st_file_attributes
+    except (AttributeError, OSError):
+        return False
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
 
 
 def canonical_root(path: str | Path) -> str:
@@ -227,7 +237,23 @@ def verified_git_layout(root: Path) -> tuple[Path, Path, Path] | None:
         return None
     reported = tuple(canonical_root_key(value) for value in values)
     expected = tuple(canonical_root_key(value) for value in layout)
-    return layout if reported == expected else None
+    if reported != expected:
+        return None
+    checkout_marker = repository_root / ".git"
+    if checkout_marker.is_dir():
+        return layout if canonical_root_key(checkout_marker) == canonical_root_key(git_dir) else None
+    if not checkout_marker.is_file() or checkout_marker.is_symlink() or _is_reparse_point(checkout_marker):
+        return None
+    backlink = git_dir / "gitdir"
+    if not backlink.is_file() or backlink.is_symlink() or _is_reparse_point(backlink):
+        return None
+    try:
+        backlink_target = Path(backlink.read_text(encoding="utf-8", errors="strict").strip())
+    except (OSError, ValueError):
+        return None
+    if not backlink_target.is_absolute():
+        backlink_target = git_dir / backlink_target
+    return layout if canonical_root_key(backlink_target) == canonical_root_key(checkout_marker) else None
 
 
 def configured_hooks_path(root: Path, common_dir: Path) -> Path | None:
@@ -297,6 +323,9 @@ def _origin_remote(common_dir: Path) -> str | None:
 def _marker_identity(root: Path, create: bool) -> str | None:
     marker_dir = root / IDENTITY_DIR
     marker = marker_dir / IDENTITY_FILE
+    if marker_dir.exists() or marker_dir.is_symlink():
+        if marker_dir.is_symlink() or _is_reparse_point(marker_dir) or not marker_dir.is_dir():
+            raise ValueError(f"repository identity directory is unsafe: {marker_dir}")
     if marker.exists():
         if marker.is_symlink() or marker.stat().st_nlink > 1:
             raise ValueError(f"refusing linked repository identity marker: {marker}")
@@ -307,6 +336,8 @@ def _marker_identity(root: Path, create: bool) -> str | None:
     if not create:
         return None
     marker_dir.mkdir(parents=True, exist_ok=True)
+    if marker_dir.is_symlink() or _is_reparse_point(marker_dir) or not marker_dir.is_dir():
+        raise ValueError(f"repository identity directory is unsafe: {marker_dir}")
     value = uuid.uuid4().hex
     try:
         with marker.open("x", encoding="ascii", newline="\n") as stream:
@@ -336,6 +367,26 @@ def _git_marker_identity(common_dir: Path, create: bool) -> str | None:
     return f"git-local:{value}"
 
 
+def _git_checkout_identity(git_dir: Path, create: bool) -> str | None:
+    marker = git_dir / GIT_CHECKOUT_IDENTITY_FILE
+    if marker.exists():
+        if marker.is_symlink() or marker.stat().st_nlink > 1:
+            raise ValueError(f"refusing linked checkout identity marker: {marker}")
+        value = marker.read_text(encoding="ascii", errors="strict").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{32}", value):
+            raise ValueError(f"invalid checkout identity marker: {marker}")
+        return f"checkout:{value}"
+    if not create:
+        return None
+    value = uuid.uuid4().hex
+    try:
+        with marker.open("x", encoding="ascii", newline="\n") as stream:
+            stream.write(value + "\n")
+    except FileExistsError:
+        return _git_checkout_identity(git_dir, create=False)
+    return f"checkout:{value}"
+
+
 def stable_git_identity(root: str | Path) -> str | None:
     """Return the portable first-commit identity for an established Git repo."""
     requested = Path(root).expanduser().resolve()
@@ -356,7 +407,7 @@ def repository_identity(root: str | Path, create_marker: bool = True) -> str:
     existing_local_marker = _marker_identity(requested, create=False)
     if existing_local_marker:
         return existing_local_marker
-    layout = _git_layout(requested)
+    layout = verified_git_layout(requested)
     if layout:
         repository_root, _git_dir, common_dir = layout
         existing_git_marker = _git_marker_identity(common_dir, create=False)
@@ -372,6 +423,23 @@ def repository_identity(root: str | Path, create_marker: bool = True) -> str:
     if not marker:
         raise ValueError("repository identity is unavailable")
     return marker
+
+
+def checkout_identity(root: str | Path, create_marker: bool = True) -> str:
+    """Return a stable identity for one checkout, distinct across Git worktrees and clones."""
+    requested = Path(root).expanduser().resolve()
+    if not requested.exists() or not requested.is_dir():
+        raise ValueError(f"repository root does not exist or is not a directory: {requested}")
+    layout = verified_git_layout(requested)
+    if layout:
+        _repository_root, git_dir, _common_dir = layout
+        marker = _git_checkout_identity(git_dir, create=create_marker)
+        if marker:
+            return marker
+    local_identity = _marker_identity(requested, create=create_marker)
+    if not local_identity:
+        raise ValueError("checkout identity is unavailable")
+    return f"checkout-{local_identity}"
 
 
 def repository_state(root: str | Path | None, include_worktree: bool = True) -> dict:

@@ -19,7 +19,20 @@ ROOT = Path(__file__).resolve().parents[1]
 MCP = ROOT / "rta-brain-mcp.py"
 
 
+def prepare_mcp_db(db_path):
+    db_path = Path(db_path)
+    root = db_path.parent / "mcp-test-repo"
+    root.mkdir(parents=True, exist_ok=True)
+    conn = connect(db_path)
+    try:
+        init_project(conn, "demo", str(root))
+    finally:
+        conn.close()
+    return root
+
+
 def run_mcp(messages, db_path, *extra_args):
+    prepare_mcp_db(db_path)
     body = "\n".join(json.dumps(message) for message in messages) + "\n"
     return subprocess.run(
         [sys.executable, str(MCP), "--db", str(db_path), "--project", "demo", *extra_args],
@@ -55,9 +68,15 @@ class RtaBrainMcpTests(unittest.TestCase):
             thread.write_text("Decision: preserve canonical identity.\n", encoding="utf-8")
             alias_parent = Path(tmp) / "alias"
             alias_parent.symlink_to(real_parent, target_is_directory=True)
+            database = Path(tmp) / "brain.sqlite"
+            conn = connect(database)
+            try:
+                init_project(conn, "demo", str(root))
+            finally:
+                conn.close()
 
             server = RtaBrainMcpServer(
-                Path(tmp) / "brain.sqlite",
+                database,
                 "demo",
                 allow_thread_ingestion=True,
                 allowed_thread_roots=(alias_parent / "allowed",),
@@ -386,8 +405,14 @@ class RtaBrainMcpTests(unittest.TestCase):
             root.mkdir()
             thread = root / "thread.md"
             thread.write_text("Decision: retain the boundary.\n", encoding="utf-8")
+            database = Path(tmp) / "brain.sqlite"
+            conn = connect(database)
+            try:
+                init_project(conn, "default", str(root))
+            finally:
+                conn.close()
             server = RtaBrainMcpServer(
-                Path(tmp) / "brain.sqlite",
+                database,
                 "default",
                 allow_thread_ingestion=True,
                 allowed_thread_roots=(root,),
@@ -412,7 +437,7 @@ class RtaBrainMcpTests(unittest.TestCase):
                 emitted.append(response["id"])
 
             scheduler = McpRequestScheduler(
-                SlowServer(Path("unused.sqlite"), "demo"), emit,
+                object.__new__(SlowServer), emit,
                 max_concurrency=1, max_outstanding=1, max_outstanding_bytes=1_000,
             )
             await scheduler.submit({"jsonrpc": "2.0", "id": 1, "method": "ping"}, frame_bytes=60)
@@ -442,7 +467,7 @@ class RtaBrainMcpTests(unittest.TestCase):
                 return None
 
             scheduler = McpRequestScheduler(
-                SlowServer(Path("unused.sqlite"), "demo"), emit,
+                object.__new__(SlowServer), emit,
                 max_concurrency=2, max_outstanding=3, max_outstanding_bytes=100,
             )
             await scheduler.submit({"jsonrpc": "2.0", "id": 1, "method": "ping"}, frame_bytes=60)
@@ -462,7 +487,6 @@ class RtaBrainMcpTests(unittest.TestCase):
     def test_scheduler_preserves_mutation_order_for_following_tool_calls(self):
         class OrderedServer(RtaBrainMcpServer):
             def __init__(self):
-                super().__init__(Path("unused.sqlite"), "demo", allow_memory_writes=True)
                 self.events = []
 
             async def handle_async(self, request):
@@ -505,6 +529,7 @@ class RtaBrainMcpTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "brain.sqlite"
+            prepare_mcp_db(db)
             body = nested.decode("ascii") + "\n" + json.dumps(
                 {"jsonrpc": "2.0", "id": 2, "method": "ping"}
             ) + "\n"

@@ -3376,6 +3376,44 @@ textarea:focus {
   cursor: pointer;
 }
 
+.integritySettings {
+  align-items: stretch;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
+
+.integritySettings.verified {
+  border-color: rgba(52, 211, 153, 0.28);
+}
+
+.integritySettings.attention {
+  border-color: rgba(251, 191, 36, 0.34);
+}
+
+.integrityFacts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px 10px;
+}
+
+.integrityFacts span {
+  color: #8298ad;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.integrityFacts b {
+  display: block;
+  overflow: hidden;
+  color: #dceafa;
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
 .workspaceHealth,
 .workspaceMembers > div,
 .mcpReceipt {
@@ -3843,7 +3881,9 @@ textarea:focus {
 
   .stageToolbar {
     flex-wrap: nowrap;
+    align-items: center;
     gap: 5px;
+    min-height: 50px;
     padding: 7px 8px;
     overflow-x: auto;
     scrollbar-width: none;
@@ -3865,7 +3905,20 @@ textarea:focus {
 
   .stageToolbar .toolButton {
     width: 36px;
+    height: 36px;
     padding: 0;
+  }
+
+  .stageToolbar .rootConflictBanner {
+    flex: 1 0 100%;
+    grid-template-columns: 18px minmax(0, 1fr) auto;
+    width: 100%;
+    min-height: 36px;
+    padding: 4px 7px;
+  }
+
+  .stageToolbar .rootConflictBanner .rootConflictDetail {
+    display: none;
   }
 
   .graphCanvas {
@@ -3873,8 +3926,9 @@ textarea:focus {
   }
 
   .graphSvg {
-    width: 100%;
-    max-width: 100%;
+    width: 520px;
+    max-width: none;
+    margin-left: calc((100% - 520px) / 2);
     min-height: 420px;
   }
 

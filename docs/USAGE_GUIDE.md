@@ -92,11 +92,11 @@ This creates:
 ## Check A Project Brain
 
 ```powershell
-& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json self-check --project project-name --check-files
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json self-check --project project-name --check-files --root C:\path\to\project
 ```
 
 ```bash
-"$RtaBrain" --db "$BrainDir/project-name.sqlite" --json self-check --project project-name --check-files
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" --json self-check --project project-name --check-files --root /path/to/project
 ```
 
 Look for:
@@ -105,6 +105,28 @@ Look for:
 - file counts greater than zero
 - memories greater than zero, if you have added decisions
 - low or zero stale files
+- `integrity.binding.state: exact`
+- `integrity.duplicate_root_count: 0`
+
+## Move A Brain To Another Checkout
+
+A clone or Git worktree is a distinct checkout even when it has the same repository history. Rta-Smriti never silently switches between them.
+
+Stop the managed workers and any agent host using this project's single-project MCP server, then create a separate SQLite backup through the explicit migration command:
+
+```powershell
+& $RtaBrain --db "$BrainDir\project-name.sqlite" watcher stop --project project-name
+& $RtaBrain --db "$BrainDir\project-name.sqlite" continuity stop --project project-name
+& $RtaBrain --db "$BrainDir\project-name.sqlite" --json root-rebind C:\new\project --project project-name --backup C:\backups\project-name-before-rebind.sqlite
+```
+
+```bash
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" watcher stop --project project-name
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" continuity stop --project project-name
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" --json root-rebind /new/project --project project-name --backup "$HOME/backups/project-name-before-rebind.sqlite"
+```
+
+The destination must be the same verified repository lineage, the backup path must not already exist, and any failed reindex leaves the original binding and index intact. A missing old folder never authorizes an implicit move. Active watcher, continuity, or MCP ownership blocks migration. Restart those processes only after `integrity-diagnostics --root <new-checkout>` reports `operationally_ready: true`.
 
 ## Generate Context Before A Task
 
@@ -197,6 +219,11 @@ uses the brain's registered canonical root. Thread files are confined to the
 declared roots. Agent-authored memory remains unverified `anumana` with
 confidence capped at `0.75`; agents cannot create or retire governance policy,
 attest required checks, or override a block.
+
+Configuration generation fails closed unless the stored root, repository
+identity, and checkout identity are currently exact. The generated command
+always includes `--root`. Stop the MCP host before `root-rebind`; a live server
+holds a local lease specifically to prevent checkout changes during tool calls.
 
 Probe the exact generated server before editing the host configuration:
 

@@ -110,9 +110,11 @@ class V06CandidateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             database = root / "brain.sqlite"
+            repo = root / "repo"
+            repo.mkdir()
             conn = connect(database)
             try:
-                init_project(conn, "demo", str(root / "repo"))
+                init_project(conn, "demo", str(repo))
                 remember(conn, "secret marker for encrypted snapshot", project="demo")
             finally:
                 conn.close()
@@ -271,9 +273,11 @@ class V06CandidateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             database = root / "brain.sqlite"
+            repo = root / "repo"
+            repo.mkdir()
             conn = connect(database)
             try:
-                init_project(conn, "demo", str(root / "repo"))
+                init_project(conn, "demo", str(repo))
             finally:
                 conn.close()
             result = project.mcp_doctor(database, "demo", Path(__file__).resolve().parents[1], timeout=10)

@@ -28,7 +28,8 @@ from .continuity_daemon import (
 )
 from .db import (
     connect, doctor, get_project_settings, graph, graph_query, ingest_repo, ingest_thread, init_project, reflect,
-    remember, save_checkpoint, search, stale_check, update_project_settings,
+    integrity_diagnostics, project_binding_status, rebind_project_root, remember, save_checkpoint, search,
+    stale_check, update_project_settings,
 )
 from .governance import build_operational_context, create_policy, list_policies, list_receipts, preflight, retire_policy
 from .diagnostics import retrieval_diagnostics
@@ -84,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(init)
     init.add_argument("--project", default="default")
     init.add_argument("--root", default=str(Path.cwd()))
-    init.add_argument("--rebind-root", action="store_true", help="Explicitly replace an existing canonical project root")
+    init.add_argument("--rebind-root", action="store_true", help="Deprecated; use root-rebind so backup and rollback are enforced")
 
     remember_cmd = sub.add_parser("remember", help="Store a durable memory")
     add_common_options(remember_cmd)
@@ -106,7 +107,13 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--project", default="default")
     ingest.add_argument("--force", action="store_true", help="Re-read and re-index every eligible file even when metadata is unchanged")
     ingest.add_argument("--repair-deep-stale", action="store_true", help="Hash every eligible file and re-index only content-drifted sources")
-    ingest.add_argument("--rebind-root", action="store_true", help="Explicitly replace the brain's canonical project root")
+    ingest.add_argument("--rebind-root", action="store_true", help="Deprecated; use root-rebind so backup and rollback are enforced")
+
+    root_rebind = sub.add_parser("root-rebind", help="Back up and atomically migrate a project brain to another checkout")
+    add_common_options(root_rebind)
+    root_rebind.add_argument("path")
+    root_rebind.add_argument("--project", default="default")
+    root_rebind.add_argument("--backup", required=True, help="No-clobber SQLite backup written before migration")
 
     watch = sub.add_parser("watch-repo", help="Continuously refresh a repository using the incremental index")
     add_common_options(watch)
@@ -279,6 +286,12 @@ def build_parser() -> argparse.ArgumentParser:
     stale.add_argument("--rehash", action="store_true", help="Bypass the stat-keyed hash cache; implies --deep")
     stale.add_argument("--details", action="store_true", help="Include fresh file rows as well as anomalies")
     stale.add_argument("--detail-limit", type=int, default=50, help="Maximum freshness detail rows to emit (0-500)")
+    stale.add_argument("--root", help="Active checkout root; mismatches fail closed before freshness is claimed")
+
+    integrity_cmd = sub.add_parser("integrity-diagnostics", help="Report schema, binding, and duplicate-root integrity without local paths")
+    add_common_options(integrity_cmd)
+    integrity_cmd.add_argument("--project", default="default")
+    integrity_cmd.add_argument("--root", help="Active checkout root to verify against the stored binding")
 
     checkpoint = sub.add_parser("checkpoint", help="Save a structured project continuation checkpoint")
     add_common_options(checkpoint)
@@ -336,6 +349,7 @@ def build_parser() -> argparse.ArgumentParser:
     readiness = sub.add_parser("operational-readiness", help="Separate database health from task continuation readiness")
     add_common_options(readiness)
     readiness.add_argument("--project", default="default")
+    readiness.add_argument("--root", help="Active checkout root to verify before reporting continuation readiness")
 
     reflect_cmd = sub.add_parser("reflect", help="Consolidate duplicate memories and flag contradictions")
     add_common_options(reflect_cmd)
@@ -383,6 +397,7 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_config.add_argument("--project", default="default")
     mcp_config.add_argument("--name", default="rta-smriti")
     mcp_config.add_argument("--brain-dir", help="Generate one multi-project MCP gateway for this brain directory")
+    mcp_config.add_argument("--root", help="Active checkout root that must match before configuration is emitted")
 
     mcp_doctor_cmd = sub.add_parser("mcp-doctor", help="Probe the exact generated MCP stdio server command")
     add_common_options(mcp_doctor_cmd)
@@ -420,6 +435,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(self_check_cmd)
     self_check_cmd.add_argument("--project", default="default")
     self_check_cmd.add_argument("--check-files", action="store_true", help="Hash indexed files to include fresh/changed/missing counts")
+    self_check_cmd.add_argument("--root", help="Active checkout root to verify before reporting readiness")
 
     projects = sub.add_parser("projects-list", help="List projects registered in a brain database")
     add_common_options(projects)
@@ -431,6 +447,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_cmd = sub.add_parser("doctor", help="Verify local brain health")
     add_common_options(doctor_cmd)
     doctor_cmd.add_argument("--project", help="Also evaluate task continuation readiness for one project")
+    doctor_cmd.add_argument("--root", help="Active checkout root to verify when --project is supplied")
 
     publish = sub.add_parser("publish-readiness", help="Check whether this package is ready to publish on GitHub")
     add_common_options(publish)
@@ -726,6 +743,8 @@ def main(argv=None) -> int:
         conn = connect(Path(args.db))
         with conn:
             if args.command == "init":
+                if args.rebind_root:
+                    raise ValueError("--rebind-root is retired for init; use root-rebind with a no-clobber backup path")
                 payload = init_project(conn, args.project, str(Path(args.root).resolve()), allow_root_rebind=args.rebind_root)
             elif args.command == "remember":
                 provenance = None
@@ -748,6 +767,8 @@ def main(argv=None) -> int:
                     provenance=provenance,
                 )
             elif args.command == "ingest-repo":
+                if args.rebind_root:
+                    raise ValueError("--rebind-root is retired for ingest-repo; use root-rebind with a no-clobber backup path")
                 payload = ingest_repo(
                     conn,
                     Path(args.path),
@@ -755,6 +776,10 @@ def main(argv=None) -> int:
                     force=args.force,
                     repair_deep_stale=args.repair_deep_stale,
                     allow_root_rebind=args.rebind_root,
+                )
+            elif args.command == "root-rebind":
+                payload = rebind_project_root(
+                    conn, Path(args.path), project=args.project, backup_path=Path(args.backup),
                 )
             elif args.command == "watch-repo":
                 payload = watch_repository(conn, Path(args.path), project=args.project, interval_seconds=args.interval)
@@ -857,6 +882,11 @@ def main(argv=None) -> int:
                     refresh_hashes=args.rehash,
                     detail_limit=args.detail_limit,
                     include_fresh_details=args.details,
+                    active_root=Path(args.root) if args.root else None,
+                )
+            elif args.command == "integrity-diagnostics":
+                payload = integrity_diagnostics(
+                    conn, project=args.project, active_root=Path(args.root) if args.root else None,
                 )
             elif args.command == "checkpoint":
                 payload = save_checkpoint(
@@ -895,6 +925,7 @@ def main(argv=None) -> int:
             elif args.command == "operational-readiness":
                 payload = operational_readiness(
                     conn, args.project, lifecycle=continuity_status(Path(args.db), args.project),
+                    active_root=Path(args.root) if args.root else None,
                 )
             elif args.command == "reflect":
                 payload = reflect(conn, project=args.project)
@@ -947,6 +978,12 @@ def main(argv=None) -> int:
             elif args.command == "governance-receipts":
                 payload = list_receipts(conn, project=args.project, limit=args.limit)
             elif args.command == "mcp-config":
+                if args.root and not args.brain_dir:
+                    binding = project_binding_status(conn, args.project, Path(args.root))
+                    if not binding["ready"]:
+                        raise ValueError(
+                            f"active checkout mismatch ({binding['state']}); verify or rebind the project root first"
+                        )
                 payload = (
                     mcp_gateway_config_payload(args.brain_dir, args.name, tool_root())
                     if args.brain_dir else build_mcp_config(args.db, args.project, args.name)
@@ -964,7 +1001,10 @@ def main(argv=None) -> int:
                     embedding_provider=args.embedding_provider,
                 )
             elif args.command == "self-check":
-                payload = self_check(conn, project=args.project, check_files=args.check_files)
+                payload = self_check(
+                    conn, project=args.project, check_files=args.check_files,
+                    active_root=Path(args.root) if args.root else None,
+                )
             elif args.command == "projects-list":
                 payload = projects_list(conn)
             elif args.command == "install-local":
@@ -974,6 +1014,7 @@ def main(argv=None) -> int:
                 if args.project:
                     payload["operational"] = operational_readiness(
                         conn, args.project, lifecycle=continuity_status(Path(args.db), args.project),
+                        active_root=Path(args.root) if args.root else None,
                     )
             else:
                 parser.error(f"unknown command: {args.command}")

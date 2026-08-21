@@ -8,7 +8,10 @@ import tempfile
 import time
 from pathlib import Path
 
-from .db import connect, doctor, ensure_project, ingest_repo, init_project, stale_check, update_project_settings
+from .db import (
+    connect, doctor, ensure_project, ingest_repo, init_project, init_schema,
+    project_binding_status, stale_check, update_project_settings,
+)
 
 
 def _slug(value: str) -> str:
@@ -275,7 +278,12 @@ def projects_list(conn: sqlite3.Connection) -> dict:
     return {"status": "ok", "projects": rows}
 
 
-def self_check(conn: sqlite3.Connection, project: str, check_files: bool = False) -> dict:
+def self_check(
+    conn: sqlite3.Connection,
+    project: str,
+    check_files: bool = False,
+    active_root: str | Path | None = None,
+) -> dict:
     from .continuity import operational_readiness
 
     ensure_project(conn, project)
@@ -285,7 +293,7 @@ def self_check(conn: sqlite3.Connection, project: str, check_files: bool = False
     memories = int(conn.execute("SELECT COUNT(*) AS c FROM memories WHERE project_id = ? AND status IN ('active', 'pinned')", (project_id,)).fetchone()["c"])
     entities = int(conn.execute("SELECT COUNT(*) AS c FROM entities WHERE project_id = ?", (project_id,)).fetchone()["c"])
     if check_files:
-        fresh = stale_check(conn, project=project, deep=True)
+        fresh = stale_check(conn, project=project, deep=True, active_root=active_root)
         freshness = {
             "mode": "file-hash", "state": fresh["state"], "fresh": fresh["fresh"],
             "changed": fresh["changed"], "missing": fresh["missing"], "added": fresh["added"],
@@ -293,19 +301,23 @@ def self_check(conn: sqlite3.Connection, project: str, check_files: bool = False
         }
     else:
         freshness = {"mode": "summary", "fresh": None, "changed": None, "missing": None}
-    ready = bool(
+    database_ready = bool(
         health["fts_enabled"] and (sources > 0 or memories > 0)
         and (not check_files or freshness.get("state") in {"fresh", "fresh_with_warnings"})
     )
-    operational = operational_readiness(conn, project, include_event_count=False)
+    operational = operational_readiness(
+        conn, project, include_event_count=False, active_root=active_root,
+    )
+    ready = bool(database_ready and operational["integrity"]["operationally_ready"])
     return {
         "status": "ok",
         "project": project,
         "ready": ready,
-        "database_ready": ready,
+        "database_ready": database_ready,
         "continuation_ready": operational["continuation_ready"],
         "operational_state": operational["operational_state"],
         "operational_reasons": operational["reasons"],
+        "integrity": operational["integrity"],
         "sources": sources,
         "memories": memories,
         "entities": entities,
@@ -349,13 +361,30 @@ def install_local(target: Path, tool_root: Path, shell: str | None = None) -> di
 
 def mcp_config_payload(db_path: str, project: str, name: str, tool_root: Path) -> dict:
     command, prefix_args = _mcp_launch(tool_root)
+    server_args = [*prefix_args, "--db", str(Path(db_path)), "--project", project]
+    conn = connect(Path(db_path))
+    try:
+        init_schema(conn)
+        row = conn.execute(
+            "SELECT root_path, repository_identity, checkout_identity FROM projects WHERE name = ?", (project,),
+        ).fetchone()
+        binding = project_binding_status(conn, project)
+    finally:
+        conn.close()
+    if not row or not binding["ready"] or not all(
+        row[key] for key in ("root_path", "repository_identity", "checkout_identity")
+    ):
+        raise ValueError(
+            "MCP configuration requires an exact canonical project binding; repair or root-rebind the project first"
+        )
+    server_args.extend(["--root", str(Path(row["root_path"]).expanduser().resolve())])
     return {
         "status": "ok",
         "config": {
             "mcpServers": {
                 name: {
                     "command": command,
-                    "args": [*prefix_args, "--db", str(Path(db_path)), "--project", project],
+                    "args": server_args,
                 }
             }
         },

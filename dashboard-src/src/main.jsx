@@ -1223,7 +1223,7 @@ function App() {
           </div>
           <div>
             <h1>Rta-Smriti Brain</h1>
-            <span>v0.6 Alpha Operator Console</span>
+            <span>v0.6.1 Alpha Operator Console</span>
           </div>
         </div>
         <div className="topStatus">
@@ -1279,14 +1279,14 @@ function App() {
                       setSelectedProject(project);
                       setProjectsOpen(false);
                     }}
-                    aria-label={`${project.project}, ${safeNumber(project.sources)} files, ${project.root_conflict ? "root conflict" : project.ready ? "indexed" : "needs indexing"}`}
+                    aria-label={`${project.project}, ${safeNumber(project.sources)} files, ${project.root_conflict || project.root_duplicate ? "root conflict" : project.ready ? "indexed" : "needs indexing"}`}
                   >
                     <Network size={15} />
                     <span>
                       <strong>{project.project}</strong>
                       <small>{safeNumber(project.sources)} files / {safeNumber(project.memories)} memories{project.git?.branch ? ` / ${project.git.branch}@${project.git.head || "unborn"}` : ""}</small>
                     </span>
-                    <i className={project.ready && !project.root_conflict ? "ok" : "warn"} title={project.root_conflict ? "Same project name is bound to multiple roots" : ""} />
+                    <i className={project.ready && !project.root_conflict && !project.root_duplicate ? "ok" : "warn"} title={project.root_conflict || project.root_duplicate ? "Canonical checkout ownership needs review" : ""} />
                   </button>
                 ))}
                 {isLoading && !projects.length && <div className="railEmpty">Scanning local brains...</div>}
@@ -1364,10 +1364,13 @@ function App() {
             <button className="toolButton" onClick={() => setStageExpanded((value) => !value)} aria-label={stageExpanded ? "Exit expanded graph" : "Expand graph"}>
               <Maximize2 size={16} />
             </button>
-            {selectedProject?.root_conflict && (
+            {(selectedProject?.root_conflict || selectedProject?.root_duplicate || selectedProject?.integrity?.operationally_ready === false) && (
               <div className="rootConflictBanner" role="alert">
                 <ShieldCheck size={17} />
-                <span><strong>Canonical-root conflict.</strong> This project name is bound to more than one folder. Verify the selected checkout before using its context.</span>
+                <span>
+                  <strong>{selectedProject?.root_conflict || selectedProject?.root_duplicate ? "Canonical-root conflict." : "Checkout integrity needs attention."}</strong>
+                  <span className="rootConflictDetail"> Verify the selected project binding before using its context.</span>
+                </span>
                 <button onClick={() => showDrawer("checkpoint")}>Review</button>
               </div>
             )}
@@ -1401,6 +1404,7 @@ function App() {
                   projectSettings={projectSettings}
                   setProjectSettings={setProjectSettings}
                   parserCapabilities={parserCapabilities}
+                  integrity={selectedProject?.integrity}
                   onSave={saveProjectSettings}
                   isSaving={isSavingSettings}
                   watcher={watcher}
@@ -1579,7 +1583,7 @@ function App() {
 function GraphSettings({
   id,
   depth, setDepth, showLabels, setShowLabels, showEdges, setShowEdges,
-  projectSettings, setProjectSettings, parserCapabilities, onSave, isSaving,
+  projectSettings, setProjectSettings, parserCapabilities, integrity, onSave, isSaving,
   watcher, onStartWatcher, onStopWatcher, isChangingWatcher,
   continuity, onToggleContinuity, isChangingContinuity,
 }) {
@@ -1675,6 +1679,18 @@ function GraphSettings({
           <ShieldCheck size={15} /> {isSaving ? "Saving..." : "Save Policy"}
         </button>
         <p className="blockedPolicyWarning"><ShieldCheck size={14} /> Metadata-only files remain visible as warnings and are never represented as content-verified. Strict block mode remains available.</p>
+      </div>
+      <div className={`settingsGroup integritySettings ${integrity?.operationally_ready ? "verified" : "attention"}`}>
+        <div className="watcherHeading">
+          <ShieldCheck size={16} />
+          <span><strong>Checkout integrity</strong><small>{integrity?.operationally_ready ? "Verified" : "Attention required"}</small></span>
+        </div>
+        <div className="integrityFacts">
+          <span>Schema <b>v{integrity?.schema_version ?? "?"}</b></span>
+          <span>Binding <b>{integrity?.binding?.state?.replaceAll("_", " ") || "unknown"}</b></span>
+          <span>Root <b>{integrity?.binding?.root_fingerprint || "unbound"}</b></span>
+          <span>Duplicates <b>{integrity?.duplicate_root_count ?? 0}</b></span>
+        </div>
       </div>
       <div className="settingsGroup watcherSettings">
         <div className="watcherHeading">

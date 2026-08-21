@@ -8,11 +8,12 @@ import { fileURLToPath } from "node:url";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const captureLaunchAssets = process.env.RTA_CAPTURE_LAUNCH_ASSETS === "1";
+const captureOutputDir = process.env.RTA_CAPTURE_OUTPUT_DIR || path.join(root, "launch-assets", "screenshots");
 
 async function captureLaunchScreenshot(page, name) {
   if (!captureLaunchAssets) return;
   await page.screenshot({
-    path: path.join(root, "launch-assets", "screenshots", name),
+    path: path.join(captureOutputDir, name),
     animations: "disabled",
   });
 }
@@ -177,6 +178,8 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect(page.locator("#base-panel-memory").getByRole("button")).toHaveCount(0);
     await expect(page.getByRole("status").last()).toBeAttached();
     await operatorNavigation.getByRole("button", { name: "Settings", exact: true }).click();
+    await expect(page.getByText("Checkout integrity", { exact: true })).toBeVisible();
+    await expect(page.getByText("Verified", { exact: true })).toBeVisible();
     const largeFilePolicy = page.getByLabel("Oversized source handling");
     const parserAdapter = page.getByLabel("Parser adapter");
     const compactionProvider = page.getByLabel("Thread compaction");
@@ -387,6 +390,8 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect(page.getByText("Brain Status: Healthy", { exact: true })).toBeVisible();
     await reloadedNavigation.getByRole("button", { name: "Graph", exact: true }).click();
     await page.evaluate(() => window.scrollTo(0, 0));
+    const mobileToolbarHeight = await page.locator(".stageToolbar").evaluate((toolbar) => toolbar.getBoundingClientRect().height);
+    expect(mobileToolbarHeight).toBeLessThanOrEqual(70);
     await captureLaunchScreenshot(page, "operator-console-mobile-v0.6.png");
     await reloadedNavigation.getByRole("button", { name: "Canvas", exact: true }).click();
     const mobileCanvas = page.getByRole("region", { name: "Spatial project canvas" });
@@ -458,6 +463,12 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     });
     await page.getByRole("button", { name: "Refresh projects", exact: true }).click();
     await expect(page.getByRole("alert")).toContainText("Canonical-root conflict");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.getByRole("alert").getByText("Canonical-root conflict.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("alert").locator(".rootConflictDetail")).toBeHidden();
+    await expect(page.getByRole("alert").getByRole("button", { name: "Review", exact: true })).toBeVisible();
+    await page.setViewportSize({ width: 1440, height: 900 });
     healthMode = "empty";
     await page.getByRole("button", { name: "Refresh projects", exact: true }).click();
     await page.getByRole("button", { name: /Projects Choose a brain/ }).click();

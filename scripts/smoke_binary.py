@@ -136,7 +136,7 @@ def main() -> int:
                 run(executable, "console", "stop", "--brain-dir", str(brains), "--json").stdout
             )
     if (
-        "0.6.0a1" not in version
+        "0.6.1a1" not in version
         or health.get("status") != "ok"
         or not benchmark.get("corpus", {}).get("synthetic")
         or set(benchmark.get("modes", {})) != {"no_memory", "lexical", "hash_hybrid", "optional_semantic"}

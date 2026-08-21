@@ -5,16 +5,18 @@ import json
 import stat
 import sys
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .binding_guard import McpBindingLease
 from .context import build_context_pack, build_continuation_prompt
 from .continuity import append_event, ingest_codex_session, list_events, operational_readiness, reconcile_work_items, upsert_work_item
 from .continuity_daemon import continuity_status, start_continuity, stop_continuity, validate_codex_session_binding
 from .db import (
     connect, doctor, graph, graph_query, ingest_repo, ingest_thread, reflect, remember, remember_many,
-    save_checkpoint, search, stale_check,
+    integrity_diagnostics, project_binding_status, save_checkpoint, search, stale_check,
 )
 from .ingest import _lexical_root_for_candidate
 from .diagnostics import retrieval_diagnostics
@@ -138,6 +140,11 @@ TOOLS = [
             "include_fresh_details": {"type": "boolean", "default": False},
             "detail_limit": {"type": "integer", "minimum": 0, "maximum": 500, "default": 50},
         },
+    ),
+    tool_schema(
+        "brain_integrity_diagnostics",
+        "Report privacy-safe schema, canonical checkout, duplicate-root, and migration integrity evidence.",
+        {"project": {"type": "string", "description": "Project memory bank name."}},
     ),
     tool_schema(
         "brain_checkpoint",
@@ -322,6 +329,7 @@ PROJECT_BOUND_READ_TOOLS = {
     "brain_context_pack",
     "brain_repo_map",
     "brain_stale_check",
+    "brain_integrity_diagnostics",
     "brain_continuation_prompt",
     "brain_graph_query",
     "brain_retrieval_diagnostics",
@@ -495,6 +503,7 @@ class RtaBrainMcpServer:
         default_project: str | None = None,
         *,
         brain_dir: Path | None = None,
+        expected_root: Path | None = None,
         allow_memory_writes: bool = False,
         allow_repo_ingestion: bool = False,
         allow_thread_ingestion: bool = False,
@@ -507,6 +516,32 @@ class RtaBrainMcpServer:
         self.default_project = str(default_project or "default").strip() if self.db_path else default_project
         if self.db_path is not None and not self.default_project:
             raise ValueError("default project must not be empty")
+        if expected_root is not None and self.db_path is None:
+            raise ValueError("an expected root is valid only in single-database MCP mode")
+        self.expected_root = expected_root.expanduser().resolve() if expected_root else None
+        self.expected_binding_token: tuple[str, str, str] | None = None
+        if self.db_path is not None:
+            conn = connect(self.db_path)
+            try:
+                binding = project_binding_status(conn, self.default_project, self.expected_root)
+                row = conn.execute(
+                    "SELECT root_path, repository_identity, checkout_identity FROM projects WHERE name = ?",
+                    (self.default_project,),
+                ).fetchone()
+            finally:
+                conn.close()
+            if not binding["ready"] or not row or not all(
+                row[key] for key in ("root_path", "repository_identity", "checkout_identity")
+            ):
+                raise ValueError(
+                    f"active checkout mismatch ({binding['state']}); regenerate the MCP configuration after verifying the canonical root"
+                )
+            bound_root = Path(str(row["root_path"])).expanduser().resolve()
+            if self.expected_root is None:
+                self.expected_root = bound_root
+            self.expected_binding_token = (
+                str(bound_root), str(row["repository_identity"]), str(row["checkout_identity"]),
+            )
         self.allowed_thread_roots = tuple(_canonical_thread_root(root) for root in allowed_thread_roots)
         if allow_thread_ingestion and not self.allowed_thread_roots:
             raise ValueError("thread ingestion requires at least one configured thread root")
@@ -563,7 +598,23 @@ class RtaBrainMcpServer:
                 raise ValueError(
                     f"MCP server is bound to project '{self.default_project}'; client project overrides are rejected"
                 )
-            return connect(self.db_path), self.db_path, self.default_project
+            conn = connect(self.db_path)
+            binding = project_binding_status(conn, self.default_project, self.expected_root)
+            row = conn.execute(
+                "SELECT root_path, repository_identity, checkout_identity FROM projects WHERE name = ?",
+                (self.default_project,),
+            ).fetchone()
+            token = (
+                str(Path(str(row["root_path"])).expanduser().resolve()),
+                str(row["repository_identity"]),
+                str(row["checkout_identity"]),
+            ) if row and all(row[key] for key in ("root_path", "repository_identity", "checkout_identity")) else None
+            if not binding["ready"] or token != self.expected_binding_token:
+                conn.close()
+                raise ValueError(
+                    f"active checkout mismatch ({binding['state']}); regenerate the MCP configuration after verifying the canonical root"
+                )
+            return conn, self.db_path, self.default_project
         if not project:
             raise ValueError("project is required when using the multi-project brain gateway")
         if not self.brain_dir or not self.brain_dir.is_dir() or self.brain_dir.is_symlink():
@@ -597,11 +648,16 @@ class RtaBrainMcpServer:
             raise KeyError(f"unknown tool: {name}")
         if name not in self.enabled_tools:
             raise ValueError(f"MCP tool '{name}' is not enabled by server startup capabilities")
-        conn, db_path, project = self._open_project(args.get("project") or self.default_project)
-        try:
-            return self._call_tool_with_connection(conn, name, args, db_path=db_path, resolved_project=project)
-        finally:
-            conn.close()
+        guard = (
+            McpBindingLease(self.db_path, self.default_project)
+            if self.db_path is not None else nullcontext()
+        )
+        with guard:
+            conn, db_path, project = self._open_project(args.get("project") or self.default_project)
+            try:
+                return self._call_tool_with_connection(conn, name, args, db_path=db_path, resolved_project=project)
+            finally:
+                conn.close()
 
     def _call_tool_with_connection(
         self, conn, name: str, args: dict[str, Any], *, db_path: Path, resolved_project: str
@@ -715,6 +771,11 @@ class RtaBrainMcpServer:
                 include_fresh_details=bool(args.get("include_fresh_details", False)),
             )
             return text_result(json_text(payload), payload)
+        if name == "brain_integrity_diagnostics":
+            payload = integrity_diagnostics(
+                conn, project=project, active_root=self.expected_root,
+            )
+            return text_result(json_text(payload), payload)
         if name == "brain_checkpoint":
             payload = save_checkpoint(
                 conn,
@@ -767,7 +828,10 @@ class RtaBrainMcpServer:
             payload = reconcile_work_items(conn, project)
             return text_result(json_text(payload), payload)
         if name == "brain_operational_readiness":
-            payload = operational_readiness(conn, project, lifecycle=continuity_status(db_path, project))
+            payload = operational_readiness(
+                conn, project, lifecycle=continuity_status(db_path, project),
+                active_root=self.expected_root,
+            )
             return text_result(json_text(payload), payload)
         if name == "brain_continuity_status":
             payload = continuity_status(db_path, project)
@@ -842,6 +906,7 @@ class RtaBrainMcpServer:
             if project:
                 payload["operational"] = operational_readiness(
                     conn, project, lifecycle=continuity_status(db_path, project),
+                    active_root=self.expected_root,
                 )
             return text_result(json_text(payload), payload)
         raise KeyError(f"unknown tool: {name}")
@@ -1008,6 +1073,7 @@ async def serve_stdio_async(
     default_project: str | None,
     *,
     brain_dir: Path | None = None,
+    expected_root: Path | None = None,
     allow_memory_writes: bool = False,
     allow_repo_ingestion: bool = False,
     allow_thread_ingestion: bool = False,
@@ -1017,6 +1083,7 @@ async def serve_stdio_async(
         db_path=db_path,
         default_project=default_project,
         brain_dir=brain_dir,
+        expected_root=expected_root,
         allow_memory_writes=allow_memory_writes,
         allow_repo_ingestion=allow_repo_ingestion,
         allow_thread_ingestion=allow_thread_ingestion,
@@ -1031,26 +1098,31 @@ async def serve_stdio_async(
 
     scheduler = McpRequestScheduler(server, emit, max_concurrency=4)
 
-    while True:
-        line = await asyncio.to_thread(stream.readline, MAX_MCP_FRAME_BYTES + 1)
-        if not line:
-            break
-        if len(line) > MAX_MCP_FRAME_BYTES:
-            while line and not line.endswith(b"\n"):
-                line = await asyncio.to_thread(stream.readline, MAX_MCP_FRAME_BYTES + 1)
-            response = RtaBrainMcpServer.error(None, -32600, f"request frame exceeds {MAX_MCP_FRAME_BYTES} bytes")
-            await emit(response)
-            continue
-        if not line.strip():
-            continue
-        try:
-            request = parse_request_frame(line)
-        except (json.JSONDecodeError, UnicodeDecodeError, ValueError, RecursionError, MemoryError) as exc:
-            response = RtaBrainMcpServer.error(None, -32700, f"parse error: {exc}")
-            await emit(response)
-        else:
-            await scheduler.submit(request, frame_bytes=len(line))
-    await scheduler.close()
+    lease = McpBindingLease(server.db_path, server.default_project) if server.db_path is not None else nullcontext()
+    with lease:
+        if server.db_path is not None:
+            startup_conn, _startup_path, _startup_project = server._open_project(server.default_project)
+            startup_conn.close()
+        while True:
+            line = await asyncio.to_thread(stream.readline, MAX_MCP_FRAME_BYTES + 1)
+            if not line:
+                break
+            if len(line) > MAX_MCP_FRAME_BYTES:
+                while line and not line.endswith(b"\n"):
+                    line = await asyncio.to_thread(stream.readline, MAX_MCP_FRAME_BYTES + 1)
+                response = RtaBrainMcpServer.error(None, -32600, f"request frame exceeds {MAX_MCP_FRAME_BYTES} bytes")
+                await emit(response)
+                continue
+            if not line.strip():
+                continue
+            try:
+                request = parse_request_frame(line)
+            except (json.JSONDecodeError, UnicodeDecodeError, ValueError, RecursionError, MemoryError) as exc:
+                response = RtaBrainMcpServer.error(None, -32700, f"parse error: {exc}")
+                await emit(response)
+            else:
+                await scheduler.submit(request, frame_bytes=len(line))
+        await scheduler.close()
     return 0
 
 
@@ -1059,6 +1131,7 @@ def serve_stdio(
     default_project: str | None,
     *,
     brain_dir: Path | None = None,
+    expected_root: Path | None = None,
     allow_memory_writes: bool = False,
     allow_repo_ingestion: bool = False,
     allow_thread_ingestion: bool = False,
@@ -1068,6 +1141,7 @@ def serve_stdio(
         db_path,
         default_project,
         brain_dir=brain_dir,
+        expected_root=expected_root,
         allow_memory_writes=allow_memory_writes,
         allow_repo_ingestion=allow_repo_ingestion,
         allow_thread_ingestion=allow_thread_ingestion,
@@ -1081,6 +1155,7 @@ def build_parser() -> argparse.ArgumentParser:
     source.add_argument("--db", help="Path to one SQLite brain file")
     source.add_argument("--brain-dir", help="Directory of project-scoped SQLite brain files")
     parser.add_argument("--project", default="default", help="Default project memory bank for single-database mode")
+    parser.add_argument("--root", help="Expected canonical checkout root pinned by the generated MCP configuration")
     parser.add_argument(
         "--allow-memory-writes", action="store_true",
         help="Allow agent-authored memories, checkpoints, and reflection (disabled by default)",
@@ -1103,14 +1178,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.brain_dir and (args.allow_memory_writes or args.allow_repo_ingestion or args.allow_thread_ingestion or args.allow_thread_root):
-        parser.error("capability flags are only valid with --db single-project mode")
+    if args.brain_dir and (args.root or args.allow_memory_writes or args.allow_repo_ingestion or args.allow_thread_ingestion or args.allow_thread_root):
+        parser.error("root and capability flags are only valid with --db single-project mode")
     if args.allow_thread_ingestion and not args.allow_thread_root:
         parser.error("--allow-thread-ingestion requires at least one --allow-thread-root")
     return serve_stdio(
         Path(args.db) if args.db else None,
         args.project,
         brain_dir=Path(args.brain_dir) if args.brain_dir else None,
+        expected_root=Path(args.root) if args.root else None,
         allow_memory_writes=args.allow_memory_writes,
         allow_repo_ingestion=args.allow_repo_ingestion,
         allow_thread_ingestion=args.allow_thread_ingestion,

@@ -18,7 +18,8 @@ from urllib.parse import parse_qs, urlparse
 from .context import build_context_pack, build_continuation_prompt
 from .db import (
     attach_memory_provenance, connect, get_project_settings, graph, graph_query, ingest_repo, init_schema,
-    latest_checkpoint, reflect, remember, save_checkpoint, search, stale_check, update_project_settings,
+    integrity_diagnostics, latest_checkpoint, reflect, remember, save_checkpoint, search, stale_check,
+    update_project_settings,
 )
 from .diagnostics import retrieval_diagnostics
 from .parsers import ParserRegistry
@@ -110,6 +111,11 @@ def scan_brain_databases(brain_dir: Path) -> list[dict]:
                 health = self_check(conn, project=project["name"], check_files=False)
                 project_id = int(project["id"])
                 git = repository_state(project.get("root_path"))
+                integrity = integrity_diagnostics(
+                    conn,
+                    project=project["name"],
+                    active_root=project.get("root_path") if project.get("root_path") and Path(project["root_path"]).is_dir() else None,
+                )
                 entries.append(
                     {
                         "status": "ok",
@@ -121,7 +127,8 @@ def scan_brain_databases(brain_dir: Path) -> list[dict]:
                         "canonical_root": canonical_root(project["root_path"]) if project.get("root_path") else None,
                         "git": git,
                         "created_at": project.get("created_at"),
-                        "ready": bool(health["ready"]),
+                        "ready": bool(health["ready"] and integrity["operationally_ready"]),
+                        "integrity": integrity,
                         "sources": int(health["sources"]),
                         "memories": int(health["memories"]),
                         "entities": int(health["entities"]),
@@ -145,14 +152,19 @@ def scan_brain_databases(brain_dir: Path) -> list[dict]:
             if conn is not None:
                 conn.close()
     roots_by_project: dict[str, dict[str, str]] = {}
+    projects_by_root: dict[str, list[dict]] = {}
     for entry in entries:
         if entry.get("status") != "ok" or not entry.get("canonical_root"):
             continue
         root = str(entry["canonical_root"])
         roots_by_project.setdefault(str(entry["project"]).casefold(), {})[canonical_root_key(root)] = root
+        projects_by_root.setdefault(canonical_root_key(root), []).append(entry)
     for entry in entries:
         roots = roots_by_project.get(str(entry.get("project", "")).casefold(), {})
         entry["root_conflict"] = len(roots) > 1
+        root_owners = projects_by_root.get(canonical_root_key(entry["canonical_root"]), []) if entry.get("canonical_root") else []
+        entry["root_duplicate"] = len(root_owners) > 1
+        entry["ready"] = bool(entry.get("ready") and not entry["root_conflict"] and not entry["root_duplicate"])
         if len(roots) > 1:
             entry["root_conflict_roots"] = sorted(roots.values())
     return entries
@@ -754,6 +766,14 @@ def make_handler(config: ConsoleConfig):
                     conn = _open_db(resolve_brain_db(config, q["db_path"]))
                     try:
                         self._json(get_workspace(conn, q["workspace"]) if q.get("workspace") else list_workspaces(conn))
+                    finally:
+                        conn.close()
+                    return
+                if parsed.path == "/api/integrity":
+                    q = _query(self)
+                    conn = _open_db(resolve_brain_db(config, q["db_path"]))
+                    try:
+                        self._json(integrity_diagnostics(conn, project=q["project"]))
                     finally:
                         conn.close()
                     return

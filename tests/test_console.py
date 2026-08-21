@@ -69,9 +69,11 @@ class RtaBrainConsoleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             brain_dir = Path(tmp) / "brains"
             db = brain_dir / "demo.sqlite"
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
             conn = connect(db)
             try:
-                init_project(conn, "demo", str(Path(tmp) / "repo"))
+                init_project(conn, "demo", str(repo))
                 remember(conn, "Use the local dashboard before GitHub publish.", project="demo", memory_type="procedure", pramana="sabda")
             finally:
                 conn.close()
@@ -82,6 +84,22 @@ class RtaBrainConsoleTests(unittest.TestCase):
             self.assertTrue(projects[0]["ready"])
             self.assertEqual(projects[0]["memories"], 1)
             self.assertEqual(projects[0]["db_file"], "demo.sqlite")
+
+    def test_scan_brain_databases_fails_closed_when_bound_root_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            brain_dir = Path(tmp) / "brains"
+            database = brain_dir / "demo.sqlite"
+            missing = Path(tmp) / "missing-repo"
+            conn = connect(database)
+            try:
+                init_project(conn, "demo", str(missing))
+                remember(conn, "Memory remains available, but the claimed root is missing.", project="demo")
+            finally:
+                conn.close()
+
+            project_entry = scan_brain_databases(brain_dir)[0]
+            self.assertFalse(project_entry["ready"])
+            self.assertEqual(project_entry["integrity"]["binding"]["state"], "bound_root_missing")
 
     def test_read_memories_filters_by_pramana_and_query(self):
         with tempfile.TemporaryDirectory() as tmp:

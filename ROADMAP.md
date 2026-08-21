@@ -1,6 +1,14 @@
 # Roadmap
 
-## Current Release Candidate
+## Current v0.6.1-alpha Candidate
+
+- Canonical repository and per-checkout identity with clone/worktree distinction
+- Wrong-root freshness, readiness, MCP startup, and long-running MCP call rejection
+- Backup-first, worker-safe, atomic root rebinding with rollback evidence
+- Duplicate-root detection in one database and across the local dashboard registry
+- Privacy-safe integrity diagnostics in CLI, MCP, and operator settings
+
+## Published v0.6.0-alpha
 
 - Bounded transcript rebinding across Codex task working-directory changes
 - Exact-command MCP lifecycle diagnostics before agent-host registration

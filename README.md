@@ -9,6 +9,8 @@
 
 **A local project brain for AI coding agents. `v0.6.0-alpha` is now published with lower-friction indexing, safer continuity, encrypted snapshots, and multi-project operation.**
 
+The current development checkout is preparing `v0.6.1-alpha`, a canonical-integrity update that binds each brain to one verified checkout and fails closed on wrong-root freshness. The latest public prerelease remains `v0.6.0-alpha` until the candidate passes review and is explicitly approved for publication.
+
 [Latest prerelease assets](https://github.com/sulabhdubey/rta-smriti-brain/releases) · [Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second product demo](launch-assets/product-hunt/rta-smriti-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Public benchmark](docs/PUBLIC_BENCHMARK.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
 
 Rta-Smriti Brain turns a project repository, long agent threads, durable decisions, and evidence into a small local memory graph that Codex, Claude Code, Cursor, or any MCP-capable agent can reuse before doing work.
@@ -44,6 +46,8 @@ and resilient multi-project workspaces.
 - Indexes your repo into local SQLite: files, chunks, symbols, imports, and graph edges.
 - Stores durable memories: decisions, constraints, procedures, facts, and hypotheses.
 - Binds every project brain to one canonical root and refuses silent checkout switching.
+- Distinguishes clones and Git worktrees with a per-checkout identity, reports privacy-safe root/repository/checkout fingerprints, and revalidates every MCP call.
+- Requires explicit, backup-first root rebinding even when an old folder disappeared; repository scans recheck the binding inside their write transaction before committing.
 - Records structured checkpoints: objective, verified evidence, remaining gaps, next action, and prohibited repetition.
 - Attaches source path, hash, verification command, timestamp, and verification status to remembered claims.
 - Ingests long threads or handoff notes as explicitly unverified prior memory so useful context survives compaction without self-assigning trust.
@@ -147,6 +151,26 @@ $BrainDir = "$env:USERPROFILE\Documents\Rta-Smriti\brains"
 BrainDir="$HOME/.local/share/rta-smriti/brains"
 "$RtaBrain" start /path/to/my-project --project my-project --brain-dir "$BrainDir" --write-agents
 ```
+
+Verify that commands are operating on the intended checkout by passing its root:
+
+```powershell
+& $RtaBrain --db "$BrainDir\my-project.sqlite" --json self-check --project my-project --check-files --root C:\path\to\my-project
+```
+
+```bash
+"$RtaBrain" --db "$BrainDir/my-project.sqlite" --json self-check --project my-project --check-files --root /path/to/my-project
+```
+
+If a project intentionally moves to another clone or worktree of the same repository, stop its watcher and continuity worker, create a no-clobber backup, rebind, then restart the workers. Rta-Smriti refuses cross-repository rebinding and rolls back the binding and index if reindexing fails:
+
+```powershell
+& $RtaBrain --db "$BrainDir\my-project.sqlite" watcher stop --project my-project
+& $RtaBrain --db "$BrainDir\my-project.sqlite" continuity stop --project my-project
+& $RtaBrain --db "$BrainDir\my-project.sqlite" --json root-rebind C:\new\checkout --project my-project --backup C:\backups\my-project-before-rebind.sqlite
+```
+
+Use `integrity-diagnostics --root <checkout>` for a bounded report safe to share: it contains fingerprints and counts, not raw project names or filesystem paths.
 
 ## Dashboard
 
@@ -308,6 +332,9 @@ capabilities: `--allow-memory-writes`, `--allow-repo-ingestion`, and
 descriptor-bound root check. Agent-authored memories are always stored as
 unverified `anumana` with confidence capped at `0.75`. Owner-only governance
 mutation, required-check attestation, and overrides are never exposed to MCP.
+Single-project configuration is emitted only for an exact, healthy canonical
+binding and always pins `--root`. A live stdio server holds a local process
+lease, so `root-rebind` refuses to move its project until the MCP host stops.
 
 Tools exposed:
 
