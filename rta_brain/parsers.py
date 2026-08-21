@@ -59,6 +59,15 @@ TREE_SITTER_IMPORT_NODES = {
     "rust": {"use_declaration"},
     "java": {"import_declaration"},
 }
+TREE_SITTER_CALL_NODES = {
+    "python": {"call"},
+    "javascript": {"call_expression"},
+    "typescript": {"call_expression"},
+    "tsx": {"call_expression"},
+    "go": {"call_expression"},
+    "rust": {"call_expression"},
+    "java": {"method_invocation"},
+}
 
 
 @dataclass
@@ -120,6 +129,7 @@ class TreeSitterParser:
         tree = self._get_parser(language).parse(source)
         symbols: set[str] = set()
         imports: set[str] = set()
+        calls: set[str] = set()
 
         def node_text(node) -> str:
             return source[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")
@@ -140,15 +150,20 @@ class TreeSitterParser:
                     symbols.add(node_text(name))
             if node.type in TREE_SITTER_IMPORT_NODES.get(language, set()):
                 imports.update(import_names(node_text(node)))
+            if node.type in TREE_SITTER_CALL_NODES.get(language, set()):
+                callee = node.child_by_field_name("function") or node.child_by_field_name("name")
+                if callee:
+                    identifiers = re.findall(r"[A-Za-z_$][A-Za-z0-9_$]*", node_text(callee))
+                    if identifiers and identifiers[-1].casefold() not in CALL_EXCLUSIONS:
+                        calls.add(identifiers[-1])
             for child in node.children:
                 visit(child)
 
         visit(tree.root_node)
-        regex_calls = RegexParser().parse(path, text).calls
         return ParseResult(
             symbols=sorted(symbols, key=str.lower),
             imports=sorted(imports, key=str.lower),
-            calls=regex_calls,
+            calls=sorted(calls, key=str.lower),
             parser=self.name,
         )
 

@@ -14,6 +14,9 @@ __pycache__/
 .env.*
 *.pem
 *.key
+*.passphrase
+*.rtae
+*.benchmark-history.jsonl
 *.p12
 *.crt
 .venv/

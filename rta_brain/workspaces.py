@@ -144,28 +144,104 @@ def list_workspaces(conn) -> dict:
     return {"status": "ok", "workspaces": rows}
 
 
+def workspace_health(conn, name: str) -> dict:
+    details = get_workspace(conn, name)
+    owner_path = _connection_path(conn)
+    members = []
+    for item in details["projects"]:
+        member_path = str(item.get("db_path") or owner_path)
+        member = {
+            "project": item["project"], "role": item["role"],
+            "available": False, "project_present": False,
+        }
+        try:
+            if member_path == owner_path:
+                member_conn = conn
+            else:
+                member_conn, _ = _connect_existing_brain(member_path, read_only=True)
+            try:
+                row = member_conn.execute(
+                    "SELECT 1 FROM projects WHERE name = ?", (item["project"],),
+                ).fetchone()
+                member["available"] = True
+                member["project_present"] = bool(row)
+                if not row:
+                    member["error"] = "project is no longer present in the member brain"
+            finally:
+                if member_conn is not conn:
+                    member_conn.close()
+        except (OSError, sqlite3.Error, ValueError):
+            member["error"] = "member brain is unavailable"
+        members.append(member)
+    healthy = sum(1 for item in members if item["available"] and item["project_present"])
+    return {
+        "status": "ok" if healthy == len(members) else "degraded",
+        "workspace": name,
+        "members": members,
+        "summary": {"total": len(members), "healthy": healthy, "unavailable": len(members) - healthy},
+    }
+
+
+def remove_project_from_workspace(
+    conn, *, workspace: str, project: str, db_path: str | Path | None = None,
+) -> dict:
+    details = get_workspace(conn, workspace)
+    workspace_id = int(details["workspace"]["id"])
+    project_name = _name(project, "project")
+    member_path = str(Path(db_path).expanduser().resolve()) if db_path else _connection_path(conn)
+    with conn:
+        cursor = conn.execute(
+            "DELETE FROM workspace_members WHERE workspace_id = ? AND db_path = ? AND project_name = ?",
+            (workspace_id, member_path, project_name),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError(f"workspace member does not exist: {project_name}")
+        conn.execute("UPDATE workspaces SET updated_at = ? WHERE id = ?", (now_iso(), workspace_id))
+    return get_workspace(conn, workspace)
+
+
+def delete_workspace(conn, name: str) -> dict:
+    workspace_name = _name(name, "workspace")
+    with conn:
+        cursor = conn.execute("DELETE FROM workspaces WHERE name = ?", (workspace_name,))
+    if cursor.rowcount == 0:
+        raise ValueError(f"workspace does not exist: {workspace_name}")
+    return {"status": "deleted", "workspace": workspace_name}
+
+
 def search_workspace(conn, *, workspace: str, query: str, limit_per_project: int = 4) -> dict:
     details = get_workspace(conn, workspace)
     bounded_limit = max(1, min(20, int(limit_per_project)))
     results = []
+    errors = []
     for item in details["projects"]:
         member_path = str(item.get("db_path") or _connection_path(conn))
         owner_path = _connection_path(conn)
-        if member_path == owner_path:
-            member_conn = conn
-        else:
-            member_conn, resolved_member = _connect_existing_brain(member_path, read_only=True)
-            member_path = str(resolved_member)
         try:
-            result = search(
-                member_conn, query, project=item["project"], limit=bounded_limit,
-                record_recall=False, _initialize=False,
-            )
-        finally:
-            if member_conn is not conn:
-                member_conn.close()
+            if member_path == owner_path:
+                member_conn = conn
+            else:
+                member_conn, resolved_member = _connect_existing_brain(member_path, read_only=True)
+                member_path = str(resolved_member)
+            try:
+                result = search(
+                    member_conn, query, project=item["project"], limit=bounded_limit,
+                    record_recall=False, _initialize=False,
+                )
+            finally:
+                if member_conn is not conn:
+                    member_conn.close()
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            errors.append({
+                "project": item["project"], "role": item["role"],
+                "error": "member brain is unavailable" if isinstance(exc, (OSError, ValueError)) else "member brain query failed",
+            })
+            continue
         results.append({
             "project": item["project"], "role": item["role"],
             "retrieval": result["retrieval"], "memories": result["memories"], "chunks": result["chunks"],
         })
-    return {"status": "ok", "workspace": workspace, "query": str(query), "results": results}
+    return {
+        "status": "degraded" if errors else "ok",
+        "workspace": workspace, "query": str(query), "results": results, "errors": errors,
+    }

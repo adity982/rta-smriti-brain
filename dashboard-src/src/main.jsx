@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   BrainCircuit,
   Boxes,
+  Cable,
   CheckCircle2,
   ChevronRight,
   CircleDot,
@@ -24,6 +25,7 @@ import {
   GitPullRequest,
   Gauge,
   HardDrive,
+  KeyRound,
   Layers3,
   Map as MapIcon,
   Maximize2,
@@ -43,6 +45,7 @@ import {
   Table2,
   ThumbsDown,
   ThumbsUp,
+  Trash2,
   Zap,
 } from "lucide-react";
 import { chooseProject, defaultProjectIdentity, isExactProjectIdentity } from "./project-selection.js";
@@ -1032,6 +1035,44 @@ function App() {
     }
   }
 
+  async function removeWorkspaceMember(values) {
+    if (!selectedParams) return null;
+    setIsIntelligenceBusy(true);
+    try {
+      const payload = await api("/api/workspace", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, action: "remove", ...values }),
+      });
+      await loadWorkspaces();
+      setMessage(`${values.project} removed from ${values.name}.`);
+      return payload;
+    } catch (error) {
+      setMessage(`Workspace member could not be removed: ${error.message}`);
+      return null;
+    } finally {
+      setIsIntelligenceBusy(false);
+    }
+  }
+
+  async function deleteProjectWorkspace(name) {
+    if (!selectedParams) return null;
+    setIsIntelligenceBusy(true);
+    try {
+      const payload = await api("/api/workspace", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, action: "delete", name }),
+      });
+      await loadWorkspaces();
+      setMessage(`Workspace ${name} deleted.`);
+      return payload;
+    } catch (error) {
+      setMessage(`Workspace could not be deleted: ${error.message}`);
+      return null;
+    } finally {
+      setIsIntelligenceBusy(false);
+    }
+  }
+
   async function recordMemoryFeedback(memoryId, outcome) {
     if (!selectedParams) return;
     try {
@@ -1182,7 +1223,7 @@ function App() {
           </div>
           <div>
             <h1>Rta-Smriti Brain</h1>
-            <span>v0.4 Alpha Operator Console</span>
+            <span>v0.6 Alpha Operator Console</span>
           </div>
         </div>
         <div className="topStatus">
@@ -1488,6 +1529,8 @@ function App() {
               onGraphQuery={runImpactQuery}
               onCreateWorkspace={createProjectWorkspace}
               onAddMember={addWorkspaceMember}
+              onRemoveMember={removeWorkspaceMember}
+              onDeleteWorkspace={deleteProjectWorkspace}
               onNotify={setMessage}
             />
           )}
@@ -2581,7 +2624,7 @@ function CheckpointPanel({ checkpoint, readiness, project, onSave, onCopy, isSav
   );
 }
 
-function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, onGraphQuery, onCreateWorkspace, onAddMember, onNotify }) {
+function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, onGraphQuery, onCreateWorkspace, onAddMember, onRemoveMember, onDeleteWorkspace, onNotify }) {
   const [tab, setTab] = useState("retrieval");
   const [query, setQuery] = useState(task);
   const [target, setTarget] = useState("");
@@ -2592,9 +2635,14 @@ function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, on
   const [workspaceQuery, setWorkspaceQuery] = useState("");
   const [workspaceResults, setWorkspaceResults] = useState([]);
   const [workspaceStatus, setWorkspaceStatus] = useState("");
+  const [workspaceDetail, setWorkspaceDetail] = useState(null);
+  const [workspaceHealth, setWorkspaceHealth] = useState(null);
   const [bundlePath, setBundlePath] = useState("");
   const [snapshotPath, setSnapshotPath] = useState("");
   const [snapshotKeyPath, setSnapshotKeyPath] = useState("");
+  const [snapshotMode, setSnapshotMode] = useState("encrypted");
+  const [snapshotRestorePath, setSnapshotRestorePath] = useState("");
+  const [mcpStatus, setMcpStatus] = useState(null);
   const [bundleConflict, setBundleConflict] = useState("rename");
   const [bundleSections, setBundleSections] = useState({ memories: true, checkpoints: true, policies: true });
   const [bundlePreview, setBundlePreview] = useState(null);
@@ -2608,8 +2656,9 @@ function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, on
   useEffect(() => {
     const base = String(project?.db_path || "brain.sqlite").replace(/\.sqlite$/i, "");
     setBundlePath(`${base}.memory.rta.json`);
-    setSnapshotPath(`${base}.rta-snapshot`);
-    setSnapshotKeyPath(`${base}.snapshot.key`);
+    setSnapshotPath(`${base}.encrypted.rtae`);
+    setSnapshotKeyPath(`${base}.snapshot.passphrase`);
+    setSnapshotRestorePath(`${base}.restored.sqlite`);
     setBundlePreview(null);
     setPortabilityStatus("");
   }, [project?.db_path]);
@@ -2621,8 +2670,35 @@ function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, on
     { id: "retrieval", label: "Retrieval", icon: Gauge },
     { id: "impact", label: "Impact", icon: Network },
     { id: "workspaces", label: "Workspaces", icon: Boxes },
+    { id: "agent", label: "Agent Link", icon: Cable },
     { id: "portability", label: "Vault", icon: HardDrive },
   ];
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadWorkspaceDetail() {
+      if (!project || !selectedWorkspace) {
+        setWorkspaceDetail(null);
+        setWorkspaceHealth(null);
+        return;
+      }
+      try {
+        const params = { db_path: project.db_path, project: project.project, workspace: selectedWorkspace };
+        const [detail, health] = await Promise.all([
+          api(`/api/workspaces?${qs(params)}`),
+          api(`/api/workspace-health?${qs(params)}`),
+        ]);
+        if (!cancelled) {
+          setWorkspaceDetail(detail);
+          setWorkspaceHealth(health);
+        }
+      } catch (error) {
+        if (!cancelled) setWorkspaceStatus(error.message);
+      }
+    }
+    loadWorkspaceDetail();
+    return () => { cancelled = true; };
+  }, [project?.db_path, project?.project, selectedWorkspace, data.workspaces]);
 
   function moveTabFocus(event, index) {
     const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
@@ -2645,7 +2721,8 @@ function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, on
         query: workspaceQuery.trim(), limit: 4,
       })}`);
       setWorkspaceResults(payload.results || []);
-      setWorkspaceStatus(`${payload.results?.length || 0} project brains searched.`);
+      const failed = payload.errors?.length || 0;
+      setWorkspaceStatus(`${payload.results?.length || 0} project brains searched${failed ? `; ${failed} unavailable` : ""}.`);
     } catch (error) {
       setWorkspaceResults([]);
       setWorkspaceStatus(error.message);
@@ -2701,16 +2778,68 @@ function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, on
         body: JSON.stringify({
           db_path: project.db_path,
           project: project.project,
-          action,
+          action: snapshotMode === "encrypted" ? ({ create: "encrypt", verify: "verify-encrypted", restore: "restore" }[action]) : action,
           path: snapshotPath.trim(),
-          key_path: snapshotKeyPath.trim(),
+          ...(snapshotMode === "encrypted"
+            ? { passphrase_path: snapshotKeyPath.trim(), output_db: snapshotRestorePath.trim() }
+            : { key_path: snapshotKeyPath.trim() }),
         }),
       });
-      setPortabilityStatus(action === "create" ? "Authenticated private snapshot created." : payload.valid ? "Snapshot signature and database digest verified." : `Snapshot invalid: ${payload.reason}`);
+      setPortabilityStatus(
+        action === "create"
+          ? (snapshotMode === "encrypted" ? "Encrypted private snapshot created." : "Authenticated private snapshot created.")
+          : action === "restore"
+            ? (payload.valid ? `Verified brain restored to ${payload.path}.` : `Restore blocked: ${payload.reason}`)
+            : payload.valid ? "Snapshot authentication and database integrity verified." : `Snapshot invalid: ${payload.reason}`,
+      );
     } catch (error) {
       setPortabilityStatus(error.message);
     } finally {
       setPortabilityBusy(false);
+    }
+  }
+
+  async function generateSnapshotPassphrase() {
+    if (!snapshotKeyPath.trim()) return;
+    try {
+      setPortabilityBusy(true);
+      const payload = await api("/api/snapshot", {
+        method: "POST",
+        body: JSON.stringify({ action: "passphrase-keygen", path: snapshotKeyPath.trim() }),
+      });
+      setPortabilityStatus(`Private 256-bit snapshot key created at ${payload.path}. Keep it separate from the snapshot.`);
+    } catch (error) {
+      setPortabilityStatus(error.message);
+    } finally {
+      setPortabilityBusy(false);
+    }
+  }
+
+  async function probeMcp() {
+    if (!project) return;
+    try {
+      setPortabilityBusy(true);
+      setMcpStatus(null);
+      const payload = await api("/api/mcp-doctor", {
+        method: "POST",
+        body: JSON.stringify({ db_path: project.db_path, project: project.project, timeout: 10 }),
+      });
+      setMcpStatus(payload);
+      onNotify?.(payload.ready ? `MCP probe passed with ${payload.tool_count} tools.` : `MCP probe blocked: ${payload.reason}`);
+    } catch (error) {
+      setMcpStatus({ status: "blocked", ready: false, reason: error.message });
+    } finally {
+      setPortabilityBusy(false);
+    }
+  }
+
+  async function copyMcpConfig() {
+    if (!mcpStatus?.config) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(mcpStatus.config, null, 2));
+      onNotify?.("MCP host configuration copied.");
+    } catch (error) {
+      onNotify?.(`Could not copy MCP configuration: ${error.message}`);
     }
   }
 
@@ -2801,12 +2930,27 @@ function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, on
             {data.workspaces?.map((workspace) => <button key={workspace.id} className={selectedWorkspace === workspace.name ? "active" : ""} onClick={() => setSelectedWorkspace(workspace.name)}><span>{workspace.name}</span><em>{workspace.project_count}</em></button>)}
             {!data.workspaces?.length && <p className="emptyState">No workspaces in this brain yet.</p>}
           </div>
+          {selectedWorkspace && workspaceHealth && (
+            <div className={`workspaceHealth ${workspaceHealth.status}`}>
+              <span>{workspaceHealth.status === "ok" ? "All members available" : "Workspace degraded"}</span>
+              <em>{workspaceHealth.summary.healthy}/{workspaceHealth.summary.total} healthy</em>
+            </div>
+          )}
+          {workspaceDetail?.projects?.length > 0 && (
+            <div className="workspaceMembers" aria-label="Workspace members">
+              {workspaceDetail.projects.map((member) => {
+                const health = workspaceHealth?.members?.find((item) => item.project === member.project);
+                return <div key={`${member.db_path}:${member.project}`}><span className={health?.available && health?.project_present ? "healthy" : "unavailable"} /> <strong>{member.project}</strong><em>{member.role}</em><button title={`Remove ${member.project}`} aria-label={`Remove ${member.project}`} onClick={async () => { const result = await onRemoveMember({ name: selectedWorkspace, project: member.project, member_db_path: member.db_path }); if (result) setWorkspaceDetail(result); }} disabled={busy}><Trash2 size={14} /></button></div>;
+              })}
+            </div>
+          )}
           <div className="workspaceAction">
             <input value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} placeholder="Workspace name" aria-label="New workspace name" />
             <button onClick={async () => { const result = await onCreateWorkspace({ name: workspaceName.trim() }); if (result) { setSelectedWorkspace(workspaceName.trim()); setWorkspaceName(""); } }} disabled={busy || !workspaceName.trim()}><Plus size={14} /> Create</button>
           </div>
           <label><span>Member brain</span><select value={memberKey} onChange={(event) => setMemberKey(event.target.value)}><option value="">Choose a project</option>{projects.map((item) => <option key={`${item.db_path}:${item.project}`} value={`${item.db_path}:${item.project}`}>{item.project}</option>)}</select></label>
           <button className="primarySmall" onClick={() => onAddMember({ name: selectedWorkspace, project: selectedMember.project, member_db_path: selectedMember.db_path, role: "member" })} disabled={busy || !selectedWorkspace || !selectedMember}><Plus size={15} /> Add to workspace</button>
+          <button className="dangerSmall" onClick={async () => { if (window.confirm(`Delete workspace ${selectedWorkspace}? Project brains will not be deleted.`)) { const result = await onDeleteWorkspace(selectedWorkspace); if (result) { setSelectedWorkspace(""); setWorkspaceDetail(null); setWorkspaceHealth(null); } } }} disabled={busy || !selectedWorkspace}><Trash2 size={14} /> Delete workspace</button>
           <div className="workspaceAction">
             <input value={workspaceQuery} onChange={(event) => setWorkspaceQuery(event.target.value)} placeholder="Search every member brain" aria-label="Search workspace brains" />
             <button onClick={searchSelectedWorkspace} disabled={!selectedWorkspace || !workspaceQuery.trim()}><Search size={14} /> Search</button>
@@ -2822,6 +2966,17 @@ function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, on
               </article>
             ))}
           </div>
+        </section>
+      )}
+
+      {tab === "agent" && (
+        <section id="intelligence-panel-agent" role="tabpanel" aria-labelledby="intelligence-tab-agent" className="intelligenceSection">
+          <p className="drawerIntro">Probe the exact local MCP server before registering it with Codex or another MCP-capable agent.</p>
+          <button className="primarySmall" onClick={probeMcp} disabled={portabilityBusy || !project}><Cable size={15} /> Test MCP connection</button>
+          {mcpStatus && <div className={`mcpReceipt ${mcpStatus.ready ? "ready" : "blocked"}`}>
+            <div><strong>{mcpStatus.ready ? "Connection ready" : "Connection blocked"}</strong><em>{mcpStatus.ready ? `${mcpStatus.tool_count} tools / ${mcpStatus.latency_ms} ms` : mcpStatus.reason}</em></div>
+            {mcpStatus.ready && <><p>The generated server passed initialize, tools/list, and ping. Register this config in the agent host, then start a fresh task so the tools appear.</p><button onClick={copyMcpConfig}><Clipboard size={14} /> Copy host config</button></>}
+          </div>}
         </section>
       )}
 
@@ -2842,14 +2997,18 @@ function IntelligencePanel({ project, projects, task, data, busy, onDiagnose, on
           </div>
           {bundlePreview && <div className="portabilityReceipt"><strong>SHA-256 {bundlePreview.sha256?.slice(0, 12)}...</strong><span>{bundlePreview.redacted ? "Redaction verified" : "Unredacted"} / {bundlePreview.conflicts?.length || 0} conflicts</span>{bundlePreview.warnings?.map((warning) => <small key={warning}>{warning}</small>)}</div>}
 
-          <h3>Authenticated snapshot</h3>
-          <label><span>Private snapshot</span><input value={snapshotPath} onChange={(event) => setSnapshotPath(event.target.value)} /></label>
-          <label><span>Separate HMAC key</span><input value={snapshotKeyPath} onChange={(event) => setSnapshotKeyPath(event.target.value)} /></label>
-          <div className="portabilityActions two">
+          <h3>Private brain snapshot</h3>
+          <label><span>Protection</span><select value={snapshotMode} onChange={(event) => setSnapshotMode(event.target.value)}><option value="encrypted">Encrypted (recommended)</option><option value="authenticated">HMAC authentication</option></select></label>
+          <label><span>Snapshot path</span><input value={snapshotPath} onChange={(event) => setSnapshotPath(event.target.value)} /></label>
+          <label><span>{snapshotMode === "encrypted" ? "Passphrase file" : "Separate HMAC key"}</span><input value={snapshotKeyPath} onChange={(event) => setSnapshotKeyPath(event.target.value)} /></label>
+          {snapshotMode === "encrypted" && <button className="inlineAction" onClick={generateSnapshotPassphrase} disabled={portabilityBusy || !snapshotKeyPath.trim()}><KeyRound size={14} /> Generate private key file</button>}
+          {snapshotMode === "encrypted" && <label><span>Restore as new brain</span><input value={snapshotRestorePath} onChange={(event) => setSnapshotRestorePath(event.target.value)} /></label>}
+          <div className="portabilityActions">
             <button onClick={() => runSnapshot("create")} disabled={portabilityBusy}><HardDrive size={14} /> Create</button>
             <button onClick={() => runSnapshot("verify")} disabled={portabilityBusy}><ShieldCheck size={14} /> Verify</button>
+            {snapshotMode === "encrypted" && <button onClick={() => runSnapshot("restore")} disabled={portabilityBusy || !snapshotRestorePath.trim()}><Database size={14} /> Restore</button>}
           </div>
-          <p className="trustNote">Snapshots contain the complete local brain. HMAC verifies integrity; it does not encrypt the file.</p>
+          <p className="trustNote">{snapshotMode === "encrypted" ? "AES-256-GCM protects the complete local brain. Keep the passphrase file separate from the snapshot." : "HMAC detects changes but does not encrypt the snapshot. Use only for compatible private workflows."}</p>
 
           <h3>Local controls</h3>
           <div className="portabilityActions">
@@ -3001,7 +3160,7 @@ function GovernancePanel({ project, governance, decision, onEvaluate, onCreate, 
       <form className="gateForm" onSubmit={submitEvaluation}>
         <label>
           <span>Intended action</span>
-          <textarea value={action} onChange={(event) => setAction(event.target.value)} placeholder="Publish v0.4 release" rows={3} required />
+          <textarea value={action} onChange={(event) => setAction(event.target.value)} placeholder="Publish a reviewed release" rows={3} required />
         </label>
         <label>
           <span>Repository path <em>optional</em></span>

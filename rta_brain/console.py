@@ -22,14 +22,21 @@ from .db import (
 )
 from .diagnostics import retrieval_diagnostics
 from .parsers import ParserRegistry
-from .project import mcp_config_payload, runtime_shell, shell_cli_command, projects_list, self_check
+from .project import mcp_config_payload, mcp_doctor, runtime_shell, shell_cli_command, projects_list, self_check
 from .repository import canonical_root, canonical_root_key, repository_state, trusted_git_candidates
 from .governance import build_operational_context, create_policy, list_policies, list_receipts, preflight, retire_policy
 from .hooks import install_git_hooks, uninstall_git_hooks
 from .lifecycle import apply_memory_feedback, run_conservative_decay
-from .portability import export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_keygen, snapshot_verify
+from .portability import (
+    export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_create_encrypted,
+    snapshot_keygen, snapshot_passphrase_keygen, snapshot_restore_encrypted, snapshot_verify,
+    snapshot_verify_encrypted,
+)
 from .watch_daemon import start_watcher, stop_watcher, watcher_status
-from .workspaces import add_project_to_workspace, create_workspace, get_workspace, list_workspaces, search_workspace
+from .workspaces import (
+    add_project_to_workspace, create_workspace, delete_workspace, get_workspace, list_workspaces,
+    remove_project_from_workspace, search_workspace, workspace_health,
+)
 from .continuity_daemon import continuity_status, start_continuity, stop_continuity
 from .continuity import operational_readiness
 
@@ -743,6 +750,14 @@ def make_handler(config: ConsoleConfig):
                     finally:
                         conn.close()
                     return
+                if parsed.path == "/api/workspace-health":
+                    q = _query(self)
+                    conn = _open_db(resolve_brain_db(config, q["db_path"]))
+                    try:
+                        self._json(workspace_health(conn, q["workspace"]))
+                    finally:
+                        conn.close()
+                    return
                 if parsed.path == "/api/workspace-search":
                     q = _query(self)
                     conn = _open_db(resolve_brain_db(config, q["db_path"]))
@@ -1009,8 +1024,15 @@ def make_handler(config: ConsoleConfig):
                                 conn, workspace=payload["name"], project=payload["project"], role=payload.get("role", "member"),
                                 db_path=resolve_brain_db(config, payload["member_db_path"]) if payload.get("member_db_path") else None,
                             )
+                        elif action == "remove":
+                            result = remove_project_from_workspace(
+                                conn, workspace=payload["name"], project=payload["project"],
+                                db_path=resolve_brain_db(config, payload["member_db_path"]) if payload.get("member_db_path") else None,
+                            )
+                        elif action == "delete":
+                            result = delete_workspace(conn, payload["name"])
                         else:
-                            raise ValueError("workspace action must be create or add")
+                            raise ValueError("workspace action must be create, add, remove, or delete")
                         self._json(result)
                     finally:
                         conn.close()
@@ -1065,6 +1087,8 @@ def make_handler(config: ConsoleConfig):
                     action = str(payload.get("action", "create")).strip().lower()
                     if action == "keygen":
                         self._json(snapshot_keygen(Path(payload["path"]), Path(payload["public_key_path"])))
+                    elif action == "passphrase-keygen":
+                        self._json(snapshot_passphrase_keygen(Path(payload["path"])))
                     elif action == "create":
                         db_path = resolve_brain_db(config, payload["db_path"])
                         self._json(snapshot_create(
@@ -1079,8 +1103,35 @@ def make_handler(config: ConsoleConfig):
                             key_path=Path(payload["key_path"]) if payload.get("key_path") else None,
                             public_key_path=Path(payload["public_key_path"]) if payload.get("public_key_path") else None,
                         ))
+                    elif action == "encrypt":
+                        db_path = resolve_brain_db(config, payload["db_path"])
+                        self._json(snapshot_create_encrypted(
+                            db_path, Path(payload["path"]), passphrase_path=Path(payload["passphrase_path"]),
+                            private_key_path=Path(payload["private_key_path"]) if payload.get("private_key_path") else None,
+                        ))
+                    elif action == "verify-encrypted":
+                        self._json(snapshot_verify_encrypted(
+                            Path(payload["path"]), passphrase_path=Path(payload["passphrase_path"]),
+                            public_key_path=Path(payload["public_key_path"]) if payload.get("public_key_path") else None,
+                        ))
+                    elif action == "restore":
+                        self._json(snapshot_restore_encrypted(
+                            Path(payload["path"]), Path(payload["output_db"]),
+                            passphrase_path=Path(payload["passphrase_path"]),
+                            public_key_path=Path(payload["public_key_path"]) if payload.get("public_key_path") else None,
+                        ))
                     else:
-                        raise ValueError("snapshot action must be create, verify, or keygen")
+                        raise ValueError(
+                            "snapshot action must be create, verify, keygen, passphrase-keygen, "
+                            "encrypt, verify-encrypted, or restore"
+                        )
+                    return
+                if self.path == "/api/mcp-doctor":
+                    db_path = resolve_brain_db(config, payload["db_path"])
+                    self._json(mcp_doctor(
+                        db_path, payload["project"], config.tool_root,
+                        timeout=float(payload.get("timeout", 10)),
+                    ))
                     return
                 if self.path == "/api/git-hooks":
                     action = str(payload.get("action", "install")).strip().lower()

@@ -270,16 +270,28 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await page.getByLabel("Search workspace brains").fill("retry budget");
     await page.getByRole("button", { name: "Search", exact: true }).last().click();
     await expect(page.getByText(/project brains searched/)).toBeVisible();
+    await expect(page.getByText("All members available", { exact: true })).toBeVisible();
+
+    await page.getByRole("tab", { name: "Agent Link", exact: true }).click();
+    await page.getByRole("button", { name: "Test MCP connection", exact: true }).click();
+    await expect(page.getByText("Connection ready", { exact: true })).toBeVisible();
+    await expect(page.getByText(/\d+ tools \/ \d+(?:\.\d+)? ms/)).toBeVisible();
+    await page.getByRole("button", { name: "Copy host config", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("rta-brain-mcp.py");
 
     await page.getByRole("tab", { name: "Vault", exact: true }).click();
     await page.getByRole("button", { name: "Preview export", exact: true }).click();
     await expect(page.getByText(/Preview ready:/)).toBeVisible();
     await page.getByRole("button", { name: "Export", exact: true }).click();
     await expect(page.getByText("Redacted selective bundle written.", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Generate private key file", exact: true }).click();
+    await expect(page.getByText(/Private 256-bit snapshot key created/)).toBeVisible();
     await page.getByRole("button", { name: "Create", exact: true }).last().click();
-    await expect(page.getByText("Authenticated private snapshot created.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Encrypted private snapshot created.", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Verify", exact: true }).click();
-    await expect(page.getByText("Snapshot signature and database digest verified.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Snapshot authentication and database integrity verified.", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Restore", exact: true }).click();
+    await expect(page.getByText(/Verified brain restored to/)).toBeVisible();
     await page.getByRole("button", { name: "Hook on", exact: true }).click();
     await expect(page.getByText(/checkpoint hook installed/)).toBeVisible();
     await page.getByRole("button", { name: "Hook off", exact: true }).click();
@@ -293,6 +305,11 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await reloadedNavigation.getByRole("button", { name: "Intelligence", exact: true }).click();
     await page.getByRole("tab", { name: "Workspaces", exact: true }).click();
     await expect(page.getByRole("button", { name: /release-workspace/ })).toBeVisible();
+    await page.getByRole("button", { name: "Remove operator-demo", exact: true }).click();
+    await expect(page.getByText("0/0 healthy", { exact: true })).toBeVisible();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Delete workspace", exact: true }).click();
+    await expect(page.getByRole("button", { name: /release-workspace/ })).toHaveCount(0);
 
     await page.evaluate(() => {
       Object.defineProperty(navigator, "clipboard", {

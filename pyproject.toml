@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rta-smriti-brain"
-version = "0.5.0a1"
+version = "0.6.0a1"
 description = "Local-first project memory, repo graph, context-pack, and MCP brain for AI coding agents."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
   { name = "Sulabh Dubey" }
 ]
@@ -21,7 +22,6 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
-  "License :: OSI Approved :: MIT License",
   "Topic :: Software Development",
   "Topic :: Text Processing :: Indexing"
 ]
@@ -33,13 +33,13 @@ embeddings = ["sentence-transformers>=5.6.1,<6"]
 tokenization = ["tiktoken>=0.9,<1"]
 watcher = ["watchdog>=6,<7"]
 binary = ["pyinstaller>=6.14,<7"]
-signing = ["cryptography>=43,<46"]
+signing = ["cryptography>=50,<51"]
 all-local = [
   "tree-sitter-language-pack>=1.13.3,<2",
   "sentence-transformers>=5.6.1,<6",
   "tiktoken>=0.9,<1",
   "watchdog>=6,<7",
-  "cryptography>=43,<46"
+  "cryptography>=50,<51"
 ]
 
 [project.urls]
@@ -53,7 +53,12 @@ rta-brain = "rta_brain.cli:main"
 rta-brain-mcp = "rta_brain.mcp_server:main"
 
 [tool.setuptools]
-packages = ["rta_brain"]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rta_brain"]
+namespaces = false
 
 [tool.setuptools.package-data]
 rta_brain = ["data/*.json", "static/*", "static/assets/*"]

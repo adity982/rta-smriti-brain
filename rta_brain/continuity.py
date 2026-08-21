@@ -235,6 +235,7 @@ def ingest_codex_session(
     backlog_tail_bytes: int | None = None,
     expected_project_root: Path | None = None,
     expected_sessions_root: Path | None = None,
+    binding_start_offset: int = 0,
 ) -> dict:
     init_continuity_schema(conn)
     candidate = path.expanduser()
@@ -270,6 +271,7 @@ def ingest_codex_session(
                     path.relative_to(expected_sessions_root.expanduser().resolve())
                 except ValueError as exc:
                     raise ValueError("Codex session is outside the configured session directory") from exc
+            bound_to_project = expected_project_root is None
             if expected_project_root is not None:
                 declared_session = None
                 declared_cwd = None
@@ -290,12 +292,28 @@ def ingest_codex_session(
                         break
                 if not declared_session or not declared_cwd:
                     raise ValueError("Codex session has no valid session metadata")
+                expected_root = expected_project_root.expanduser().resolve()
                 try:
-                    Path(str(declared_cwd)).expanduser().resolve().relative_to(expected_project_root.expanduser().resolve())
-                except ValueError as exc:
-                    raise ValueError("Codex session is not bound to the canonical project root") from exc
+                    Path(str(declared_cwd)).expanduser().resolve().relative_to(expected_root)
+                except ValueError:
+                    if int(binding_start_offset) <= 0:
+                        raise ValueError("Codex session is not bound to the canonical project root")
+                    handle.seek(int(binding_start_offset))
+                    raw_binding = handle.readline(MAX_CODEX_LINE_BYTES + 1)
+                    try:
+                        binding_row = json.loads(raw_binding)
+                        binding_cwd = binding_row.get("payload", {}).get("cwd")
+                        if binding_row.get("type") != "turn_context" or not binding_cwd:
+                            raise ValueError
+                        Path(str(binding_cwd)).expanduser().resolve().relative_to(expected_root)
+                    except (AttributeError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+                        raise ValueError("Codex session rebind marker is not bound to the canonical project root") from exc
+                    bound_to_project = True
+                else:
+                    bound_to_project = True
                 if session_id and declared_session != stream_id:
                     raise ValueError("Codex session identity changed after discovery")
+                start = max(start, max(0, int(binding_start_offset)))
             if backlog_tail_bytes is not None and file_size - start > max(1, int(backlog_tail_bytes)):
                 previous_cursor = start
                 handle.seek(file_size - max(1, int(backlog_tail_bytes)))
@@ -347,6 +365,21 @@ def ingest_codex_session(
                 try:
                     payload = json.loads(line)
                 except json.JSONDecodeError:
+                    ignored += 1
+                    continue
+                if expected_project_root is not None and payload.get("type") == "turn_context":
+                    body = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+                    cwd = body.get("cwd")
+                    if cwd:
+                        try:
+                            Path(str(cwd)).expanduser().resolve().relative_to(expected_root)
+                        except ValueError:
+                            bound_to_project = False
+                        else:
+                            bound_to_project = True
+                    ignored += 1
+                    continue
+                if not bound_to_project:
                     ignored += 1
                     continue
                 mapped = _codex_event(payload)

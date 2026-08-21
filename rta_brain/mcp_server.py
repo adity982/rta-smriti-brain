@@ -19,7 +19,7 @@ from .db import (
 from .ingest import _lexical_root_for_candidate
 from .diagnostics import retrieval_diagnostics
 from .governance import build_operational_context, create_policy, list_policies, list_receipts, preflight, retire_policy
-from .workspaces import get_workspace, list_workspaces, search_workspace
+from .workspaces import get_workspace, list_workspaces, search_workspace, workspace_health
 
 
 def tool_schema(name: str, description: str, properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
@@ -253,6 +253,12 @@ TOOLS = [
         "brain_workspace_list",
         "List multi-repository workspaces or inspect one workspace.",
         {"workspace": {"type": "string"}},
+    ),
+    tool_schema(
+        "brain_workspace_health",
+        "Report member availability for one multi-repository workspace without exposing local database paths.",
+        {"workspace": {"type": "string"}},
+        ["workspace"],
     ),
     tool_schema(
         "brain_policy_add",
@@ -694,6 +700,9 @@ class RtaBrainMcpServer:
             return text_result(json_text(payload), payload)
         if name == "brain_workspace_list":
             payload = get_workspace(conn, str(args["workspace"])) if args.get("workspace") else list_workspaces(conn)
+            return text_result(json_text(payload), payload)
+        if name == "brain_workspace_health":
+            payload = workspace_health(conn, str(args["workspace"]))
             return text_result(json_text(payload), payload)
         if name == "brain_stale_check":
             payload = stale_check(

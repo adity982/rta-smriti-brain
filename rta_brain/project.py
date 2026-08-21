@@ -2,8 +2,10 @@ import json
 import os
 import shlex
 import sqlite3
+import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from .db import connect, doctor, ensure_project, ingest_repo, init_project, stale_check, update_project_settings
@@ -350,6 +352,57 @@ def mcp_config_payload(db_path: str, project: str, name: str, tool_root: Path) -
                 }
             }
         },
+    }
+
+
+def mcp_doctor(db_path: Path, project: str, tool_root: Path, *, timeout: float = 10.0) -> dict:
+    """Probe the exact generated stdio command before an operator registers it."""
+    config = mcp_config_payload(str(db_path), project, "rta-smriti", tool_root)
+    server = config["config"]["mcpServers"]["rta-smriti"]
+    command = [str(server["command"]), *(str(item) for item in server["args"])]
+    requests = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "rta-smriti-doctor", "version": "1"}}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        {"jsonrpc": "2.0", "id": 3, "method": "ping", "params": {}},
+    ]
+    started = time.perf_counter()
+    try:
+        completed = subprocess.run(
+            command,
+            input="".join(json.dumps(item, separators=(",", ":")) + "\n" for item in requests),
+            text=True,
+            capture_output=True,
+            timeout=max(1.0, min(60.0, float(timeout))),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "blocked", "ready": False, "reason": "MCP probe timed out",
+            "tool_count": 0, "fresh_task_required": True, "config": config["config"],
+        }
+    latency_ms = round((time.perf_counter() - started) * 1000, 3)
+    responses = {}
+    for line in completed.stdout.splitlines():
+        try:
+            response = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(response, dict) and response.get("id") is not None:
+            responses[response["id"]] = response
+    tools = ((responses.get(2) or {}).get("result") or {}).get("tools") or []
+    initialized = bool(((responses.get(1) or {}).get("result") or {}).get("serverInfo"))
+    pinged = "result" in (responses.get(3) or {})
+    ready = completed.returncode == 0 and initialized and pinged and bool(tools)
+    return {
+        "status": "ready" if ready else "blocked",
+        "ready": ready,
+        "latency_ms": latency_ms,
+        "tool_count": len(tools),
+        "server": ((responses.get(1) or {}).get("result") or {}).get("serverInfo"),
+        "fresh_task_required": True,
+        "registration_state": "probe-passed-registration-required" if ready else "probe-failed",
+        "config": config["config"],
+        "reason": None if ready else "Generated MCP server did not complete initialize, tools/list, and ping",
     }
 
 

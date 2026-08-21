@@ -33,6 +33,8 @@ from .watch_daemon import (
 
 
 MAX_SESSION_META_BYTES = 256_000
+MAX_SESSION_REBIND_SCAN_BYTES = 16 * 1024 * 1024
+MAX_SESSION_LINE_BYTES = 1_000_000
 DEFAULT_BACKLOG_TAIL_BYTES = 2_000_000
 
 
@@ -236,6 +238,63 @@ def _session_identity(path: Path) -> tuple[str, Path] | None:
     return None
 
 
+def _session_binding(path: Path, project_root: Path) -> dict | None:
+    identity = _session_identity(path)
+    if identity is None:
+        return None
+    session_id, declared_cwd = identity
+    root = project_root.expanduser().resolve()
+    try:
+        declared_cwd.relative_to(root)
+    except ValueError:
+        matching = False
+    else:
+        matching = True
+    binding_mode = "session_meta"
+    binding_offset = 0
+    try:
+        size = path.stat().st_size
+        scan_start = max(0, size - MAX_SESSION_REBIND_SCAN_BYTES)
+        with path.open("rb") as stream:
+            stream.seek(scan_start)
+            if scan_start:
+                stream.readline(MAX_SESSION_LINE_BYTES + 1)
+            while True:
+                offset = stream.tell()
+                raw = stream.readline(MAX_SESSION_LINE_BYTES + 1)
+                if not raw:
+                    break
+                if len(raw) > MAX_SESSION_LINE_BYTES:
+                    continue
+                try:
+                    row = json.loads(raw)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if row.get("type") != "turn_context" or not isinstance(row.get("payload"), dict):
+                    continue
+                cwd = row["payload"].get("cwd")
+                if not cwd:
+                    continue
+                try:
+                    Path(str(cwd)).expanduser().resolve().relative_to(root)
+                except ValueError:
+                    matching = False
+                else:
+                    matching = True
+                    binding_mode = "turn_context"
+                    binding_offset = offset
+    except OSError:
+        return None
+    if not matching:
+        return None
+    return {
+        "session_id": session_id,
+        "cwd": root,
+        "binding_mode": binding_mode,
+        "binding_offset": binding_offset,
+    }
+
+
 def validate_codex_session_binding(path: Path, sessions_root: Path, project_root: Path) -> str:
     candidate = path.expanduser()
     sessions = sessions_root.expanduser().resolve()
@@ -250,12 +309,10 @@ def validate_codex_session_binding(path: Path, sessions_root: Path, project_root
     identity = _session_identity(resolved)
     if identity is None:
         raise ValueError("Codex session has no valid session metadata")
-    session_id, cwd = identity
-    try:
-        cwd.relative_to(root)
-    except ValueError as exc:
-        raise ValueError("Codex session is not bound to the canonical project root") from exc
-    return session_id
+    binding = _session_binding(resolved, root)
+    if binding is None:
+        raise ValueError("Codex session is not bound to the canonical project root")
+    return str(binding["session_id"])
 
 
 def _recent_session_candidates(
@@ -317,10 +374,8 @@ def continuity_binding_diagnostics(
             invalid += 1
             continue
         recent += 1
-        _, cwd = identity
-        try:
-            cwd.relative_to(root)
-        except ValueError:
+        binding = _session_binding(path, root)
+        if binding is None:
             foreign += 1
         else:
             matching += 1
@@ -349,22 +404,23 @@ def discover_codex_sessions(
     lookback_days: float = 30,
     now: float | None = None,
 ) -> list[dict[str, str]]:
-    """Return only sessions whose declared cwd is inside the canonical project root."""
+    """Return sessions whose latest bounded Codex context is inside the canonical root."""
     sessions_root = sessions_root.expanduser().resolve()
     project_root = project_root.expanduser().resolve()
     if not sessions_root.is_dir() or not project_root.is_dir():
         return []
     found = []
     for path in _recent_session_candidates(sessions_root, lookback_days=lookback_days, now=now):
-        identity = _session_identity(path)
-        if identity is None:
+        binding = _session_binding(path, project_root)
+        if binding is None:
             continue
-        session_id, cwd = identity
-        try:
-            cwd.relative_to(project_root)
-        except ValueError:
-            continue
-        found.append({"session_id": session_id, "path": str(path.resolve()), "cwd": str(cwd)})
+        found.append({
+            "session_id": str(binding["session_id"]),
+            "path": str(path.resolve()),
+            "cwd": str(project_root),
+            "binding_mode": str(binding["binding_mode"]),
+            "binding_offset": int(binding["binding_offset"]),
+        })
     return sorted(found, key=lambda item: (item["session_id"], item["path"]))
 
 
@@ -518,6 +574,7 @@ def capture_cycle(
                 backlog_tail_bytes=backlog_tail_bytes,
                 expected_project_root=project_root,
                 expected_sessions_root=sessions_root,
+                binding_start_offset=int(item.get("binding_offset") or 0),
             )
             inserted += int(result["inserted"])
             is_latest = item["path"] == latest_path

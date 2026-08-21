@@ -8,6 +8,7 @@ import math
 import os
 import secrets
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from statistics import median
 from time import perf_counter
@@ -18,11 +19,19 @@ from .db import (
     stale_check, update_project_settings,
 )
 from .governance import create_policy, preflight
+from .privacy import redact_sensitive_text
 
 
 MAX_PUBLIC_BENCHMARK_BYTES = 2_000_000
 MAX_PUBLIC_DOCUMENTS = 5_000
 MAX_PUBLIC_QUERIES = 1_000
+MAX_BENCHMARK_HISTORY_BYTES = 1_000_000
+MAX_BENCHMARK_HISTORY_RUNS = 100
+
+
+def _safe_public_label(value: object, *, fallback: str) -> str:
+    redacted, _ = redact_sensitive_text(str(value or fallback))
+    return " ".join(redacted.split()).replace("`", "'")[:200] or fallback
 
 
 def default_public_benchmark_path() -> Path:
@@ -238,9 +247,10 @@ def run_public_benchmark(
             modes["optional_semantic"] = {
                 "status": "ok", "provider": "sentence-transformers", "model": semantic_model, **metrics,
             }
+    dataset_label = _safe_public_label(payload.get("name"), fallback="public corpus")
     return {
         "schema_version": 1,
-        "dataset": str(payload.get("name") or "public corpus"),
+        "dataset": dataset_label,
         "dataset_digest": digest,
         "corpus": {"documents": len(payload["documents"]), "queries": len(payload["queries"]), "synthetic": True},
         "modes": modes,
@@ -254,7 +264,7 @@ def _metric(value) -> str:
     return "NA"
 
 
-def benchmark_report_markdown(result: dict) -> str:
+def benchmark_report_markdown(result: dict, *, history: dict | None = None) -> str:
     """Render a bounded, shareable report for the synthetic public benchmark."""
     corpus = result.get("corpus") or {}
     modes = result.get("modes") or {}
@@ -306,10 +316,128 @@ def benchmark_report_markdown(result: dict) -> str:
         "No private repository content, local home paths, API keys, or credentials are required by this corpus.",
         "",
     ])
+    comparison = (history or {}).get("comparison") or {}
+    if comparison:
+        lines.extend([
+            "## Historical Comparison",
+            "",
+            "Latest run minus the preceding run from the same local history file.",
+            "",
+            "| Mode | NDCG@K delta | Recall@K delta | MRR@K delta | Precision@K delta |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ])
+        for name in sorted(comparison):
+            metrics = comparison[name]
+            lines.append("| " + " | ".join((
+                name,
+                _metric(metrics.get("ndcg_at_k")),
+                _metric(metrics.get("recall_at_k")),
+                _metric(metrics.get("mrr_at_k")),
+                _metric(metrics.get("precision_at_k")),
+            )) + " |")
+        lines.append("")
     return "\n".join(lines)
 
 
-def write_benchmark_report(result: dict, output: Path) -> dict:
+def _history_entry(result: dict, label: str) -> dict:
+    safe_modes = {}
+    for name, values in (result.get("modes") or {}).items():
+        if not isinstance(values, dict):
+            continue
+        safe_modes[str(name)[:100]] = {
+            key: values.get(key) for key in (
+                "status", "provider", "model", "ndcg_at_k", "recall_at_k", "mrr_at_k", "precision_at_k", "latency_ms",
+            ) if key in values
+        }
+    return {
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "label": _safe_public_label(label, fallback="run"),
+        "dataset": _safe_public_label(result.get("dataset"), fallback="public corpus"),
+        "dataset_digest": str(result.get("dataset_digest") or "")[:128],
+        "modes": safe_modes,
+        "quality_gates": result.get("quality_gates") or {},
+    }
+
+
+def append_benchmark_history(result: dict, output: Path, *, label: str = "run") -> dict:
+    requested = Path(output).expanduser()
+    if requested.is_symlink():
+        raise ValueError("refusing to append to a linked benchmark history")
+    destination = requested.resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        stat = destination.stat()
+        if stat.st_nlink > 1:
+            raise ValueError("refusing to append to a linked benchmark history")
+        if stat.st_size > MAX_BENCHMARK_HISTORY_BYTES:
+            raise ValueError("benchmark history exceeds its size limit")
+        existing = benchmark_history(destination)
+        if existing["run_count"] >= MAX_BENCHMARK_HISTORY_RUNS:
+            raise ValueError("benchmark history exceeds its run limit")
+    line = json.dumps(_history_entry(result, label), sort_keys=True, ensure_ascii=True) + "\n"
+    if len(line.encode("utf-8")) > 100_000:
+        raise ValueError("benchmark history record exceeds its size limit")
+    if destination.exists() and destination.stat().st_size + len(line.encode("utf-8")) > MAX_BENCHMARK_HISTORY_BYTES:
+        raise ValueError("benchmark history exceeds its size limit")
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    descriptor = os.open(destination, flags, 0o600)
+    with os.fdopen(descriptor, "a", encoding="utf-8", newline="\n") as handle:
+        handle.write(line)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return benchmark_history(destination)
+
+
+def benchmark_history(source: Path) -> dict:
+    path = Path(source).expanduser()
+    if path.is_symlink() or not path.is_file() or path.stat().st_nlink > 1:
+        raise ValueError("benchmark history must be an existing unlinked file")
+    if path.stat().st_size > MAX_BENCHMARK_HISTORY_BYTES:
+        raise ValueError("benchmark history exceeds its size limit")
+    runs = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if line.strip():
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"benchmark history record {line_number} is not valid JSON") from exc
+                if not isinstance(record, dict) or not isinstance(record.get("modes"), dict):
+                    raise ValueError(f"benchmark history record {line_number} has an invalid schema")
+                for mode_name, metrics in record["modes"].items():
+                    if not isinstance(mode_name, str) or not isinstance(metrics, dict):
+                        raise ValueError(f"benchmark history record {line_number} has invalid mode data")
+                    for metric_name in ("ndcg_at_k", "recall_at_k", "mrr_at_k", "precision_at_k"):
+                        value = metrics.get(metric_name)
+                        if value is not None and (
+                            isinstance(value, bool)
+                            or not isinstance(value, (int, float))
+                            or not math.isfinite(float(value))
+                        ):
+                            raise ValueError(
+                                f"benchmark history record {line_number} has invalid metric data"
+                            )
+                runs.append(record)
+            if len(runs) > MAX_BENCHMARK_HISTORY_RUNS:
+                raise ValueError("benchmark history exceeds its run limit")
+    comparison = {}
+    if len(runs) >= 2:
+        previous, latest = runs[-2], runs[-1]
+        for name in sorted(set((previous.get("modes") or {})) & set((latest.get("modes") or {}))):
+            deltas = {}
+            for key in ("ndcg_at_k", "recall_at_k", "mrr_at_k", "precision_at_k"):
+                before = (previous["modes"].get(name) or {}).get(key)
+                after = (latest["modes"].get(name) or {}).get(key)
+                if isinstance(before, (int, float)) and isinstance(after, (int, float)):
+                    deltas[key] = round(float(after) - float(before), 6)
+            if deltas:
+                comparison[name] = deltas
+    return {"status": "ok", "run_count": len(runs), "runs": runs, "comparison": comparison}
+
+
+def write_benchmark_report(result: dict, output: Path, *, history: dict | None = None) -> dict:
     requested = Path(output).expanduser()
     if requested.is_symlink():
         raise ValueError("refusing to replace a linked benchmark report")
@@ -326,7 +454,7 @@ def write_benchmark_report(result: dict, output: Path) -> dict:
     descriptor = os.open(temporary, flags, 0o600)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(benchmark_report_markdown(result))
+            handle.write(benchmark_report_markdown(result, history=history))
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, destination)

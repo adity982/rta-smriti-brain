@@ -100,8 +100,10 @@ class PortabilityAndLifecycleTests(unittest.TestCase):
                 member.close()
                 member = None
                 member_path.unlink()
-                with self.assertRaisesRegex(ValueError, "does not exist"):
-                    search_workspace(owner, workspace="product", query="contract")
+                degraded = search_workspace(owner, workspace="product", query="contract")
+                self.assertEqual(degraded["status"], "degraded")
+                self.assertEqual(degraded["results"], [])
+                self.assertEqual(degraded["errors"][0]["project"], "web")
                 self.assertFalse(member_path.exists())
             finally:
                 if member is not None:

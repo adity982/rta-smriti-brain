@@ -152,6 +152,56 @@ def main() -> int:
         )["config"]["mcpServers"]["rta-smriti"]
         if not Path(mcp["command"]).is_file() or mcp["args"][:2] != ["-m", "rta_brain.mcp_server"]:
             raise AssertionError(f"installed MCP command is invalid: {mcp}")
+        mcp_probe = json.loads(
+            run(
+                [str(cli), "--db", str(db), "--json", "mcp-doctor", "--project", "sample"],
+                project,
+            ).stdout
+        )
+        if not mcp_probe["ready"] or mcp_probe["tool_count"] < 1 or not mcp_probe["fresh_task_required"]:
+            raise AssertionError(f"installed MCP probe failed: {mcp_probe}")
+
+        sessions = root / "sessions"
+        sessions.mkdir()
+        transcript = sessions / "sample-session.jsonl"
+        transcript.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "sample-session", "cwd": str(project)}})
+            + "\n"
+            + json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user", "content": "Continue installed continuity smoke"}})
+            + "\n",
+            encoding="utf-8",
+        )
+        continuity = json.loads(
+            run(
+                [
+                    str(cli), "--db", str(db), "--json", "continuity", "start", "--project", "sample",
+                    "--root", str(project), "--sessions-root", str(sessions), "--interval", "0.2",
+                    "--inactivity", "900", "--lookback-days", "0",
+                ],
+                root,
+            ).stdout
+        )
+        if continuity["state"] != "running":
+            raise AssertionError(f"installed continuity capture did not start: {continuity}")
+        try:
+            time.sleep(0.6)
+            continuity_status = json.loads(
+                run(
+                    [str(cli), "--db", str(db), "--json", "continuity", "status", "--project", "sample"],
+                    root,
+                ).stdout
+            )
+            if continuity_status["state"] != "running":
+                raise AssertionError(f"installed continuity diagnostics are not running: {continuity_status}")
+        finally:
+            continuity_stopped = json.loads(
+                run(
+                    [str(cli), "--db", str(db), "--json", "continuity", "stop", "--project", "sample"],
+                    root,
+                ).stdout
+            )
+        if continuity_stopped["state"] != "stopped":
+            raise AssertionError(f"installed continuity capture did not stop: {continuity_stopped}")
 
         watcher = json.loads(
             run(
@@ -200,13 +250,73 @@ def main() -> int:
         if wrapper_health["status"] != "ok":
             raise AssertionError("installed wrapper did not work outside its install directory")
 
-        benchmark = json.loads(run([str(cli), "benchmark", "--json"], root).stdout)
+        benchmark_history = root / "benchmark-history.jsonl"
+        benchmark_report = root / "benchmark-report.md"
+        run([
+            str(cli), "benchmark", "--json", "--history", str(benchmark_history),
+            "--label", "installed-before",
+        ], root)
+        benchmark = json.loads(run([
+            str(cli), "benchmark", "--json", "--history", str(benchmark_history),
+            "--report", str(benchmark_report), "--label", "installed-after",
+        ], root).stdout)
         if not benchmark["corpus"]["synthetic"] or benchmark["corpus"]["queries"] < 1:
             raise AssertionError("installed package did not expose the synthetic public benchmark")
         if set(benchmark["modes"]) != {"no_memory", "lexical", "hash_hybrid", "optional_semantic"}:
             raise AssertionError(f"installed benchmark modes are incomplete: {benchmark['modes']}")
         if benchmark["modes"]["optional_semantic"]["status"] != "not_requested":
             raise AssertionError("installed benchmark did not keep optional semantic retrieval opt-in")
+        if benchmark["history"]["run_count"] != 2 or "Historical Comparison" not in benchmark_report.read_text(encoding="utf-8"):
+            raise AssertionError("installed benchmark history or report was not created")
+
+        passphrase = root / "snapshot.passphrase"
+        encrypted = root / "brain.rtae"
+        restored = root / "restored.sqlite"
+        generated_passphrase = json.loads(
+            run([str(cli), "--json", "snapshot", "passphrase-keygen", str(passphrase)], root).stdout
+        )
+        if generated_passphrase["entropy_bits"] != 256 or not passphrase.is_file():
+            raise AssertionError("installed encrypted snapshot key generation failed")
+        encrypted_result = json.loads(
+            run([
+                str(cli), "--db", str(db), "--json", "snapshot", "encrypt", str(encrypted),
+                "--passphrase", str(passphrase),
+            ], root).stdout
+        )
+        if encrypted_result["encryption"] != "AES-256-GCM":
+            raise AssertionError(f"installed encrypted snapshot creation failed: {encrypted_result}")
+        encrypted_verify = json.loads(
+            run([
+                str(cli), "--json", "snapshot", "verify-encrypted", str(encrypted),
+                "--passphrase", str(passphrase),
+            ], root).stdout
+        )
+        if not encrypted_verify["valid"]:
+            raise AssertionError(f"installed encrypted snapshot verification failed: {encrypted_verify}")
+        encrypted_restore = json.loads(
+            run([
+                str(cli), "--json", "snapshot", "restore", str(encrypted),
+                "--passphrase", str(passphrase), "--output-db", str(restored),
+            ], root).stdout
+        )
+        if not encrypted_restore["valid"] or not restored.is_file():
+            raise AssertionError(f"installed encrypted snapshot restore failed: {encrypted_restore}")
+
+        private_key = root / "snapshot-private.pem"
+        public_key = root / "snapshot-public.pem"
+        signed = root / "brain-signed.rta"
+        json.loads(run([
+            str(cli), "--json", "snapshot", "keygen", str(private_key), "--public-key", str(public_key),
+        ], root).stdout)
+        signed_result = json.loads(run([
+            str(cli), "--db", str(db), "--json", "snapshot", "create", str(signed),
+            "--private-key", str(private_key),
+        ], root).stdout)
+        signed_verify = json.loads(run([
+            str(cli), "--json", "snapshot", "verify", str(signed), "--public-key", str(public_key),
+        ], root).stdout)
+        if signed_result["signature_algorithm"] != "Ed25519" or not signed_verify["valid"]:
+            raise AssertionError("installed Ed25519 snapshot round trip failed")
 
         managed_port = free_port()
         managed = json.loads(
@@ -268,8 +378,16 @@ def main() -> int:
                 raise AssertionError("installed dashboard reported the wrong command shell")
             query = urlencode({"db_path": str(db), "project": "sample"})
             dashboard_prompt = request_json(base_url + "/api/continuation-prompt?" + query, token)
-            if "Probe the authenticated endpoint" not in dashboard_prompt["prompt"]:
-                raise AssertionError("installed dashboard did not expose the saved continuation checkpoint")
+            rendered_prompt = dashboard_prompt["prompt"]
+            if (
+                "Canonical repository root" not in rendered_prompt
+                or not any(value in rendered_prompt for value in (
+                    "Probe the authenticated endpoint", "Continue installed continuity smoke",
+                ))
+            ):
+                raise AssertionError(
+                    f"installed dashboard did not expose grounded continuation state: {dashboard_prompt}"
+                )
             try:
                 request_json(base_url + "/api/health")
             except urllib.error.HTTPError as exc:
@@ -285,7 +403,7 @@ def main() -> int:
                 dashboard.kill()
                 dashboard.wait(timeout=5)
 
-        print(json.dumps({"status": "ok", "checks": 20}, sort_keys=True))
+        print(json.dumps({"status": "ok", "checks": 27}, sort_keys=True))
     return 0
 
 

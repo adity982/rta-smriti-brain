@@ -42,6 +42,34 @@ def main() -> int:
         response = json.loads(
             run(executable, "mcp-server", "--db", str(db_path), "--project", "smoke", stdin=request).stdout
         )
+        mcp_probe = json.loads(
+            run(executable, "--db", str(db_path), "--json", "mcp-doctor", "--project", "smoke").stdout
+        )
+        passphrase = root / "snapshot.passphrase"
+        encrypted = root / "brain.rtae"
+        restored = root / "restored.sqlite"
+        generated_passphrase = json.loads(
+            run(executable, "--json", "snapshot", "passphrase-keygen", str(passphrase)).stdout
+        )
+        encrypted_result = json.loads(
+            run(
+                executable, "--db", str(db_path), "--json", "snapshot", "encrypt", str(encrypted),
+                "--passphrase", str(passphrase),
+            ).stdout
+        )
+        encrypted_verify = json.loads(
+            run(
+                executable, "--json", "snapshot", "verify-encrypted", str(encrypted),
+                "--passphrase", str(passphrase),
+            ).stdout
+        )
+        encrypted_restore = json.loads(
+            run(
+                executable, "--json", "snapshot", "restore", str(encrypted),
+                "--passphrase", str(passphrase), "--output-db", str(restored),
+            ).stdout
+        )
+        restored_exists = restored.is_file()
         watcher = json.loads(
             run(
                 executable, "--db", str(db_path), "--json", "watcher", "start", str(project),
@@ -85,12 +113,18 @@ def main() -> int:
                 run(executable, "console", "stop", "--brain-dir", str(brains), "--json").stdout
             )
     if (
-        "0.5.0a1" not in version
+        "0.6.0a1" not in version
         or health.get("status") != "ok"
         or not benchmark.get("corpus", {}).get("synthetic")
         or set(benchmark.get("modes", {})) != {"no_memory", "lexical", "hash_hybrid", "optional_semantic"}
         or benchmark.get("modes", {}).get("optional_semantic", {}).get("status") != "not_requested"
         or response.get("result") != {}
+        or not mcp_probe.get("ready")
+        or generated_passphrase.get("entropy_bits") != 256
+        or encrypted_result.get("encryption") != "AES-256-GCM"
+        or not encrypted_verify.get("valid")
+        or not encrypted_restore.get("valid")
+        or not restored_exists
         or watcher.get("state") != "running"
         or stopped.get("state") != "stopped"
         or managed.get("state") != "running"
@@ -102,7 +136,7 @@ def main() -> int:
         raise RuntimeError("standalone binary smoke contract failed")
     print(
         "Standalone binary smoke passed: CLI, SQLite/FTS, MCP dispatch, public benchmark, "
-        "background sync, and managed console lifecycle."
+        "encrypted snapshots, background sync, and managed console lifecycle."
     )
     return 0
 

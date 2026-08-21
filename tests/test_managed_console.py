@@ -411,6 +411,43 @@ class ManagedConsoleTests(unittest.TestCase):
             f"/api/workspace-search?{api_query}&workspace=product-stack&query=helper&limit=4"
         )
         self.assertEqual({item["project"] for item in workspace["results"]}, {"api", "web"})
+        health = get(f"/api/workspace-health?{api_query}&workspace=product-stack")
+        self.assertEqual(health["status"], "ok")
+        removed = post("/api/workspace", {
+            "db_path": str(api_db), "action": "remove", "name": "product-stack",
+            "project": "web", "member_db_path": str(web_db),
+        })
+        self.assertEqual([item["project"] for item in removed["projects"]], ["api"])
+        post("/api/workspace", {
+            "db_path": str(api_db), "action": "add", "name": "product-stack",
+            "project": "web", "member_db_path": str(web_db),
+        })
+
+        passphrase = Path(self.tempdir.name) / "snapshot.passphrase"
+        passphrase.write_text("operator test passphrase", encoding="utf-8")
+        encrypted = Path(self.tempdir.name) / "api.rtae"
+        restored = Path(self.tempdir.name) / "api-restored.sqlite"
+        created_snapshot = post("/api/snapshot", {
+            "db_path": str(api_db), "project": "api", "action": "encrypt",
+            "path": str(encrypted), "passphrase_path": str(passphrase),
+        })
+        self.assertEqual(created_snapshot["encryption"], "AES-256-GCM")
+        verified_snapshot = post("/api/snapshot", {
+            "db_path": str(api_db), "project": "api", "action": "verify-encrypted",
+            "path": str(encrypted), "passphrase_path": str(passphrase),
+        })
+        self.assertTrue(verified_snapshot["valid"])
+        restored_snapshot = post("/api/snapshot", {
+            "db_path": str(api_db), "project": "api", "action": "restore",
+            "path": str(encrypted), "passphrase_path": str(passphrase), "output_db": str(restored),
+        })
+        self.assertTrue(restored_snapshot["valid"])
+
+        mcp = post("/api/mcp-doctor", {
+            "db_path": str(api_db), "project": "api", "timeout": 10,
+        })
+        self.assertTrue(mcp["ready"])
+        self.assertGreater(mcp["tool_count"], 0)
 
         feedback = post("/api/memory-feedback", {
             "db_path": str(api_db), "project": "api", "memory_id": memory_id,

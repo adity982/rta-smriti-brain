@@ -2,14 +2,24 @@
 
 ## Unreleased
 
+- Added bounded Codex `turn_context` rebinding so a task started elsewhere can be captured after it enters the canonical project, without importing the earlier foreign transcript.
+- Added an MCP doctor that probes the exact generated stdio command through initialize, tools/list, and ping before host registration.
+- Added AES-256-GCM encrypted portable snapshots with scrypt passphrase derivation, optional Ed25519 sender signatures, authenticated verification, and atomic restore to a new brain.
+- Added append-only benchmark history, latest-versus-previous metric deltas, and historical Markdown reporting.
+- Replaced regex-derived Tree-sitter call edges with language-aware syntax-tree call extraction for Python, JavaScript, TypeScript, TSX, Go, Rust, and Java.
+- Added workspace member health, degraded partial search, member removal, workspace deletion, and a read-only MCP health tool.
+- Added dashboard operator workflows for MCP probing, workspace health/member management, and encrypted snapshot key generation, create, verify, and restore.
+
+All notable changes are documented here. The project follows semantic versioning while APIs remain alpha.
+
+## [0.5.0-alpha] - 2026-08-20
+
 - Added append-only Codex session events, resumable transcript cursors, structured work-state reconciliation, and operational readiness.
 - Added a managed continuity daemon with canonical-project session binding, partial-write recovery, payload redaction/bounds, heartbeat validation, and conservative automatic checkpoints.
 - Added dashboard and MCP lifecycle controls plus one fail-closed multi-project MCP gateway.
 - Added optional Ed25519 public-key snapshot signatures and cross-platform snapshot key generation while keeping HMAC snapshots compatible.
 - Added shareable Markdown output for the public benchmark.
 - Added continuity binding diagnostics that explain when recent Codex sessions exist outside the canonical project root without exposing foreign paths.
-
-All notable changes are documented here. The project follows semantic versioning while APIs remain alpha.
 
 ## [0.4.0-alpha] - Unreleased
 

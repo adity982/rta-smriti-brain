@@ -6,7 +6,10 @@ from pathlib import Path
 from . import __version__
 from .autostart import autostart_status, disable_autostart, enable_autostart
 from .context import build_context_pack, build_continuation_prompt
-from .benchmark import default_public_benchmark_path, run_public_benchmark, write_benchmark_report
+from .benchmark import (
+    append_benchmark_history, benchmark_history, default_public_benchmark_path,
+    run_public_benchmark, write_benchmark_report,
+)
 from .console import publish_readiness, run_dashboard
 from .console_daemon import (
     console_status,
@@ -32,11 +35,21 @@ from .diagnostics import retrieval_diagnostics
 from .hooks import install_git_hooks, uninstall_git_hooks
 from .lifecycle import apply_memory_feedback, run_conservative_decay
 from .onboarding import SUPPORTED_TARGET_AGENTS, onboard_project
-from .portability import export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_keygen, snapshot_verify
-from .project import bootstrap_project, install_local, mcp_config_payload, mcp_gateway_config_payload, projects_list, self_check
+from .portability import (
+    export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_create_encrypted,
+    snapshot_keygen, snapshot_passphrase_keygen, snapshot_restore_encrypted, snapshot_verify,
+    snapshot_verify_encrypted,
+)
+from .project import (
+    bootstrap_project, install_local, mcp_config_payload, mcp_doctor,
+    mcp_gateway_config_payload, projects_list, self_check,
+)
 from .watch import watch_repository
 from .watch_daemon import run_watcher_worker, start_watcher, stop_watcher, watcher_status
-from .workspaces import add_project_to_workspace, create_workspace, get_workspace, list_workspaces, search_workspace
+from .workspaces import (
+    add_project_to_workspace, create_workspace, delete_workspace, get_workspace, list_workspaces,
+    remove_project_from_workspace, search_workspace, workspace_health,
+)
 
 
 def default_db_path() -> Path:
@@ -186,10 +199,12 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_cmd.add_argument("--include-semantic", action="store_true")
     benchmark_cmd.add_argument("--semantic-model", default="all-MiniLM-L6-v2")
     benchmark_cmd.add_argument("--report", help="Write a shareable Markdown benchmark report")
+    benchmark_cmd.add_argument("--history", help="Append to a bounded local JSONL run history")
+    benchmark_cmd.add_argument("--label", default="run", help="Short label stored with a benchmark history entry")
 
     workspace_cmd = sub.add_parser("workspace", help="Create and use a multi-project workspace")
     add_common_options(workspace_cmd)
-    workspace_cmd.add_argument("action", choices=("create", "add", "show", "list", "search"))
+    workspace_cmd.add_argument("action", choices=("create", "add", "remove", "delete", "show", "health", "list", "search"))
     workspace_cmd.add_argument("--name")
     workspace_cmd.add_argument("--description", default="")
     workspace_cmd.add_argument("--project")
@@ -212,13 +227,18 @@ def build_parser() -> argparse.ArgumentParser:
     bundle_import.add_argument("--conflict", choices=("rename", "merge", "fail"), default="rename")
     bundle_import.add_argument("--preview", action="store_true", help="Validate and report conflicts without changing the brain")
 
-    snapshot_cmd = sub.add_parser("snapshot", help="Create or verify an authenticated local brain snapshot")
+    snapshot_cmd = sub.add_parser("snapshot", help="Create, verify, encrypt, or restore a local brain snapshot")
     add_common_options(snapshot_cmd)
-    snapshot_cmd.add_argument("action", choices=("create", "verify", "keygen"))
+    snapshot_cmd.add_argument(
+        "action",
+        choices=("create", "verify", "keygen", "passphrase-keygen", "encrypt", "verify-encrypted", "restore"),
+    )
     snapshot_cmd.add_argument("path")
     snapshot_cmd.add_argument("--key", help="Shared HMAC key path for compatible private snapshots")
     snapshot_cmd.add_argument("--private-key", help="Ed25519 private PEM key path for public-key snapshot creation")
     snapshot_cmd.add_argument("--public-key", help="Ed25519 public PEM key path for public-key snapshot verification")
+    snapshot_cmd.add_argument("--passphrase", help="Local passphrase file for encrypted snapshot operations")
+    snapshot_cmd.add_argument("--output-db", help="New database path for encrypted snapshot restore")
 
     hooks_cmd = sub.add_parser("git-hooks", help="Opt in or out of managed Git checkpoint hooks")
     add_common_options(hooks_cmd)
@@ -357,6 +377,11 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_config.add_argument("--project", default="default")
     mcp_config.add_argument("--name", default="rta-smriti")
     mcp_config.add_argument("--brain-dir", help="Generate one multi-project MCP gateway for this brain directory")
+
+    mcp_doctor_cmd = sub.add_parser("mcp-doctor", help="Probe the exact generated MCP stdio server command")
+    add_common_options(mcp_doctor_cmd)
+    mcp_doctor_cmd.add_argument("--project", default="default")
+    mcp_doctor_cmd.add_argument("--timeout", type=float, default=10.0)
 
     bootstrap = sub.add_parser("bootstrap-project", help="Create a per-project brain, index the repo, and optionally write project agent instructions")
     add_common_options(bootstrap)
@@ -623,8 +648,14 @@ def main(argv=None) -> int:
                 Path(args.dataset), include_semantic=args.include_semantic,
                 semantic_model=args.semantic_model,
             )
+            history = None
+            if args.history:
+                history = append_benchmark_history(payload, Path(args.history), label=args.label)
+                payload = {**payload, "history": history}
             if args.report:
-                payload = {**payload, "report": write_benchmark_report(payload, Path(args.report))}
+                if history is None and args.history and Path(args.history).is_file():
+                    history = benchmark_history(Path(args.history))
+                payload = {**payload, "report": write_benchmark_report(payload, Path(args.report), history=history)}
             emit(payload, args.json)
             return 0
         except Exception as exc:
@@ -640,16 +671,39 @@ def main(argv=None) -> int:
                 if not args.public_key:
                     raise ValueError("snapshot keygen requires --public-key")
                 payload = snapshot_keygen(Path(args.path), Path(args.public_key))
+            elif args.action == "passphrase-keygen":
+                payload = snapshot_passphrase_keygen(Path(args.path))
             elif args.action == "create":
                 payload = snapshot_create(
                     Path(args.db), Path(args.path),
                     key_path=Path(args.key) if args.key else None,
                     private_key_path=Path(args.private_key) if args.private_key else None,
                 )
-            else:
+            elif args.action == "verify":
                 payload = snapshot_verify(
                     Path(args.path),
                     key_path=Path(args.key) if args.key else None,
+                    public_key_path=Path(args.public_key) if args.public_key else None,
+                )
+            elif args.action == "encrypt":
+                if not args.passphrase:
+                    raise ValueError("snapshot encrypt requires --passphrase")
+                payload = snapshot_create_encrypted(
+                    Path(args.db), Path(args.path), passphrase_path=Path(args.passphrase),
+                    private_key_path=Path(args.private_key) if args.private_key else None,
+                )
+            elif args.action == "verify-encrypted":
+                if not args.passphrase:
+                    raise ValueError("encrypted snapshot verification requires --passphrase")
+                payload = snapshot_verify_encrypted(
+                    Path(args.path), passphrase_path=Path(args.passphrase),
+                    public_key_path=Path(args.public_key) if args.public_key else None,
+                )
+            else:
+                if not args.passphrase or not args.output_db:
+                    raise ValueError("snapshot restore requires --passphrase and --output-db")
+                payload = snapshot_restore_encrypted(
+                    Path(args.path), Path(args.output_db), passphrase_path=Path(args.passphrase),
                     public_key_path=Path(args.public_key) if args.public_key else None,
                 )
             emit(payload, args.json)
@@ -738,6 +792,16 @@ def main(argv=None) -> int:
                     payload = add_project_to_workspace(
                         conn, workspace=args.name, project=args.project, role=args.role, db_path=args.member_db,
                     )
+                elif args.action == "remove":
+                    if not args.project:
+                        raise ValueError("workspace remove requires --project")
+                    payload = remove_project_from_workspace(
+                        conn, workspace=args.name, project=args.project, db_path=args.member_db,
+                    )
+                elif args.action == "delete":
+                    payload = delete_workspace(conn, args.name)
+                elif args.action == "health":
+                    payload = workspace_health(conn, args.name)
                 elif args.action == "search":
                     if not args.query:
                         raise ValueError("workspace search requires --query")
@@ -875,6 +939,8 @@ def main(argv=None) -> int:
                     mcp_gateway_config_payload(args.brain_dir, args.name, tool_root())
                     if args.brain_dir else build_mcp_config(args.db, args.project, args.name)
                 )
+            elif args.command == "mcp-doctor":
+                payload = mcp_doctor(Path(args.db), args.project, tool_root(), timeout=args.timeout)
             elif args.command == "bootstrap-project":
                 payload = bootstrap_project(
                     conn,

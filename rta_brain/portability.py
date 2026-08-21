@@ -25,6 +25,7 @@ MAX_SNAPSHOT_HEADER_BYTES = 16 * 1024
 MAX_SNAPSHOT_FILE_BYTES = MAX_SNAPSHOT_HEADER_BYTES + 1 + ((MAX_SNAPSHOT_DATABASE_BYTES + 2) // 3) * 4
 MAX_LEGACY_SNAPSHOT_BYTES = 16 * 1024 * 1024
 MAX_SNAPSHOT_KEY_BYTES = 4096
+MAX_SNAPSHOT_PASSPHRASE_BYTES = 4096
 MAX_PUBLIC_KEY_BYTES = 4096
 MAX_PRIVATE_KEY_BYTES = 8192
 MAX_BUNDLE_PROJECTS = 100
@@ -569,6 +570,30 @@ def _read_or_create_key(key_path: Path, *, create: bool) -> bytes:
     return key
 
 
+def snapshot_passphrase_keygen(passphrase_path: Path) -> dict:
+    """Create a private 256-bit snapshot passphrase file without replacing anything."""
+    requested = Path(passphrase_path).expanduser()
+    if requested.is_symlink() or requested.exists():
+        raise ValueError("snapshot passphrase file already exists")
+    path = requested.resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    value = secrets.token_bytes(32)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    descriptor = os.open(path, flags, 0o600)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(value)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return {
+        "status": "ok",
+        "path": str(path),
+        "entropy_bits": len(value) * 8,
+        "created": True,
+    }
+
+
 def _read_required_key_file(key_path: Path, *, label: str, limit: int) -> bytes:
     requested = Path(key_path).expanduser()
     if requested.is_symlink():
@@ -740,6 +765,328 @@ def snapshot_create(
         "signature_algorithm": manifest["signature_algorithm"], "project_count": project_count,
         "database_bytes": database_bytes,
     }
+
+
+ENCRYPTED_SNAPSHOT_MAGIC = b"RTA-SMRITI-ENCRYPTED-V3\n"
+ENCRYPTED_SNAPSHOT_TAG_BYTES = 16
+ENCRYPTED_SNAPSHOT_SCRYPT_N = 2**17
+ENCRYPTED_SNAPSHOT_SCRYPT_R = 8
+ENCRYPTED_SNAPSHOT_SCRYPT_P = 1
+MAX_ENCRYPTED_SNAPSHOT_BYTES = (
+    len(ENCRYPTED_SNAPSHOT_MAGIC) + MAX_SNAPSHOT_HEADER_BYTES + 1
+    + MAX_SNAPSHOT_DATABASE_BYTES + ENCRYPTED_SNAPSHOT_TAG_BYTES
+)
+
+
+def _snapshot_passphrase(path: Path) -> bytes:
+    value = _read_required_key_file(
+        path, label="snapshot passphrase", limit=MAX_SNAPSHOT_PASSPHRASE_BYTES,
+    ).rstrip(b"\r\n")
+    if len(value) < 12:
+        raise ValueError("snapshot passphrase must contain at least 12 bytes")
+    return value
+
+
+def _derive_snapshot_encryption_key(passphrase: bytes, salt: bytes) -> bytes:
+    try:
+        from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+    except ImportError as exc:
+        raise ValueError(
+            "encrypted snapshots require the optional cryptography package; "
+            "install rta-smriti-brain[signing] locally"
+        ) from exc
+    return Scrypt(
+        salt=salt,
+        length=32,
+        n=ENCRYPTED_SNAPSHOT_SCRYPT_N,
+        r=ENCRYPTED_SNAPSHOT_SCRYPT_R,
+        p=ENCRYPTED_SNAPSHOT_SCRYPT_P,
+    ).derive(passphrase)
+
+
+def snapshot_create_encrypted(
+    db_path: Path,
+    output: Path,
+    *,
+    passphrase_path: Path,
+    private_key_path: Path | None = None,
+) -> dict:
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    except ImportError as exc:
+        raise ValueError(
+            "encrypted snapshots require the optional cryptography package; "
+            "install rta-smriti-brain[signing] locally"
+        ) from exc
+    requested_source = Path(db_path).expanduser()
+    if requested_source.is_symlink():
+        raise ValueError("linked brain databases are not allowed for snapshots")
+    source_path = requested_source.resolve()
+    if not source_path.is_file() or source_path.stat().st_nlink > 1:
+        raise ValueError("brain database must be an existing unlinked file")
+    passphrase = _snapshot_passphrase(passphrase_path)
+    private_key = _load_ed25519_private_key(private_key_path) if private_key_path else None
+    requested_destination = Path(output).expanduser()
+    if requested_destination.is_symlink():
+        raise ValueError("refusing to replace a linked portability artifact")
+    destination = requested_destination.resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() and destination.stat().st_nlink > 1:
+        raise ValueError("refusing to replace a linked portability artifact")
+
+    with tempfile.TemporaryDirectory(prefix="rta-encrypted-snapshot-") as tmp:
+        consistent = Path(tmp) / "brain.sqlite"
+        source = sqlite3.connect(str(source_path))
+        target = sqlite3.connect(str(consistent))
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+            source.close()
+        database_bytes = consistent.stat().st_size
+        if database_bytes > MAX_SNAPSHOT_DATABASE_BYTES:
+            raise ValueError(
+                f"brain database exceeds the {MAX_SNAPSHOT_DATABASE_BYTES // (1024 * 1024)} MiB snapshot limit"
+            )
+        digest = hashlib.sha256()
+        with consistent.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        check = sqlite3.connect(str(consistent))
+        try:
+            if check.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise ValueError("brain database failed SQLite integrity verification")
+            project_count = int(check.execute("SELECT COUNT(*) FROM projects").fetchone()[0])
+        finally:
+            check.close()
+        salt = secrets.token_bytes(16)
+        nonce = secrets.token_bytes(12)
+        manifest = {
+            "schema_version": 3,
+            "kind": "rta-smriti-encrypted-snapshot",
+            "created_at": now_iso(),
+            "database_sha256": digest.hexdigest(),
+            "database_bytes": database_bytes,
+            "project_count": project_count,
+            "encryption": "AES-256-GCM",
+            "kdf": {
+                "name": "scrypt",
+                "n": ENCRYPTED_SNAPSHOT_SCRYPT_N,
+                "r": ENCRYPTED_SNAPSHOT_SCRYPT_R,
+                "p": ENCRYPTED_SNAPSHOT_SCRYPT_P,
+                "salt": base64.b64encode(salt).decode("ascii"),
+            },
+            "nonce": base64.b64encode(nonce).decode("ascii"),
+            "signature_algorithm": "Ed25519" if private_key else "none",
+        }
+        signature = (
+            base64.b64encode(private_key.sign(_canonical_json(manifest))).decode("ascii")
+            if private_key else None
+        )
+        header = _canonical_json({"manifest": manifest, "signature": signature})
+        if len(header) > MAX_SNAPSHOT_HEADER_BYTES:
+            raise ValueError("encrypted snapshot manifest exceeds the safe header limit")
+        key = _derive_snapshot_encryption_key(passphrase, salt)
+        temporary = destination.with_name(f".{destination.name}.{secrets.token_hex(8)}.tmp")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        descriptor = os.open(temporary, flags, 0o600)
+        try:
+            encryptor = Cipher(algorithms.AES(key), modes.GCM(nonce)).encryptor()
+            encryptor.authenticate_additional_data(header)
+            with os.fdopen(descriptor, "wb") as output_handle, consistent.open("rb") as database_handle:
+                output_handle.write(ENCRYPTED_SNAPSHOT_MAGIC)
+                output_handle.write(header + b"\n")
+                for chunk in iter(lambda: database_handle.read(1024 * 1024), b""):
+                    output_handle.write(encryptor.update(chunk))
+                output_handle.write(encryptor.finalize())
+                output_handle.write(encryptor.tag)
+                output_handle.flush()
+                os.fsync(output_handle.fileno())
+            os.replace(temporary, destination)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+    return {
+        "status": "ok", "path": str(destination), "schema_version": 3,
+        "encryption": "AES-256-GCM", "signature_algorithm": manifest["signature_algorithm"],
+        "project_count": project_count, "database_bytes": database_bytes,
+    }
+
+
+def _decrypt_encrypted_snapshot(
+    source: Path,
+    passphrase_path: Path,
+    destination: Path,
+    *,
+    public_key_path: Path | None = None,
+) -> dict:
+    try:
+        from cryptography.exceptions import InvalidSignature, InvalidTag
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    except ImportError as exc:
+        raise ValueError(
+            "encrypted snapshots require the optional cryptography package; "
+            "install rta-smriti-brain[signing] locally"
+        ) from exc
+    requested = Path(source).expanduser()
+    if requested.is_symlink() or not requested.is_file() or requested.stat().st_nlink > 1:
+        raise ValueError("encrypted snapshot must be an existing unlinked file")
+    resolved = requested.resolve()
+    if resolved.stat().st_size > MAX_ENCRYPTED_SNAPSHOT_BYTES:
+        raise ValueError("encrypted snapshot exceeds the safe size limit")
+    passphrase = _snapshot_passphrase(passphrase_path)
+    with resolved.open("rb") as handle:
+        if handle.read(len(ENCRYPTED_SNAPSHOT_MAGIC)) != ENCRYPTED_SNAPSHOT_MAGIC:
+            raise ValueError("not an Rta-Smriti encrypted snapshot")
+        header = handle.readline(MAX_SNAPSHOT_HEADER_BYTES + 1)
+        if not header.endswith(b"\n") or len(header) > MAX_SNAPSHOT_HEADER_BYTES:
+            raise ValueError("encrypted snapshot header is invalid")
+        header = header[:-1]
+        try:
+            envelope = json.loads(header)
+            manifest = envelope["manifest"]
+        except (KeyError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("encrypted snapshot manifest is invalid") from exc
+        required = {
+            "schema_version", "kind", "created_at", "database_sha256", "database_bytes",
+            "project_count", "encryption", "kdf", "nonce", "signature_algorithm",
+        }
+        if not isinstance(manifest, dict) or set(manifest) != required:
+            raise ValueError("encrypted snapshot manifest fields are missing or unsupported")
+        if manifest.get("schema_version") != 3 or manifest.get("kind") != "rta-smriti-encrypted-snapshot":
+            raise ValueError("unsupported encrypted snapshot schema")
+        if manifest.get("encryption") != "AES-256-GCM" or manifest.get("signature_algorithm") not in {"none", "Ed25519"}:
+            raise ValueError("unsupported encrypted snapshot cryptography")
+        kdf = manifest.get("kdf")
+        if not isinstance(kdf, dict) or set(kdf) != {"name", "n", "r", "p", "salt"}:
+            raise ValueError("encrypted snapshot KDF parameters are invalid")
+        if (kdf.get("name"), kdf.get("n"), kdf.get("r"), kdf.get("p")) != (
+            "scrypt",
+            ENCRYPTED_SNAPSHOT_SCRYPT_N,
+            ENCRYPTED_SNAPSHOT_SCRYPT_R,
+            ENCRYPTED_SNAPSHOT_SCRYPT_P,
+        ):
+            raise ValueError("unsupported encrypted snapshot KDF parameters")
+        try:
+            salt = base64.b64decode(kdf["salt"], validate=True)
+            nonce = base64.b64decode(manifest["nonce"], validate=True)
+        except (ValueError, TypeError) as exc:
+            raise ValueError("encrypted snapshot salt or nonce is invalid") from exc
+        if len(salt) != 16 or len(nonce) != 12:
+            raise ValueError("encrypted snapshot salt or nonce has an invalid length")
+        signature = envelope.get("signature")
+        signature_verified = False
+        if manifest["signature_algorithm"] == "Ed25519":
+            if public_key_path is not None:
+                try:
+                    _load_ed25519_public_key(public_key_path).verify(
+                        base64.b64decode(signature, validate=True), _canonical_json(manifest),
+                    )
+                    signature_verified = True
+                except (InvalidSignature, ValueError, TypeError):
+                    return {"status": "invalid", "valid": False, "reason": "snapshot signature verification failed"}
+        elif signature is not None:
+            raise ValueError("unsigned encrypted snapshot contains an unexpected signature")
+        payload_start = handle.tell()
+        payload_bytes = resolved.stat().st_size - payload_start - ENCRYPTED_SNAPSHOT_TAG_BYTES
+        declared_bytes = manifest.get("database_bytes")
+        if not isinstance(declared_bytes, int) or declared_bytes < 0 or declared_bytes > MAX_SNAPSHOT_DATABASE_BYTES:
+            raise ValueError("encrypted snapshot database size is invalid")
+        if payload_bytes != declared_bytes:
+            return {"status": "invalid", "valid": False, "reason": "encrypted snapshot payload size mismatch"}
+        handle.seek(-ENCRYPTED_SNAPSHOT_TAG_BYTES, os.SEEK_END)
+        tag = handle.read(ENCRYPTED_SNAPSHOT_TAG_BYTES)
+        handle.seek(payload_start)
+        key = _derive_snapshot_encryption_key(passphrase, salt)
+        decryptor = Cipher(algorithms.AES(key), modes.GCM(nonce, tag)).decryptor()
+        decryptor.authenticate_additional_data(header)
+        digest = hashlib.sha256()
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        descriptor = os.open(destination, flags, 0o600)
+        try:
+            with os.fdopen(descriptor, "wb") as output_handle:
+                remaining = payload_bytes
+                while remaining:
+                    chunk = handle.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        return {"status": "invalid", "valid": False, "reason": "encrypted snapshot payload is truncated"}
+                    clear = decryptor.update(chunk)
+                    output_handle.write(clear)
+                    digest.update(clear)
+                    remaining -= len(chunk)
+                try:
+                    clear = decryptor.finalize()
+                except InvalidTag:
+                    return {"status": "invalid", "valid": False, "reason": "snapshot passphrase or authentication tag is invalid"}
+                output_handle.write(clear)
+                digest.update(clear)
+                output_handle.flush()
+                os.fsync(output_handle.fileno())
+        finally:
+            if destination.exists() and digest.hexdigest() != manifest.get("database_sha256"):
+                destination.unlink()
+        if digest.hexdigest() != manifest.get("database_sha256"):
+            return {"status": "invalid", "valid": False, "reason": "decrypted database digest mismatch"}
+    check = sqlite3.connect(str(destination))
+    try:
+        if check.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            destination.unlink(missing_ok=True)
+            return {"status": "invalid", "valid": False, "reason": "decrypted database failed SQLite integrity verification"}
+    finally:
+        check.close()
+    return {
+        "status": "ok", "valid": True, "schema_version": 3, "encryption": "AES-256-GCM",
+        "signature_algorithm": manifest["signature_algorithm"], "signature_verified": signature_verified,
+        "database_bytes": declared_bytes, "project_count": manifest["project_count"],
+    }
+
+
+def snapshot_verify_encrypted(
+    source: Path, *, passphrase_path: Path, public_key_path: Path | None = None,
+) -> dict:
+    with tempfile.TemporaryDirectory(prefix="rta-encrypted-verify-") as tmp:
+        destination = Path(tmp) / "brain.sqlite"
+        return _decrypt_encrypted_snapshot(
+            source, passphrase_path, destination, public_key_path=public_key_path,
+        )
+
+
+def snapshot_restore_encrypted(
+    source: Path,
+    output_db: Path,
+    *,
+    passphrase_path: Path,
+    public_key_path: Path | None = None,
+) -> dict:
+    requested = Path(output_db).expanduser()
+    if requested.is_symlink():
+        raise ValueError("refusing to restore through a linked database path")
+    destination = requested.resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        raise ValueError("refusing to replace an existing database during snapshot restore")
+    temporary = destination.with_name(f".{destination.name}.{secrets.token_hex(8)}.tmp")
+    try:
+        result = _decrypt_encrypted_snapshot(
+            source, passphrase_path, temporary, public_key_path=public_key_path,
+        )
+        if not result.get("valid"):
+            temporary.unlink(missing_ok=True)
+            return result
+        try:
+            os.link(temporary, destination)
+        except FileExistsError as exc:
+            raise ValueError("refusing to replace an existing database during snapshot restore") from exc
+        except OSError as exc:
+            raise ValueError("snapshot restore requires atomic no-clobber file creation") from exc
+        temporary.unlink()
+        return {**result, "path": str(destination)}
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _validate_snapshot_manifest(manifest, *, schema_version: int) -> tuple[dict | None, str | None]:

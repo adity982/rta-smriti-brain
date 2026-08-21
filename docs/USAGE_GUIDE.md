@@ -198,6 +198,65 @@ declared roots. Agent-authored memory remains unverified `anumana` with
 confidence capped at `0.75`; agents cannot create or retire governance policy,
 attest required checks, or override a block.
 
+Probe the exact generated server before editing the host configuration:
+
+```powershell
+& $RtaBrain --db "$BrainDir\project-name.sqlite" --json mcp-doctor --project project-name
+```
+
+```bash
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" --json mcp-doctor --project project-name
+```
+
+A `ready` result proves initialize, tools/list, and ping worked for that command.
+Copy the returned config into the host, then start a fresh agent task. Existing
+tasks cannot dynamically acquire newly registered MCP tools.
+
+### Use Multi-Project Workspaces
+
+Create a workspace in one owner brain, then add independently indexed project
+brains. The databases remain separate.
+
+```powershell
+& $RtaBrain --db "$BrainDir\app.sqlite" workspace create --name product --json
+& $RtaBrain --db "$BrainDir\app.sqlite" workspace add --name product --project app --json
+& $RtaBrain --db "$BrainDir\app.sqlite" workspace add --name product --project api --member-db "$BrainDir\api.sqlite" --role backend --json
+& $RtaBrain --db "$BrainDir\app.sqlite" workspace health --name product --json
+& $RtaBrain --db "$BrainDir\app.sqlite" workspace search --name product --query "release contract" --json
+```
+
+Search returns healthy-project results even when one member is unavailable and
+marks the response `degraded`. Removing a member or deleting a workspace changes
+only workspace metadata; it never deletes a project brain.
+
+### Create An Encrypted Snapshot
+
+Generate a private 256-bit passphrase file outside the repository, keep it
+separate from the snapshot, and install the signing extra
+(`pip install ".[signing]"`). Generation refuses to replace an existing file.
+
+```powershell
+& $RtaBrain snapshot passphrase-keygen "$BrainDir\project-name.snapshot.passphrase" --json
+& $RtaBrain --db "$BrainDir\project-name.sqlite" snapshot encrypt "$BrainDir\project-name.rtae" --passphrase "$BrainDir\project-name.snapshot.passphrase" --json
+& $RtaBrain snapshot verify-encrypted "$BrainDir\project-name.rtae" --passphrase "$BrainDir\project-name.snapshot.passphrase" --json
+& $RtaBrain snapshot restore "$BrainDir\project-name.rtae" --passphrase "$BrainDir\project-name.snapshot.passphrase" --output-db "$BrainDir\project-name-restored.sqlite" --json
+```
+
+The dashboard Vault provides the same explicit key-generation action. Restore
+refuses to replace an existing database. It authenticates the encrypted
+payload, verifies its SHA-256 digest and SQLite integrity, then atomically writes
+the new brain.
+
+### Compare Benchmark Runs
+
+```powershell
+& $RtaBrain benchmark --history "$BrainDir\public.benchmark-history.jsonl" --label before --report benchmark.md --json
+```
+
+Each run appends one bounded private-safe record. From the second run onward, the
+Markdown report includes latest-versus-previous metric deltas. This synthetic
+harness is regression evidence, not a superiority claim.
+
 ### What The Dashboard Shows
 
 **Projects**

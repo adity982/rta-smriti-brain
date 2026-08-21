@@ -40,6 +40,7 @@ def main() -> int:
         assert_wheel_static_assets(wheel)
 
         run([str(python), "-m", "pip", "install", "--no-deps", str(wheel)])
+        run([str(python), "-m", "pip", "install", "cryptography>=50,<51"])
         expected_version = run([
             str(python), "-c",
             "from importlib.metadata import version; print(version('rta-smriti-brain'))",
