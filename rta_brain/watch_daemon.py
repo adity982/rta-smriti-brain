@@ -131,6 +131,12 @@ def _process_alive(pid: int | None) -> bool:
 def watcher_status(db_path: Path, project: str) -> dict:
     paths = watcher_paths(db_path, project)
     payload = _read_json(paths["state"])
+    counters = {
+        "cycles": 0,
+        "updated_files": 0,
+        "removed_files": 0,
+        "errors": 0,
+    }
     if not payload:
         return {
             "status": "ok",
@@ -138,11 +144,12 @@ def watcher_status(db_path: Path, project: str) -> dict:
             "project": project,
             "db_path": str(db_path.expanduser().resolve()),
             "backend": None,
+            **counters,
         }
     state = str(payload.get("state") or "unknown")
     if state in {"starting", "running", "stopping"} and not _process_alive(payload.get("pid")):
         state = "stale"
-    return {"status": "ok", **payload, "state": state}
+    return {"status": "ok", **counters, **payload, "state": state}
 
 
 def _clear_stale_control(paths: dict[str, Path]) -> None:

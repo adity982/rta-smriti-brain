@@ -23,6 +23,27 @@ from rta_brain.watch_daemon import (
 
 
 class RtaBrainResilienceTests(unittest.TestCase):
+    def test_watcher_status_always_includes_stable_counters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "brain.sqlite"
+            stopped = watcher_status(db_path, "demo")
+            self.assertEqual(
+                {key: stopped[key] for key in ("cycles", "updated_files", "removed_files", "errors")},
+                {"cycles": 0, "updated_files": 0, "removed_files": 0, "errors": 0},
+            )
+
+            paths = watcher_paths(db_path, "demo")
+            paths["directory"].mkdir(parents=True)
+            paths["state"].write_text(
+                json.dumps({"project": "demo", "state": "starting", "pid": 0}),
+                encoding="utf-8",
+            )
+            partial = watcher_status(db_path, "demo")
+            self.assertEqual(
+                {key: partial[key] for key in ("cycles", "updated_files", "removed_files", "errors")},
+                {"cycles": 0, "updated_files": 0, "removed_files": 0, "errors": 0},
+            )
+
     def test_ingest_repo_rolls_back_the_whole_refresh_when_a_parser_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
