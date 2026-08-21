@@ -169,6 +169,85 @@ class ManagedConsoleTests(unittest.TestCase):
         self.assertNotIn("token", json.dumps(status).lower())
         self.assertNotIn("#token=", json.dumps(status))
 
+    def test_temporal_truth_operator_api_supports_overview_history_and_mutation(self):
+        root = Path(self.tempdir.name) / "repo"
+        root.mkdir()
+        database = self.brain_dir / "demo.sqlite"
+        conn = connect(database)
+        try:
+            init_project(conn, "demo", str(root))
+        finally:
+            conn.close()
+        started = start_console(
+            ROOT, self.brain_dir, port=0, open_browser=False, startup_timeout=10.0
+        )
+        token = started["url"].split("#token=", 1)[1]
+        base_url = f"http://127.0.0.1:{started['port']}"
+        headers = {"X-Rta-Smriti-Token": token, "Content-Type": "application/json"}
+
+        def post(payload):
+            request = urllib.request.Request(
+                base_url + "/api/truth",
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        def get(mode, **params):
+            query = urllib.parse.urlencode({
+                "db_path": str(database), "project": "demo", "mode": mode,
+                **params,
+            })
+            request = urllib.request.Request(
+                base_url + "/api/truth?" + query,
+                headers={"X-Rta-Smriti-Token": token},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        asserted = post({
+            "db_path": str(database), "project": "demo", "action": "assert",
+            "claim_id": "release-status", "subject": "release:v0.7",
+            "predicate": "status", "value": "candidate",
+            "state": "accepted", "idempotency_key": "dashboard:assert:1",
+            "expected_version": 0,
+        })
+        self.assertEqual(asserted["claim"]["epistemic_state"], "accepted")
+        overview = get("overview")
+        self.assertEqual(overview["counts"]["current_claims"], 1)
+        self.assertEqual(overview["claims"][0]["claim_id"], "release-status")
+        post({
+            "db_path": str(database), "project": "demo", "action": "state",
+            "claim_id": "release-status", "state": "stale",
+            "reason": "Revalidation is due.",
+            "idempotency_key": "dashboard:state:2", "expected_version": 1,
+        })
+        history = get("history", claim_id="release-status")
+        self.assertEqual(
+            [item["epistemic_state"] for item in history["versions"]],
+            ["accepted", "stale"],
+        )
+        sensitive = post({
+            "db_path": str(database), "project": "demo", "action": "assert",
+            "claim_id": "private-token", "subject": "credential:service",
+            "predicate": "token", "value": "must-not-enter-browser-dom",
+            "privacy_class": "sensitive", "idempotency_key": "dashboard:private:1",
+            "expected_version": 0,
+        })
+        self.assertTrue(sensitive["claim"]["redacted"])
+        self.assertNotIn("must-not-enter-browser-dom", json.dumps(sensitive))
+        for result in (
+            get("overview"),
+            get("current", claim_id="private-token"),
+            get("history", claim_id="private-token"),
+            get("explain", claim_id="private-token"),
+        ):
+            serialized = json.dumps(result)
+            self.assertNotIn("must-not-enter-browser-dom", serialized)
+            self.assertNotIn("credential:service", serialized)
+
     def test_linked_console_log_is_rejected_without_modifying_victim(self):
         paths = console_paths(self.brain_dir)
         paths["directory"].mkdir()

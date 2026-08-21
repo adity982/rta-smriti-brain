@@ -33,7 +33,7 @@ from .repository import (
 
 
 VALID_PRAMANA = {"pratyaksha", "sabda", "anumana", "smriti", "kalpana"}
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 MAX_THREAD_BYTES = 10 * 1024 * 1024
 MAX_THREAD_PROMOTIONS = 100
 MAX_SEARCH_LIMIT = 50
@@ -157,6 +157,7 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
+    starting_schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS projects (
@@ -213,6 +214,195 @@ def init_schema(conn: sqlite3.Connection) -> None:
             verification_status TEXT NOT NULL DEFAULT 'unverified',
             metadata_json TEXT NOT NULL DEFAULT '{}'
         );
+
+        CREATE TABLE IF NOT EXISTS truth_events (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+            project_sequence INTEGER NOT NULL CHECK(project_sequence > 0),
+            event_id TEXT NOT NULL,
+            stream_id TEXT NOT NULL,
+            stream_version INTEGER NOT NULL CHECK(stream_version > 0),
+            event_type TEXT NOT NULL,
+            event_schema INTEGER NOT NULL DEFAULT 1 CHECK(event_schema > 0),
+            idempotency_key TEXT NOT NULL,
+            payload_json TEXT NOT NULL CHECK(length(payload_json) <= 262144),
+            payload_sha256 TEXT NOT NULL,
+            previous_event_hash TEXT,
+            event_hash TEXT NOT NULL,
+            actor_type TEXT NOT NULL,
+            actor_id TEXT NOT NULL,
+            source TEXT NOT NULL,
+            verification_status TEXT NOT NULL,
+            repository_identity TEXT,
+            checkout_identity TEXT,
+            repository_ref TEXT,
+            repository_commit TEXT,
+            dirty_digest TEXT,
+            occurred_at TEXT,
+            recorded_at TEXT NOT NULL,
+            privacy_class TEXT NOT NULL DEFAULT 'internal',
+            UNIQUE(project_id, project_sequence),
+            UNIQUE(project_id, event_id),
+            UNIQUE(project_id, stream_id, stream_version),
+            UNIQUE(project_id, idempotency_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS truth_claim_versions (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            claim_id TEXT NOT NULL,
+            subject_key TEXT NOT NULL,
+            subject_display TEXT NOT NULL,
+            predicate TEXT NOT NULL,
+            object_json TEXT NOT NULL,
+            polarity TEXT NOT NULL CHECK(polarity IN ('for', 'against', 'unknown')),
+            epistemic_state TEXT NOT NULL,
+            state_reason TEXT NOT NULL DEFAULT '',
+            authority_class TEXT NOT NULL,
+            confidence REAL NOT NULL CHECK(confidence >= 0.0 AND confidence <= 1.0),
+            verification_status TEXT NOT NULL,
+            valid_from TEXT NOT NULL,
+            valid_to TEXT,
+            recorded_from_sequence INTEGER NOT NULL,
+            recorded_to_sequence INTEGER,
+            opened_by_event_id TEXT NOT NULL,
+            closed_by_event_id TEXT,
+            repository_anchor_event_id TEXT,
+            provenance_json TEXT NOT NULL DEFAULT '{}',
+            revalidate_at TEXT,
+            expires_at TEXT,
+            privacy_class TEXT NOT NULL DEFAULT 'internal',
+            sharing_policy TEXT NOT NULL DEFAULT 'local-only',
+            legacy_memory_id INTEGER REFERENCES memories(id) ON DELETE SET NULL,
+            UNIQUE(project_id, claim_id, recorded_from_sequence)
+        );
+
+        CREATE TABLE IF NOT EXISTS truth_relations (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            relation_id TEXT NOT NULL,
+            from_claim_id TEXT NOT NULL,
+            relation_type TEXT NOT NULL,
+            to_claim_id TEXT NOT NULL,
+            authority_class TEXT NOT NULL,
+            confidence REAL NOT NULL CHECK(confidence >= 0.0 AND confidence <= 1.0),
+            valid_from TEXT NOT NULL,
+            valid_to TEXT,
+            recorded_from_sequence INTEGER NOT NULL,
+            recorded_to_sequence INTEGER,
+            opened_by_event_id TEXT NOT NULL,
+            closed_by_event_id TEXT,
+            UNIQUE(project_id, relation_id, recorded_from_sequence)
+        );
+
+        CREATE TABLE IF NOT EXISTS truth_evidence (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            evidence_id TEXT NOT NULL,
+            claim_id TEXT NOT NULL,
+            source_identifier TEXT NOT NULL,
+            source_hash TEXT,
+            method TEXT NOT NULL,
+            actor_type TEXT NOT NULL,
+            actor_id TEXT NOT NULL,
+            authority_class TEXT NOT NULL,
+            confidence REAL NOT NULL CHECK(confidence >= 0.0 AND confidence <= 1.0),
+            uncertainty TEXT NOT NULL DEFAULT '',
+            polarity TEXT NOT NULL CHECK(polarity IN ('supporting', 'weakening', 'refuting')),
+            validator_id TEXT,
+            valid_from TEXT NOT NULL,
+            valid_to TEXT,
+            recorded_from_sequence INTEGER NOT NULL,
+            recorded_to_sequence INTEGER,
+            opened_by_event_id TEXT NOT NULL,
+            closed_by_event_id TEXT,
+            provenance_json TEXT NOT NULL DEFAULT '{}',
+            privacy_class TEXT NOT NULL DEFAULT 'internal',
+            sharing_policy TEXT NOT NULL DEFAULT 'local-only',
+            UNIQUE(project_id, evidence_id, recorded_from_sequence)
+        );
+
+        CREATE TABLE IF NOT EXISTS truth_abstentions (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            abstention_id TEXT NOT NULL,
+            query_scope TEXT NOT NULL,
+            missing_evidence_json TEXT NOT NULL,
+            unresolved_conflicts_json TEXT NOT NULL,
+            minimum_revalidation_action TEXT NOT NULL,
+            recorded_sequence INTEGER NOT NULL,
+            event_id TEXT NOT NULL,
+            recorded_at TEXT NOT NULL,
+            privacy_class TEXT NOT NULL DEFAULT 'internal',
+            UNIQUE(project_id, abstention_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS truth_validators (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            validator_id TEXT NOT NULL,
+            validator_type TEXT NOT NULL,
+            claim_id TEXT NOT NULL,
+            config_json TEXT NOT NULL,
+            failure_effect TEXT NOT NULL CHECK(failure_effect IN ('disputed', 'stale', 'refuted')),
+            status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'retired')),
+            defined_sequence INTEGER NOT NULL,
+            defined_by_event_id TEXT NOT NULL,
+            privacy_class TEXT NOT NULL DEFAULT 'internal',
+            UNIQUE(project_id, validator_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS truth_validator_results (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            validator_id TEXT NOT NULL,
+            claim_id TEXT NOT NULL,
+            outcome TEXT NOT NULL CHECK(outcome IN ('pass', 'fail', 'unavailable', 'error')),
+            details_json TEXT NOT NULL,
+            evaluated_sequence INTEGER NOT NULL,
+            event_id TEXT NOT NULL,
+            evaluated_at TEXT NOT NULL,
+            UNIQUE(project_id, validator_id, evaluated_sequence)
+        );
+
+        CREATE TABLE IF NOT EXISTS truth_repository_anchors (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            anchor_id TEXT NOT NULL,
+            repository_identity TEXT NOT NULL,
+            checkout_identity TEXT NOT NULL,
+            repository_ref TEXT,
+            repository_commit TEXT NOT NULL,
+            dirty_digest TEXT NOT NULL,
+            recorded_sequence INTEGER NOT NULL,
+            event_id TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            UNIQUE(project_id, anchor_id),
+            UNIQUE(project_id, checkout_identity, repository_commit, recorded_sequence)
+        );
+
+        CREATE TABLE IF NOT EXISTS truth_projection_state (
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            projection_name TEXT NOT NULL,
+            schema_version INTEGER NOT NULL,
+            last_event_sequence INTEGER NOT NULL DEFAULT 0,
+            event_chain_hash TEXT,
+            projection_digest TEXT NOT NULL,
+            rebuilt_at TEXT NOT NULL,
+            PRIMARY KEY(project_id, projection_name)
+        );
+
+        CREATE TRIGGER IF NOT EXISTS truth_events_no_update
+        BEFORE UPDATE ON truth_events
+        BEGIN
+            SELECT RAISE(ABORT, 'truth events are immutable');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS truth_events_no_delete
+        BEFORE DELETE ON truth_events
+        BEGIN
+            SELECT RAISE(ABORT, 'truth events are immutable');
+        END;
 
         CREATE TABLE IF NOT EXISTS checkpoints (
             id INTEGER PRIMARY KEY,
@@ -428,6 +618,26 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_memory_feedback_memory_created ON memory_feedback(memory_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_project_root_migrations_project_created
             ON project_root_migrations(project_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_truth_events_project_sequence
+            ON truth_events(project_id, project_sequence);
+        CREATE INDEX IF NOT EXISTS idx_truth_events_project_stream
+            ON truth_events(project_id, stream_id, stream_version);
+        CREATE INDEX IF NOT EXISTS idx_truth_claim_versions_current
+            ON truth_claim_versions(project_id, claim_id, recorded_to_sequence, valid_from, valid_to);
+        CREATE INDEX IF NOT EXISTS idx_truth_claim_versions_lookup
+            ON truth_claim_versions(project_id, subject_key, predicate, recorded_from_sequence);
+        CREATE INDEX IF NOT EXISTS idx_truth_relations_claims
+            ON truth_relations(project_id, from_claim_id, to_claim_id, recorded_to_sequence);
+        CREATE INDEX IF NOT EXISTS idx_truth_evidence_claim
+            ON truth_evidence(project_id, claim_id, recorded_to_sequence);
+        CREATE INDEX IF NOT EXISTS idx_truth_abstentions_project_sequence
+            ON truth_abstentions(project_id, recorded_sequence DESC);
+        CREATE INDEX IF NOT EXISTS idx_truth_validators_claim
+            ON truth_validators(project_id, claim_id, status);
+        CREATE INDEX IF NOT EXISTS idx_truth_validator_results_latest
+            ON truth_validator_results(project_id, validator_id, evaluated_sequence DESC);
+        CREATE INDEX IF NOT EXISTS idx_truth_repository_anchors_commit
+            ON truth_repository_anchors(project_id, repository_commit, recorded_sequence DESC);
         """
     )
     try:
@@ -454,6 +664,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
             SELECT id, created_at, 'unverified', '{}' FROM memories
             """
         )
+        if starting_schema_version < SCHEMA_VERSION:
+            from .temporal import migrate_legacy_memories
+
+            migrate_legacy_memories(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()
     except Exception:
@@ -2026,7 +2240,7 @@ def search(
         row = conn.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()
         if not row:
             return {
-                "status": "ok", "query": query, "memories": [], "chunks": [],
+                "status": "ok", "query": query, "memories": [], "chunks": [], "truth": [],
                 "retrieval": {"mode": "fts", "provider": "none"},
             }
         project_id = int(row["id"])
@@ -2217,14 +2431,31 @@ def search(
             "mode": "hybrid", "provider": provider.name, "model": provider.model,
             "semantic_weight": semantic_weight, "candidates": len(merged),
         }
-    selected = {"memories": [item["id"] for item in memories], "chunks": [item["id"] for item in chunks]}
+    truth = []
+    truth_schema_available = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'truth_claim_versions'"
+    ).fetchone()
+    if project and truth_schema_available:
+        from .temporal import search_truth
+
+        truth = search_truth(
+            conn, query, project=project, limit=limit, _initialize=False
+        )
+    selected = {
+        "memories": [item["id"] for item in memories],
+        "chunks": [item["id"] for item in chunks],
+        "truth": [item["claim_id"] for item in truth],
+    }
     if record_recall:
         conn.execute(
             "INSERT INTO recall_logs(project_id, query, selected_json, created_at) VALUES (?, ?, ?, ?)",
             (project_id, query, json.dumps(selected), now_iso()),
         )
         conn.commit()
-    return {"status": "ok", "query": query, "memories": memories, "chunks": chunks, "retrieval": retrieval}
+    return {
+        "status": "ok", "query": query, "memories": memories,
+        "chunks": chunks, "truth": truth, "retrieval": retrieval,
+    }
 
 
 def _memory_norm(text: str) -> str:
@@ -2745,6 +2976,11 @@ def stale_check(
 def doctor(conn: sqlite3.Connection) -> dict:
     init_schema(conn)
     fts_enabled = bool(conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_fts'").fetchone())
+    from .temporal import temporal_readiness
+
+    temporal_projects = []
+    for row in conn.execute("SELECT name FROM projects ORDER BY name"):
+        temporal_projects.append(temporal_readiness(conn, project=str(row["name"])))
     return {
         "status": "ok",
         "sqlite_version": sqlite3.sqlite_version,
@@ -2752,4 +2988,16 @@ def doctor(conn: sqlite3.Connection) -> dict:
         "projects": conn.execute("SELECT COUNT(*) AS c FROM projects").fetchone()["c"],
         "memories": conn.execute("SELECT COUNT(*) AS c FROM memories").fetchone()["c"],
         "sources": conn.execute("SELECT COUNT(*) AS c FROM sources").fetchone()["c"],
+        "temporal": {
+            "truth_events": conn.execute("SELECT COUNT(*) AS c FROM truth_events").fetchone()["c"],
+            "current_claims": conn.execute(
+                "SELECT COUNT(*) AS c FROM truth_claim_versions WHERE recorded_to_sequence IS NULL"
+            ).fetchone()["c"],
+            "all_ledgers_intact": all(
+                item["ledger_intact"] for item in temporal_projects
+            ),
+            "projects_with_truth_risk": sum(
+                1 for item in temporal_projects if not item["operationally_ready"]
+            ),
+        },
     }

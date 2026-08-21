@@ -3969,3 +3969,260 @@ textarea:focus {
     position: absolute;
   }
 }
+
+.truthWorkspace {
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  background: #07111d;
+  color: #dbe8f4;
+}
+
+.truthHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px 22px 16px;
+  border-bottom: 1px solid #18283a;
+}
+
+.truthHeader h2 {
+  margin: 3px 0 2px;
+  font-size: 22px;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+.truthHeader p,
+.truthInspector p {
+  margin: 0;
+  color: #8da3b8;
+  font-size: 13px;
+}
+
+.sectionEyebrow {
+  color: #53d8c6;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.truthHeaderActions,
+.truthTabs,
+.truthDiff form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.truthHealth {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid #234456;
+  border-radius: 6px;
+  color: #92acc0;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.truthHealth.ok { color: #5eead4; border-color: #20736c; background: #092b2b; }
+.truthHealth.danger { color: #fb7185; border-color: #7f3040; background: #2d111a; }
+
+.truthMetrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border-bottom: 1px solid #18283a;
+}
+
+.truthMetrics article {
+  min-width: 0;
+  padding: 14px 18px;
+  border-right: 1px solid #18283a;
+}
+
+.truthMetrics article:last-child { border-right: 0; }
+.truthMetrics strong { display: block; font-size: 20px; color: #eef7ff; }
+.truthMetrics span { color: #8097ab; font-size: 11px; }
+.truthMetrics .warn strong { color: #fbbf24; }
+.truthMetrics .danger strong { color: #fb7185; }
+
+.truthTabs {
+  min-height: 48px;
+  padding: 7px 16px;
+  overflow-x: auto;
+  border-bottom: 1px solid #18283a;
+}
+
+.truthTabs button {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #8fa5ba;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.truthTabs button.active {
+  border-color: #28516c;
+  background: #0d2535;
+  color: #7dd3fc;
+}
+
+.truthBody {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  min-height: 480px;
+}
+
+.truthPrimary { min-width: 0; padding: 16px 20px 28px; }
+.truthInspector { padding: 18px; border-left: 1px solid #18283a; background: #081521; }
+.truthInspector h3 { margin: 12px 0 5px; font-size: 16px; overflow-wrap: anywhere; }
+.truthInspector > section { margin-top: 20px; }
+.truthInspector > section > strong { display: block; margin-bottom: 8px; font-size: 11px; text-transform: uppercase; color: #8da3b8; }
+
+.truthTimeline > article {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  min-height: 92px;
+}
+
+.timelineRail { position: relative; display: flex; justify-content: center; }
+.timelineRail::after { content: ""; position: absolute; top: 22px; bottom: -2px; width: 1px; background: #254054; }
+.truthTimeline > article:last-child .timelineRail::after { display: none; }
+.timelineRail i { position: absolute; top: 10px; width: 11px; height: 11px; border: 2px solid #38bdf8; border-radius: 50%; background: #07111d; z-index: 1; }
+.timelineRail span { margin-top: 30px; color: #668198; font-size: 10px; }
+
+.timelineCard {
+  min-width: 0;
+  margin-bottom: 10px;
+  padding: 11px 13px;
+  border: 1px solid #1b3042;
+  border-radius: 6px;
+  background: #0a1825;
+}
+
+.timelineCard header { display: flex; justify-content: space-between; gap: 12px; }
+.timelineCard header strong { color: #dff2ff; font-size: 13px; text-transform: capitalize; }
+.timelineCard time, .timelineCard footer, .timelineCard p { color: #718aa0; font-size: 10px; }
+.timelineCard p { margin: 5px 0; }
+.timelineCard code { display: block; padding: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: #07121d; color: #9dc4d9; font-size: 10px; }
+.timelineCard footer { margin-top: 7px; }
+
+.truthClaimList,
+.truthConflictList,
+.truthValidatorList,
+.truthDiffResults { display: grid; gap: 8px; }
+
+.truthClaimList > button {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 3px 12px;
+  width: 100%;
+  padding: 11px 13px;
+  text-align: left;
+  border: 1px solid #1b3042;
+  border-radius: 6px;
+  background: #0a1825;
+  color: #d9e8f5;
+}
+
+.truthClaimList > button.active { border-color: #38bdf8; background: #0b2232; }
+.truthClaimList > button strong,
+.truthClaimList > button span:not(.truthState),
+.truthClaimList > button small { grid-column: 2; overflow-wrap: anywhere; }
+.truthClaimList > button span:not(.truthState) { color: #94aabd; font-size: 12px; }
+.truthClaimList > button small { color: #668198; font-size: 10px; }
+
+.truthState,
+.validatorOutcome {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: max-content;
+  min-width: 76px;
+  min-height: 23px;
+  padding: 0 7px;
+  border: 1px solid #2a485d;
+  border-radius: 4px;
+  color: #93b2c7;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.truthState.accepted, .truthState.corroborated, .validatorOutcome.pass { color: #5eead4; border-color: #20736c; background: #092b2b; }
+.truthState.disputed, .truthState.stale, .validatorOutcome.fail { color: #fbbf24; border-color: #7a5c1e; background: #2a210c; }
+.truthState.refuted, .truthState.retracted, .validatorOutcome.error { color: #fb7185; border-color: #7f3040; background: #2d111a; }
+
+.truthConflictList article,
+.truthValidatorList article,
+.truthDiffResults article {
+  padding: 12px;
+  border: 1px solid #1b3042;
+  border-radius: 6px;
+  background: #0a1825;
+}
+
+.truthConflictList article { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 10px; color: #fbbf24; }
+.truthConflictList article div { display: flex; flex-wrap: wrap; gap: 7px; color: #d9e8f5; }
+.truthConflictList article div span { color: #fbbf24; }
+.truthConflictList small, .truthValidatorList small { color: #718aa0; font-size: 10px; }
+
+.truthValidatorList { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.truthValidatorList article { display: grid; gap: 5px; }
+.truthValidatorList article.failed { border-color: #6a4e1c; }
+.truthValidatorList article > span { color: #91a9bd; font-size: 12px; }
+
+.truthDiff form { align-items: end; flex-wrap: wrap; padding-bottom: 16px; }
+.truthDiff label { display: grid; gap: 5px; color: #7891a7; font-size: 10px; }
+.truthDiff input { width: 170px; min-height: 34px; padding: 0 9px; border: 1px solid #233b4e; border-radius: 5px; background: #07121d; color: #dcebf7; }
+.truthDiffResults article > strong { display: block; margin-bottom: 8px; }
+.truthDiffResults article > div { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 8px; margin-top: 5px; }
+.truthDiffResults span { color: #7891a7; font-size: 10px; }
+.truthDiffResults code { overflow-wrap: anywhere; color: #a8c7d9; font-size: 10px; }
+
+.truthEvidence { display: grid; gap: 3px; padding: 8px 0; border-bottom: 1px solid #172a39; }
+.truthEvidence span { color: #53d8c6; font-size: 10px; text-transform: uppercase; }
+.truthEvidence b { overflow-wrap: anywhere; font-size: 11px; }
+.truthEvidence small { color: #718aa0; font-size: 10px; }
+
+.truthEmpty {
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  min-height: 150px;
+  place-content: center;
+  padding: 20px;
+  text-align: center;
+  color: #678399;
+}
+
+.truthEmpty strong { color: #b9cede; }
+.truthEmpty span { max-width: 360px; font-size: 11px; }
+
+@media (max-width: 980px) {
+  .truthMetrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .truthMetrics article { border-bottom: 1px solid #18283a; }
+  .truthBody { grid-template-columns: minmax(0, 1fr); }
+  .truthInspector { border-top: 1px solid #18283a; border-left: 0; }
+}
+
+@media (max-width: 680px) {
+  .truthHeader { align-items: flex-start; flex-direction: column; }
+  .truthHeaderActions { width: 100%; flex-wrap: wrap; }
+  .truthMetrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .truthPrimary { padding: 12px; }
+  .truthValidatorList { grid-template-columns: minmax(0, 1fr); }
+  .truthConflictList article { grid-template-columns: 20px minmax(0, 1fr); }
+  .truthConflictList article small { grid-column: 2; }
+  .truthClaimList > button { grid-template-columns: 80px minmax(0, 1fr); }
+  .truthDiff input { width: min(100%, 260px); }
+}

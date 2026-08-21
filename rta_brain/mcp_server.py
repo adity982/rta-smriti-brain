@@ -21,6 +21,22 @@ from .db import (
 from .ingest import _lexical_root_for_candidate
 from .diagnostics import retrieval_diagnostics
 from .governance import build_operational_context, create_policy, list_policies, list_receipts, preflight, retire_policy
+from .temporal import (
+    append_claim,
+    attach_evidence,
+    change_claim_state,
+    define_validator,
+    record_abstention,
+    redact_truth_for_operator,
+    relate_claims,
+    revise_claim,
+    run_validator,
+    truth_as_of,
+    truth_current,
+    truth_diff,
+    truth_explain,
+    truth_history,
+)
 from .workspaces import get_workspace, list_workspaces, search_workspace, workspace_health
 
 
@@ -314,6 +330,179 @@ TOOLS = [
         {"project": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 500}},
     ),
     tool_schema(
+        "brain_truth_current",
+        "Read one claim from the current bitemporal truth projection.",
+        {
+            "project": {"type": "string"},
+            "claim_id": {"type": "string"},
+            "valid_at": {"type": "string"},
+        },
+        ["claim_id"],
+    ),
+    tool_schema(
+        "brain_truth_as_of",
+        "Read one claim at valid time V as known at recorded sequence R.",
+        {
+            "project": {"type": "string"},
+            "claim_id": {"type": "string"},
+            "valid_at": {"type": "string"},
+            "recorded_sequence": {"type": "integer", "minimum": 1},
+        },
+        ["claim_id", "valid_at", "recorded_sequence"],
+    ),
+    tool_schema(
+        "brain_truth_history",
+        "Read bounded recorded-time history for one truth claim.",
+        {
+            "project": {"type": "string"},
+            "claim_id": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+        },
+        ["claim_id"],
+    ),
+    tool_schema(
+        "brain_truth_diff",
+        "Compare project truth between two recorded sequences at one valid time.",
+        {
+            "project": {"type": "string"},
+            "from_sequence": {"type": "integer", "minimum": 1},
+            "to_sequence": {"type": "integer", "minimum": 1},
+            "valid_at": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+        },
+        ["from_sequence", "to_sequence", "valid_at"],
+    ),
+    tool_schema(
+        "brain_truth_explain",
+        "Explain one current claim with typed relations and provenance-bearing evidence.",
+        {
+            "project": {"type": "string"},
+            "claim_id": {"type": "string"},
+            "valid_at": {"type": "string"},
+        },
+        ["claim_id"],
+    ),
+    tool_schema(
+        "brain_truth_assert",
+        "Append an agent-authored truth assertion. Agent claims remain hypothesis or observed and cannot self-accept.",
+        {
+            "project": {"type": "string"},
+            "claim_id": {"type": "string"},
+            "subject": {"type": "string"},
+            "predicate": {"type": "string"},
+            "value": {},
+            "idempotency_key": {"type": "string"},
+            "expected_version": {"type": "integer", "minimum": 0},
+            "valid_from": {"type": "string"},
+            "valid_to": {"type": "string"},
+            "expires_at": {"type": "string"},
+            "epistemic_state": {"type": "string", "enum": ["hypothesis", "observed"], "default": "observed"},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 0.75, "default": 0.75},
+        },
+        ["subject", "predicate", "value", "idempotency_key", "expected_version"],
+    ),
+    tool_schema(
+        "brain_truth_state",
+        "Append an agent-authorized epistemic state transition. Acceptance is owner-only.",
+        {
+            "project": {"type": "string"},
+            "claim_id": {"type": "string"},
+            "state": {
+                "type": "string",
+                "enum": ["observed", "corroborated", "disputed", "stale", "refuted", "superseded", "retracted"],
+            },
+            "reason": {"type": "string"},
+            "idempotency_key": {"type": "string"},
+            "expected_version": {"type": "integer", "minimum": 1},
+        },
+        ["claim_id", "state", "reason", "idempotency_key", "expected_version"],
+    ),
+    tool_schema(
+        "brain_truth_revise",
+        "Append an agent-authored correction while preserving prior recorded belief.",
+        {
+            "project": {"type": "string"}, "claim_id": {"type": "string"},
+            "value": {}, "reason": {"type": "string"},
+            "idempotency_key": {"type": "string"},
+            "expected_version": {"type": "integer", "minimum": 1},
+            "valid_from": {"type": "string"}, "valid_to": {"type": "string"},
+        },
+        ["claim_id", "value", "reason", "idempotency_key", "expected_version"],
+    ),
+    tool_schema(
+        "brain_truth_relate",
+        "Append a typed, unresolved relation between two current claims.",
+        {
+            "project": {"type": "string"}, "relation_id": {"type": "string"},
+            "from_claim_id": {"type": "string"},
+            "relation_type": {"type": "string", "enum": [
+                "supports", "contradicts", "supersedes", "retracts", "refutes",
+                "derived_from", "alternate_of", "specialization_of"
+            ]},
+            "to_claim_id": {"type": "string"},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 0.75, "default": 0.7},
+            "idempotency_key": {"type": "string"},
+            "expected_version": {"type": "integer", "minimum": 0},
+        },
+        ["from_claim_id", "relation_type", "to_claim_id", "idempotency_key", "expected_version"],
+    ),
+    tool_schema(
+        "brain_truth_evidence",
+        "Attach unverified, provenance-bearing agent evidence to a current claim.",
+        {
+            "project": {"type": "string"}, "claim_id": {"type": "string"},
+            "evidence_id": {"type": "string"}, "source_identifier": {"type": "string"},
+            "source_hash": {"type": "string"}, "method": {"type": "string"},
+            "polarity": {"type": "string", "enum": ["supporting", "weakening", "refuting"]},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 0.75},
+            "uncertainty": {"type": "string"}, "provenance": {"type": "object"},
+            "idempotency_key": {"type": "string"},
+            "expected_version": {"type": "integer", "minimum": 0},
+        },
+        ["claim_id", "evidence_id", "source_identifier", "method", "polarity", "confidence", "provenance", "idempotency_key", "expected_version"],
+    ),
+    tool_schema(
+        "brain_truth_abstain",
+        "Record why available evidence cannot support an answer without inventing a claim.",
+        {
+            "project": {"type": "string"}, "abstention_id": {"type": "string"},
+            "query_scope": {"type": "string"},
+            "missing_evidence": {"type": "array", "maxItems": 100, "items": {"type": "string"}},
+            "unresolved_conflicts": {"type": "array", "maxItems": 100, "items": {"type": "string"}},
+            "minimum_revalidation_action": {"type": "string"},
+            "idempotency_key": {"type": "string"},
+            "expected_version": {"type": "integer", "minimum": 0},
+        },
+        ["query_scope", "missing_evidence", "unresolved_conflicts", "minimum_revalidation_action", "idempotency_key", "expected_version"],
+    ),
+    tool_schema(
+        "brain_truth_validator_define",
+        "Define a bounded deterministic validator. Agent MCP cannot define command validators.",
+        {
+            "project": {"type": "string"}, "validator_id": {"type": "string"},
+            "validator_type": {"type": "string", "enum": [
+                "file_exists", "file_sha256", "json_pointer_equals", "sqlite_integrity",
+                "git_head_equals", "git_clean_state"
+            ]},
+            "claim_id": {"type": "string"}, "config": {"type": "object"},
+            "failure_effect": {"type": "string", "enum": ["disputed", "stale", "refuted"]},
+            "idempotency_key": {"type": "string"},
+            "expected_version": {"type": "integer", "minimum": 0},
+        },
+        ["validator_id", "validator_type", "claim_id", "config", "failure_effect", "idempotency_key", "expected_version"],
+    ),
+    tool_schema(
+        "brain_truth_validator_run",
+        "Run one deterministic registered validator. Command validators remain unavailable to agents.",
+        {
+            "project": {"type": "string"},
+            "validator_id": {"type": "string"},
+            "idempotency_key": {"type": "string"},
+            "expected_version": {"type": "integer", "minimum": 1},
+        },
+        ["validator_id", "idempotency_key", "expected_version"],
+    ),
+    tool_schema(
         "brain_doctor",
         "Return Rta-Smriti brain health and count information.",
         {"project": {"type": "string", "description": "Also evaluate task continuation readiness."}},
@@ -324,6 +513,19 @@ OWNER_ONLY_GOVERNANCE_TOOLS = {"brain_policy_add", "brain_policy_retire"}
 MEMORY_WRITE_TOOLS = {"brain_remember", "brain_remember_batch", "brain_checkpoint", "brain_reflect"}
 REPO_INGESTION_TOOLS = {"brain_ingest_repo"}
 THREAD_INGESTION_TOOLS = {"brain_ingest_thread"}
+TEMPORAL_READ_TOOLS = {
+    "brain_truth_current",
+    "brain_truth_as_of",
+    "brain_truth_history",
+    "brain_truth_diff",
+    "brain_truth_explain",
+}
+TEMPORAL_WRITE_TOOLS = {
+    "brain_truth_assert", "brain_truth_state", "brain_truth_revise",
+    "brain_truth_relate", "brain_truth_evidence", "brain_truth_abstain",
+    "brain_truth_validator_define",
+}
+TEMPORAL_VALIDATOR_RUN_TOOLS = {"brain_truth_validator_run"}
 PROJECT_BOUND_READ_TOOLS = {
     "brain_search",
     "brain_context_pack",
@@ -336,6 +538,7 @@ PROJECT_BOUND_READ_TOOLS = {
     "brain_policy_list",
     "brain_preflight",
     "brain_governance_receipts",
+    *TEMPORAL_READ_TOOLS,
 }
 TOOL_BY_NAME = {tool["name"]: tool for tool in TOOLS}
 
@@ -507,6 +710,8 @@ class RtaBrainMcpServer:
         allow_memory_writes: bool = False,
         allow_repo_ingestion: bool = False,
         allow_thread_ingestion: bool = False,
+        allow_truth_writes: bool = False,
+        allow_validator_run: bool = False,
         allowed_thread_roots: tuple[Path, ...] = (),
     ):
         if (db_path is None) == (brain_dir is None):
@@ -546,7 +751,7 @@ class RtaBrainMcpServer:
         if allow_thread_ingestion and not self.allowed_thread_roots:
             raise ValueError("thread ingestion requires at least one configured thread root")
         if self.brain_dir is not None:
-            enabled = set(TOOL_BY_NAME)
+            enabled = set(TOOL_BY_NAME) - TEMPORAL_WRITE_TOOLS - TEMPORAL_VALIDATOR_RUN_TOOLS
         else:
             enabled = set(PROJECT_BOUND_READ_TOOLS)
             enabled.update({"brain_session_events", "brain_reconcile", "brain_operational_readiness", "brain_continuity_status"})
@@ -558,6 +763,12 @@ class RtaBrainMcpServer:
         if allow_thread_ingestion:
             enabled.update(THREAD_INGESTION_TOOLS)
             enabled.add("brain_ingest_codex_session")
+        if allow_truth_writes:
+            enabled.update(TEMPORAL_WRITE_TOOLS)
+        if allow_validator_run:
+            if not allow_truth_writes:
+                raise ValueError("validator execution requires truth writes to be enabled")
+            enabled.update(TEMPORAL_VALIDATOR_RUN_TOOLS)
         self.enabled_tools = frozenset(enabled)
         self.agent_tools = [
             (copy.deepcopy(TOOL_BY_NAME[name]) if self.brain_dir is not None else _agent_tool_schema(TOOL_BY_NAME[name]))
@@ -901,6 +1112,205 @@ class RtaBrainMcpServer:
         if name == "brain_governance_receipts":
             payload = list_receipts(conn, project=project, limit=int(args.get("limit", 100)))
             return text_result(json_text(payload), payload)
+        if name == "brain_truth_current":
+            payload = redact_truth_for_operator(truth_current(
+                conn,
+                project=project,
+                claim_id=str(args["claim_id"]),
+                valid_at=args.get("valid_at"),
+            ))
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_as_of":
+            payload = redact_truth_for_operator(truth_as_of(
+                conn,
+                project=project,
+                claim_id=str(args["claim_id"]),
+                valid_at=str(args["valid_at"]),
+                recorded_sequence=int(args["recorded_sequence"]),
+            ))
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_history":
+            payload = redact_truth_for_operator(truth_history(
+                conn,
+                project=project,
+                claim_id=str(args["claim_id"]),
+                limit=int(args.get("limit", 100)),
+            ))
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_diff":
+            payload = redact_truth_for_operator(truth_diff(
+                conn,
+                project=project,
+                from_sequence=int(args["from_sequence"]),
+                to_sequence=int(args["to_sequence"]),
+                valid_at=str(args["valid_at"]),
+                limit=int(args.get("limit", 100)),
+            ))
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_explain":
+            payload = redact_truth_for_operator(truth_explain(
+                conn,
+                project=project,
+                claim_id=str(args["claim_id"]),
+                valid_at=args.get("valid_at"),
+            ))
+            return text_result(json_text(payload), payload)
+        if name in TEMPORAL_WRITE_TOOLS | TEMPORAL_VALIDATOR_RUN_TOOLS:
+            if self.expected_root is None:
+                raise ValueError("temporal writes require a single-project canonical root binding")
+        if name == "brain_truth_assert":
+            selected_state = str(args.get("epistemic_state", "observed")).strip().lower()
+            if selected_state not in {"hypothesis", "observed"}:
+                raise ValueError("agent truth assertions may only be hypothesis or observed, never accepted")
+            payload = append_claim(
+                conn,
+                project=project,
+                active_root=self.expected_root,
+                claim_id=args.get("claim_id"),
+                subject=str(args["subject"]),
+                predicate=str(args["predicate"]),
+                value=args["value"],
+                idempotency_key=str(args["idempotency_key"]),
+                expected_stream_version=int(args["expected_version"]),
+                valid_from=args.get("valid_from"),
+                valid_to=args.get("valid_to"),
+                expires_at=args.get("expires_at"),
+                epistemic_state=selected_state,
+                authority_class="agent-proposal",
+                confidence=min(0.75, float(args.get("confidence", 0.75))),
+                verification_status="unverified",
+                actor_type="agent",
+                actor_id="mcp-agent",
+                source="mcp",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_state":
+            selected_state = str(args["state"]).strip().lower()
+            if selected_state == "accepted":
+                raise ValueError("accepted truth requires an owner-controlled CLI or dashboard session")
+            payload = change_claim_state(
+                conn,
+                project=project,
+                active_root=self.expected_root,
+                claim_id=str(args["claim_id"]),
+                new_state=selected_state,
+                reason=str(args["reason"]),
+                idempotency_key=str(args["idempotency_key"]),
+                expected_stream_version=int(args["expected_version"]),
+                actor_type="agent",
+                actor_id="mcp-agent",
+                source="mcp",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_revise":
+            payload = revise_claim(
+                conn,
+                project=project,
+                active_root=self.expected_root,
+                claim_id=str(args["claim_id"]),
+                value=args["value"],
+                reason=str(args["reason"]),
+                idempotency_key=str(args["idempotency_key"]),
+                expected_stream_version=int(args["expected_version"]),
+                valid_from=args.get("valid_from"),
+                valid_to=args.get("valid_to"),
+                actor_type="agent",
+                actor_id="mcp-agent",
+                source="mcp",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_relate":
+            payload = relate_claims(
+                conn,
+                project=project,
+                active_root=self.expected_root,
+                relation_id=args.get("relation_id"),
+                from_claim_id=str(args["from_claim_id"]),
+                relation_type=str(args["relation_type"]),
+                to_claim_id=str(args["to_claim_id"]),
+                confidence=min(0.75, float(args.get("confidence", 0.7))),
+                idempotency_key=str(args["idempotency_key"]),
+                expected_stream_version=int(args["expected_version"]),
+                actor_type="agent",
+                actor_id="mcp-agent",
+                source="mcp",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_evidence":
+            payload = attach_evidence(
+                conn,
+                project=project,
+                active_root=self.expected_root,
+                claim_id=str(args["claim_id"]),
+                evidence_id=str(args["evidence_id"]),
+                source_identifier=str(args["source_identifier"]),
+                source_hash=args.get("source_hash"),
+                method=str(args["method"]),
+                polarity=str(args["polarity"]),
+                authority_class="agent-observation",
+                confidence=min(0.75, float(args["confidence"])),
+                uncertainty=str(args.get("uncertainty", "")),
+                provenance=dict(args["provenance"]),
+                idempotency_key=str(args["idempotency_key"]),
+                expected_stream_version=int(args["expected_version"]),
+                verification_status="unverified",
+                actor_type="agent",
+                actor_id="mcp-agent",
+                source="mcp",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_abstain":
+            payload = record_abstention(
+                conn,
+                project=project,
+                active_root=self.expected_root,
+                abstention_id=args.get("abstention_id"),
+                query_scope=str(args["query_scope"]),
+                missing_evidence=list(args["missing_evidence"]),
+                unresolved_conflicts=list(args["unresolved_conflicts"]),
+                minimum_revalidation_action=str(args["minimum_revalidation_action"]),
+                idempotency_key=str(args["idempotency_key"]),
+                expected_stream_version=int(args["expected_version"]),
+                actor_type="agent",
+                actor_id="mcp-agent",
+                source="mcp",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_validator_define":
+            selected_type = str(args["validator_type"]).strip().lower()
+            if selected_type == "command_exit":
+                raise ValueError("agents cannot define command validators")
+            payload = define_validator(
+                conn,
+                project=project,
+                active_root=self.expected_root,
+                validator_id=str(args["validator_id"]),
+                validator_type=selected_type,
+                claim_id=str(args["claim_id"]),
+                config=dict(args["config"]),
+                failure_effect=str(args["failure_effect"]),
+                idempotency_key=str(args["idempotency_key"]),
+                expected_stream_version=int(args["expected_version"]),
+                actor_type="agent",
+                actor_id="mcp-agent",
+                source="mcp",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_validator_run":
+            payload = run_validator(
+                conn,
+                project=project,
+                active_root=self.expected_root,
+                validator_id=str(args["validator_id"]),
+                idempotency_key=str(args["idempotency_key"]),
+                expected_stream_version=int(args["expected_version"]),
+                allow_command=False,
+                trusted_executables=(),
+                actor_type="agent",
+                actor_id="mcp-agent",
+                source="mcp",
+            )
+            return text_result(json_text(payload), payload)
         if name == "brain_doctor":
             payload = doctor(conn)
             if project:
@@ -984,6 +1394,8 @@ MUTATING_TOOLS = {
     "brain_work_item",
     "brain_continuity_control",
     "brain_reflect",
+    *TEMPORAL_WRITE_TOOLS,
+    *TEMPORAL_VALIDATOR_RUN_TOOLS,
 }
 
 
@@ -1077,6 +1489,8 @@ async def serve_stdio_async(
     allow_memory_writes: bool = False,
     allow_repo_ingestion: bool = False,
     allow_thread_ingestion: bool = False,
+    allow_truth_writes: bool = False,
+    allow_validator_run: bool = False,
     allowed_thread_roots: tuple[Path, ...] = (),
 ) -> int:
     server = RtaBrainMcpServer(
@@ -1087,6 +1501,8 @@ async def serve_stdio_async(
         allow_memory_writes=allow_memory_writes,
         allow_repo_ingestion=allow_repo_ingestion,
         allow_thread_ingestion=allow_thread_ingestion,
+        allow_truth_writes=allow_truth_writes,
+        allow_validator_run=allow_validator_run,
         allowed_thread_roots=allowed_thread_roots,
     )
     stream = sys.stdin.buffer
@@ -1135,6 +1551,8 @@ def serve_stdio(
     allow_memory_writes: bool = False,
     allow_repo_ingestion: bool = False,
     allow_thread_ingestion: bool = False,
+    allow_truth_writes: bool = False,
+    allow_validator_run: bool = False,
     allowed_thread_roots: tuple[Path, ...] = (),
 ) -> int:
     return asyncio.run(serve_stdio_async(
@@ -1145,6 +1563,8 @@ def serve_stdio(
         allow_memory_writes=allow_memory_writes,
         allow_repo_ingestion=allow_repo_ingestion,
         allow_thread_ingestion=allow_thread_ingestion,
+        allow_truth_writes=allow_truth_writes,
+        allow_validator_run=allow_validator_run,
         allowed_thread_roots=allowed_thread_roots,
     ))
 
@@ -1172,16 +1592,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-thread-root", action="append", default=[], metavar="PATH",
         help="Canonical directory allowed for thread ingestion; may be repeated",
     )
+    parser.add_argument(
+        "--allow-truth-writes", action="store_true",
+        help="Allow agent-authored hypothesis/observed temporal truth events (disabled by default)",
+    )
+    parser.add_argument(
+        "--allow-validator-run", action="store_true",
+        help="Allow deterministic non-command truth validators; requires --allow-truth-writes",
+    )
     return parser
 
 
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.brain_dir and (args.root or args.allow_memory_writes or args.allow_repo_ingestion or args.allow_thread_ingestion or args.allow_thread_root):
+    if args.brain_dir and (
+        args.root or args.allow_memory_writes or args.allow_repo_ingestion
+        or args.allow_thread_ingestion or args.allow_thread_root
+        or args.allow_truth_writes or args.allow_validator_run
+    ):
         parser.error("root and capability flags are only valid with --db single-project mode")
     if args.allow_thread_ingestion and not args.allow_thread_root:
         parser.error("--allow-thread-ingestion requires at least one --allow-thread-root")
+    if args.allow_validator_run and not args.allow_truth_writes:
+        parser.error("--allow-validator-run requires --allow-truth-writes")
     return serve_stdio(
         Path(args.db) if args.db else None,
         args.project,
@@ -1190,6 +1624,8 @@ def main(argv=None) -> int:
         allow_memory_writes=args.allow_memory_writes,
         allow_repo_ingestion=args.allow_repo_ingestion,
         allow_thread_ingestion=args.allow_thread_ingestion,
+        allow_truth_writes=args.allow_truth_writes,
+        allow_validator_run=args.allow_validator_run,
         allowed_thread_roots=tuple(Path(root) for root in args.allow_thread_root),
     )
 

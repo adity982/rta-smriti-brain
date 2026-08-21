@@ -40,6 +40,13 @@ from .workspaces import (
 )
 from .continuity_daemon import continuity_status, start_continuity, stop_continuity
 from .continuity import operational_readiness
+from .temporal import (
+    append_claim, attach_evidence, change_claim_state, define_validator,
+    observe_repository_anchor, rebuild_projections, record_abstention,
+    relate_claims, revise_claim, run_validator, truth_as_of, truth_at_commit,
+    truth_current, truth_diff, truth_explain, truth_history, truth_overview,
+    redact_truth_for_operator, validator_history, verify_ledger,
+)
 
 
 @dataclass(frozen=True)
@@ -92,6 +99,15 @@ def _row_count(conn: sqlite3.Connection, table: str, project_id: int | None = No
 
 def _open_db(db_path: str | Path) -> sqlite3.Connection:
     return connect(Path(db_path).expanduser().resolve())
+
+
+def _project_root(conn: sqlite3.Connection, project: str) -> Path:
+    row = conn.execute(
+        "SELECT root_path FROM projects WHERE name = ?", (str(project).strip(),)
+    ).fetchone()
+    if not row or not row["root_path"]:
+        raise ValueError("temporal truth mutation requires a canonical project root")
+    return Path(str(row["root_path"])).expanduser().resolve()
 
 
 def scan_brain_databases(brain_dir: Path) -> list[dict]:
@@ -819,6 +835,64 @@ def make_handler(config: ConsoleConfig):
                     finally:
                         conn.close()
                     return
+                if parsed.path == "/api/truth":
+                    q = _query(self)
+                    conn = _open_db(resolve_brain_db(config, q["db_path"]))
+                    try:
+                        mode = q.get("mode", "overview")
+                        if mode == "overview":
+                            result = truth_overview(
+                                conn, project=q["project"],
+                                limit=int(q.get("limit", "100")),
+                            )
+                        elif mode == "current":
+                            result = truth_current(
+                                conn, project=q["project"], claim_id=q["claim_id"],
+                                valid_at=q.get("valid_at"),
+                            )
+                        elif mode == "history":
+                            result = truth_history(
+                                conn, project=q["project"], claim_id=q["claim_id"],
+                                limit=int(q.get("limit", "100")),
+                            )
+                        elif mode == "explain":
+                            result = truth_explain(
+                                conn, project=q["project"], claim_id=q["claim_id"],
+                                valid_at=q.get("valid_at"),
+                            )
+                        elif mode == "as-of":
+                            result = truth_as_of(
+                                conn, project=q["project"], claim_id=q["claim_id"],
+                                valid_at=q["valid_at"],
+                                recorded_sequence=int(q["recorded_sequence"]),
+                            )
+                        elif mode == "diff":
+                            result = truth_diff(
+                                conn, project=q["project"],
+                                from_sequence=int(q["from_sequence"]),
+                                to_sequence=int(q["to_sequence"]),
+                                valid_at=q["valid_at"],
+                                limit=int(q.get("limit", "100")),
+                            )
+                        elif mode == "at-commit":
+                            result = truth_at_commit(
+                                conn, project=q["project"], claim_id=q["claim_id"],
+                                commit=q["commit"], valid_at=q["valid_at"],
+                            )
+                        elif mode == "validator-history":
+                            result = validator_history(
+                                conn, project=q["project"],
+                                validator_id=q["validator_id"],
+                                limit=int(q.get("limit", "100")),
+                            )
+                        elif mode == "ledger":
+                            result = verify_ledger(conn, project=q["project"])
+                        else:
+                            raise ValueError(f"unsupported truth query mode: {mode}")
+                        self._json(redact_truth_for_operator(result))
+                    finally:
+                        conn.close()
+                    return
                 if parsed.path == "/api/publish-readiness":
                     self._json(publish_readiness(config.tool_root))
                     return
@@ -867,6 +941,131 @@ def make_handler(config: ConsoleConfig):
                     conn = _open_db(resolve_brain_db(config, payload["db_path"]))
                     try:
                         self._json(search(conn, payload["query"], project=payload.get("project"), limit=int(payload.get("limit", 8))))
+                    finally:
+                        conn.close()
+                    return
+                if self.path == "/api/truth":
+                    conn = _open_db(resolve_brain_db(config, payload["db_path"]))
+                    try:
+                        project = str(payload["project"])
+                        root = _project_root(conn, project)
+                        action = str(payload["action"])
+                        common = {
+                            "project": project,
+                            "active_root": root,
+                            "actor_type": "operator",
+                            "actor_id": "dashboard-operator",
+                            "source": "dashboard",
+                        }
+                        if action == "assert":
+                            result = append_claim(
+                                conn, **common,
+                                claim_id=payload.get("claim_id"),
+                                subject=str(payload["subject"]),
+                                predicate=str(payload["predicate"]),
+                                value=payload["value"],
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                                valid_from=payload.get("valid_from"),
+                                valid_to=payload.get("valid_to"),
+                                expires_at=payload.get("expires_at"),
+                                epistemic_state=str(payload.get("state", "observed")),
+                                state_reason=str(payload.get("reason", "")),
+                                authority_class="operator",
+                                confidence=float(payload.get("confidence", 1.0)),
+                                verification_status=str(payload.get("verification_status", "unverified")),
+                                privacy_class=str(payload.get("privacy_class", "internal")),
+                            )
+                        elif action == "revise":
+                            result = revise_claim(
+                                conn, **common, claim_id=str(payload["claim_id"]),
+                                value=payload["value"], reason=str(payload["reason"]),
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                                valid_from=payload.get("valid_from"),
+                                valid_to=payload.get("valid_to"),
+                            )
+                        elif action == "state":
+                            result = change_claim_state(
+                                conn, **common, claim_id=str(payload["claim_id"]),
+                                new_state=str(payload["state"]), reason=str(payload["reason"]),
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                            )
+                        elif action == "relate":
+                            result = relate_claims(
+                                conn, **common, relation_id=payload.get("relation_id"),
+                                from_claim_id=str(payload["from_claim_id"]),
+                                relation_type=str(payload["relation_type"]),
+                                to_claim_id=str(payload["to_claim_id"]),
+                                confidence=float(payload.get("confidence", 0.7)),
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                            )
+                        elif action == "evidence":
+                            provenance = payload.get("provenance", {})
+                            if not isinstance(provenance, dict):
+                                raise ValueError("truth evidence provenance must be an object")
+                            result = attach_evidence(
+                                conn, **common, claim_id=str(payload["claim_id"]),
+                                evidence_id=str(payload["evidence_id"]),
+                                source_identifier=str(payload["source_identifier"]),
+                                source_hash=payload.get("source_hash"),
+                                method=str(payload["method"]),
+                                polarity=str(payload["polarity"]),
+                                authority_class="operator",
+                                confidence=float(payload.get("confidence", 1.0)),
+                                uncertainty=str(payload.get("uncertainty", "")),
+                                provenance=provenance,
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                                verification_status=str(payload.get("verification_status", "unverified")),
+                                privacy_class=str(payload.get("privacy_class", "internal")),
+                            )
+                        elif action == "abstain":
+                            result = record_abstention(
+                                conn, **common, abstention_id=payload.get("abstention_id"),
+                                query_scope=str(payload["query_scope"]),
+                                missing_evidence=list(payload.get("missing_evidence", [])),
+                                unresolved_conflicts=list(payload.get("unresolved_conflicts", [])),
+                                minimum_revalidation_action=str(payload["minimum_revalidation_action"]),
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                            )
+                        elif action == "validator-add":
+                            validator_type = str(payload["validator_type"])
+                            if validator_type == "command_exit":
+                                raise ValueError("command validators must be defined and run from the owner CLI")
+                            config_payload = payload.get("config", {})
+                            if not isinstance(config_payload, dict):
+                                raise ValueError("validator config must be an object")
+                            result = define_validator(
+                                conn, **common, validator_id=str(payload["validator_id"]),
+                                validator_type=validator_type, claim_id=str(payload["claim_id"]),
+                                config=config_payload, failure_effect=str(payload["failure_effect"]),
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                            )
+                        elif action == "validator-run":
+                            result = run_validator(
+                                conn, **common, validator_id=str(payload["validator_id"]),
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                                allow_command=False, trusted_executables=(),
+                            )
+                        elif action == "anchor":
+                            result = observe_repository_anchor(
+                                conn, **common, anchor_id=str(payload["anchor_id"]),
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                            )
+                        elif action == "rebuild":
+                            result = rebuild_projections(
+                                conn, project=project, active_root=root,
+                            )
+                        else:
+                            raise ValueError(f"unsupported truth action: {action}")
+                        self._json(redact_truth_for_operator(result))
                     finally:
                         conn.close()
                     return

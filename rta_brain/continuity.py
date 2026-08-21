@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .db import ensure_project, integrity_diagnostics, latest_checkpoint, now_iso
+from .temporal import temporal_readiness
 
 
 MAX_EVENT_BYTES = 256_000
@@ -504,6 +505,7 @@ def operational_readiness(
     checkpoint = latest_checkpoint(conn, project)
     reconciliation = reconcile_work_items(conn, project)
     integrity = integrity_diagnostics(conn, project=project, active_root=active_root)
+    temporal = temporal_readiness(conn, project=project)
     event_count = (
         int(conn.execute("SELECT COUNT(*) AS c FROM session_events WHERE project_id = ?", (project_id,)).fetchone()["c"])
         if include_event_count else None
@@ -522,6 +524,14 @@ def operational_readiness(
         reasons.append("work_state_conflicts")
     if not integrity["operationally_ready"]:
         reasons.append("project_integrity")
+    if not temporal["ledger_intact"]:
+        reasons.append("truth_ledger_integrity")
+    if temporal["high_impact_contradiction_count"]:
+        reasons.append("truth_contradictions")
+    if temporal["failed_critical_validator_count"]:
+        reasons.append("truth_validator_failures")
+    if temporal["expired_accepted_claim_count"]:
+        reasons.append("truth_expired_accepted_claims")
     if lifecycle is not None:
         if lifecycle.get("state") != "running":
             reasons.append("continuity_not_running")
@@ -541,5 +551,6 @@ def operational_readiness(
         "event_count": event_count,
         "work_state_conflicts": reconciliation["conflicts"],
         "integrity": integrity,
+        "temporal_truth": temporal,
         "continuity": lifecycle,
     }

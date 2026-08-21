@@ -445,6 +445,10 @@ function App() {
   const [isGovernanceBusy, setIsGovernanceBusy] = useState(false);
   const [intelligence, setIntelligence] = useState({ diagnostics: null, graph: null, workspaces: [] });
   const [isIntelligenceBusy, setIsIntelligenceBusy] = useState(false);
+  const [truthData, setTruthData] = useState({ claims: [], events: [], contradictions: [], validators: [], abstentions: [], counts: {} });
+  const [truthDetail, setTruthDetail] = useState(null);
+  const [truthDiff, setTruthDiff] = useState(null);
+  const [isTruthBusy, setIsTruthBusy] = useState(false);
 
   const selectedParams = useMemo(() => {
     if (!selectedProject) return null;
@@ -550,6 +554,7 @@ function App() {
       watcherPayload,
       governancePayload,
       continuityPayload,
+      truthPayload,
     ] = await Promise.all([
       api(`/api/memories?${qs({ ...params, limit: 40 })}`),
       api(`/api/graph?${qs({ ...params, limit: 120 })}`),
@@ -559,6 +564,7 @@ function App() {
       api(`/api/watcher?${qs(params)}`),
       api(`/api/governance?${qs({ ...params, limit: 50 })}`),
       api(`/api/continuity?${qs(params)}`),
+      api(`/api/truth?${qs({ ...params, mode: "overview", limit: 120 })}`),
     ]);
     if (requestId !== projectRequestRef.current) return;
     setMemories(memoryPayload.memories || []);
@@ -573,6 +579,9 @@ function App() {
       setGovernance({ policies: governancePayload.policies || [], receipts: governancePayload.receipts || [] });
     }
     setContinuity(continuityPayload);
+    setTruthData(truthPayload);
+    setTruthDetail(null);
+    setTruthDiff(null);
     setSelectedNode(null);
     setReferenceHistory([]);
   }
@@ -1035,6 +1044,72 @@ function App() {
     }
   }
 
+  async function loadTruth(project = selectedProject, { silent = false } = {}) {
+    if (!project) return null;
+    if (!silent) setIsTruthBusy(true);
+    try {
+      const payload = await api(`/api/truth?${qs({
+        db_path: project.db_path, project: project.project, mode: "overview", limit: 120,
+      })}`);
+      setTruthData(payload);
+      return payload;
+    } catch (error) {
+      setMessage(`Temporal truth could not load: ${error.message}`);
+      return null;
+    } finally {
+      if (!silent) setIsTruthBusy(false);
+    }
+  }
+
+  async function inspectTruthClaim(claimId) {
+    if (!selectedProject || !claimId) return;
+    setIsTruthBusy(true);
+    try {
+      const payload = await api(`/api/truth?${qs({
+        ...selectedParams, mode: "explain", claim_id: claimId,
+      })}`);
+      setTruthDetail(payload);
+    } catch (error) {
+      setMessage(`Claim evidence could not load: ${error.message}`);
+    } finally {
+      setIsTruthBusy(false);
+    }
+  }
+
+  async function compareTruth(fromSequence, toSequence, validAt) {
+    if (!selectedProject) return;
+    setIsTruthBusy(true);
+    try {
+      const payload = await api(`/api/truth?${qs({
+        ...selectedParams, mode: "diff", from_sequence: fromSequence,
+        to_sequence: toSequence, valid_at: validAt, limit: 200,
+      })}`);
+      setTruthDiff(payload);
+      setMessage(`${payload.changes?.length || 0} truth changes found between sequences ${fromSequence} and ${toSequence}.`);
+    } catch (error) {
+      setMessage(`Truth diff failed: ${error.message}`);
+    } finally {
+      setIsTruthBusy(false);
+    }
+  }
+
+  async function rebuildTruth() {
+    if (!selectedProject || isTruthBusy) return;
+    setIsTruthBusy(true);
+    try {
+      const payload = await api("/api/truth", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, action: "rebuild" }),
+      });
+      await loadTruth(selectedProject, { silent: true });
+      setMessage(`Temporal projections rebuilt from ${payload.events_replayed} verified events.`);
+    } catch (error) {
+      setMessage(`Projection rebuild failed: ${error.message}`);
+    } finally {
+      setIsTruthBusy(false);
+    }
+  }
+
   async function removeWorkspaceMember(values) {
     if (!selectedParams) return null;
     setIsIntelligenceBusy(true);
@@ -1197,6 +1272,14 @@ function App() {
     loadFiles(fileTree.prefix || "", fileTree.query || "");
   }
 
+  function showTruth() {
+    setViewMode("truth");
+    setSemanticFocus(null);
+    setNavContext("truth");
+    setSettingsOpen(false);
+    loadTruth();
+  }
+
   function showBase(table, kind = "", context = "bases") {
     setViewMode("bases");
     setSemanticFocus(null);
@@ -1223,7 +1306,7 @@ function App() {
           </div>
           <div>
             <h1>Rta-Smriti Brain</h1>
-            <span>v0.6.1 Alpha Operator Console</span>
+            <span>v0.7 Development Operator Console</span>
           </div>
         </div>
         <div className="topStatus">
@@ -1310,6 +1393,7 @@ function App() {
               <button title="Scan indexed dependencies" aria-current={navContext === "imports" ? "page" : undefined} className={navContext === "imports" ? "active" : ""} onClick={() => showBase("files", "import", "imports")}><GitBranch size={17} /><span>Imports</span></button>
               <button title="Review durable project knowledge" aria-current={navContext === "memories" ? "page" : undefined} className={navContext === "memories" ? "active" : ""} onClick={() => showBase("memory", "", "memories")}><MemoryStick size={17} /><span>Memories</span></button>
               <button title="Inspect evidence and freshness" aria-current={navContext === "evidence" ? "page" : undefined} className={navContext === "evidence" ? "active" : ""} onClick={() => { focusSemanticHub("evidence"); showDrawer("evidence"); }}><ShieldCheck size={17} /><span>Evidence</span></button>
+              <button title="Inspect event-sourced project truth" aria-current={navContext === "truth" ? "page" : undefined} className={navContext === "truth" ? "active" : ""} onClick={showTruth}><Activity size={17} /><span>Truth Timeline</span><em>{truthData.counts?.events || 0}</em></button>
             </div>
             <div className="navGroup">
               <span className="navGroupLabel">Tools</span>
@@ -1340,28 +1424,33 @@ function App() {
               <button aria-pressed={viewMode === "graph"} className={viewMode === "graph" ? "active" : ""} onClick={() => showWorkspace("graph")}><GitBranch size={15} /> Graph</button>
               <button aria-pressed={viewMode === "canvas"} className={viewMode === "canvas" ? "active" : ""} onClick={() => showWorkspace("canvas")}><MapIcon size={15} /> Canvas</button>
               <button aria-pressed={viewMode === "bases"} className={viewMode === "bases" ? "active" : ""} onClick={() => showBase("memory", "", "bases")}><Table2 size={15} /> Bases</button>
+              <button aria-pressed={viewMode === "truth"} className={viewMode === "truth" ? "active" : ""} onClick={showTruth}><Activity size={15} /> Truth</button>
             </div>
-            <div className="modeGroup" aria-label="Graph scope">
-              {graphModes.map((mode) => (
-                <button key={mode} aria-pressed={graphMode === mode} className={graphMode === mode ? "active" : ""} onClick={() => setGraphMode(mode)}>{mode}</button>
-              ))}
-            </div>
-            <button className={searchOpen ? "toolButton active" : "toolButton"} onClick={() => setSearchOpen((value) => !value)} aria-label="Search" aria-pressed={searchOpen} title="Search">
-              <Search size={16} /> <span className="toolText">Search</span>
-            </button>
-            <button className={typesOpen ? "toolButton active" : "toolButton"} onClick={() => setTypesOpen((value) => !value)} aria-label="Types" aria-pressed={typesOpen} title="Types">
-              <Layers3 size={16} /> <span className="toolText">Types</span>
-            </button>
-            <button className={settingsOpen ? "toolButton active" : "toolButton"} onClick={() => setSettingsOpen((value) => { const next = !value; setNavContext(next ? "settings" : viewMode); return next; })} aria-label="Settings" aria-pressed={settingsOpen} title="Graph settings">
-              <SlidersHorizontal size={16} /> <span className="toolText">Settings</span>
-            </button>
-            <button className="toolButton iconOnly" onClick={() => exportView(`${selectedProject?.project || "rta-smriti"}-${viewMode}.json`, { project: selectedProject?.project, task, view: viewMode, graph: visibleGraph })} aria-label="Export current view" title="Export current view">
-              <Download size={16} />
-            </button>
-            <button className={inspectorOpen ? "toolButton active" : "toolButton"} onClick={() => setInspectorOpen((value) => !value)} aria-label={inspectorOpen ? "Close detail panel" : "Open detail panel"} title={inspectorOpen ? "Close detail panel" : "Open detail panel"}>
-              <PanelRightOpen size={16} />
-            </button>
-            <button className="toolButton" onClick={() => setStageExpanded((value) => !value)} aria-label={stageExpanded ? "Exit expanded graph" : "Expand graph"}>
+            {viewMode !== "truth" && (
+              <>
+                <div className="modeGroup" aria-label="Graph scope">
+                  {graphModes.map((mode) => (
+                    <button key={mode} aria-pressed={graphMode === mode} className={graphMode === mode ? "active" : ""} onClick={() => setGraphMode(mode)}>{mode}</button>
+                  ))}
+                </div>
+                <button className={searchOpen ? "toolButton active" : "toolButton"} onClick={() => setSearchOpen((value) => !value)} aria-label="Search" aria-pressed={searchOpen} title="Search">
+                  <Search size={16} /> <span className="toolText">Search</span>
+                </button>
+                <button className={typesOpen ? "toolButton active" : "toolButton"} onClick={() => setTypesOpen((value) => !value)} aria-label="Types" aria-pressed={typesOpen} title="Types">
+                  <Layers3 size={16} /> <span className="toolText">Types</span>
+                </button>
+                <button className={settingsOpen ? "toolButton active" : "toolButton"} onClick={() => setSettingsOpen((value) => { const next = !value; setNavContext(next ? "settings" : viewMode); return next; })} aria-label="Settings" aria-pressed={settingsOpen} title="Graph settings">
+                  <SlidersHorizontal size={16} /> <span className="toolText">Settings</span>
+                </button>
+                <button className="toolButton iconOnly" onClick={() => exportView(`${selectedProject?.project || "rta-smriti"}-${viewMode}.json`, { project: selectedProject?.project, task, view: viewMode, graph: visibleGraph })} aria-label="Export current view" title="Export current view">
+                  <Download size={16} />
+                </button>
+                <button className={inspectorOpen ? "toolButton active" : "toolButton"} onClick={() => setInspectorOpen((value) => !value)} aria-label={inspectorOpen ? "Close detail panel" : "Open detail panel"} title={inspectorOpen ? "Close detail panel" : "Open detail panel"}>
+                  <PanelRightOpen size={16} />
+                </button>
+              </>
+            )}
+            <button className="toolButton" onClick={() => setStageExpanded((value) => !value)} aria-label={stageExpanded ? "Exit expanded workspace" : "Expand workspace"}>
               <Maximize2 size={16} />
             </button>
             {(selectedProject?.root_conflict || selectedProject?.root_duplicate || selectedProject?.integrity?.operationally_ready === false) && (
@@ -1376,7 +1465,7 @@ function App() {
             )}
           </div>
 
-          <div className={searchOpen || typesOpen || settingsOpen ? "graphFilters" : "graphFilters collapsed"}>
+          {viewMode !== "truth" && <div className={searchOpen || typesOpen || settingsOpen ? "graphFilters" : "graphFilters collapsed"}>
               {searchOpen && (
                 <label className="nodeSearch" id="graph-search-controls">
                   <Search size={15} />
@@ -1416,7 +1505,7 @@ function App() {
                   isChangingContinuity={isChangingContinuity}
                 />
               )}
-            </div>
+            </div>}
 
           {viewMode === "graph" && <GraphCanvas graph={visibleGraph} selectedNode={selectedNode} onSelect={selectPrimaryNode} query={nodeQuery} showLabels={showLabels} showEdges={showEdges} />}
           {viewMode === "files" && (
@@ -1435,6 +1524,18 @@ function App() {
           )}
           {viewMode === "canvas" && <CanvasBoard project={selectedProject} graph={visibleGraph} onSelect={(node) => selectPrimaryNode(node, "evidence")} onKeyboardInspect={inspectCanvasNodeFromKeyboard} onExport={exportView} />}
           {viewMode === "bases" && <BasesView memories={memories} graph={computedGraph} publish={publish} onSelect={(node) => selectPrimaryNode(node, "evidence")} initialTable={baseScope.table} kindFilter={baseScope.kind} />}
+          {viewMode === "truth" && (
+            <TemporalTruthWorkspace
+              data={truthData}
+              detail={truthDetail}
+              diff={truthDiff}
+              busy={isTruthBusy}
+              onRefresh={() => loadTruth()}
+              onInspect={inspectTruthClaim}
+              onCompare={compareTruth}
+              onRebuild={rebuildTruth}
+            />
+          )}
 
           <TaskComposer
             task={task}
@@ -1731,6 +1832,162 @@ function GraphSettings({
     </div>
   );
 }
+
+function TemporalTruthWorkspace({ data, detail, diff, busy, onRefresh, onInspect, onCompare, onRebuild }) {
+  const [tab, setTab] = useState("timeline");
+  const maxSequence = Math.max(1, ...(data.events || []).map((event) => Number(event.project_sequence || 0)));
+  const [fromSequence, setFromSequence] = useState(Math.max(1, maxSequence - 1));
+  const [toSequence, setToSequence] = useState(maxSequence);
+  const [validAt, setValidAt] = useState(() => new Date().toISOString());
+
+  useEffect(() => {
+    setFromSequence(Math.max(1, maxSequence - 1));
+    setToSequence(maxSequence);
+  }, [maxSequence]);
+
+  const readiness = data.readiness || {};
+  const counts = data.counts || {};
+  const selectedClaim = detail?.claim;
+  const objectText = (value) => {
+    const encoded = JSON.stringify(value) ?? "null";
+    return encoded.length > 180 ? `${encoded.slice(0, 177)}...` : encoded;
+  };
+
+  return (
+    <section className="truthWorkspace" aria-label="Temporal truth workspace">
+      <header className="truthHeader">
+        <div>
+          <span className="sectionEyebrow">Selective event sourcing</span>
+          <h2>Temporal Truth</h2>
+          <p>What the project claimed, when it applied, and when the brain learned it.</p>
+        </div>
+        <div className="truthHeaderActions">
+          <span className={readiness.ledger_intact ? "truthHealth ok" : "truthHealth danger"}>
+            {readiness.ledger_intact ? <ShieldCheck size={15} /> : <ShieldAlert size={15} />}
+            {readiness.ledger_intact ? "Ledger intact" : "Ledger failed"}
+          </span>
+          <button className="iconButton" onClick={onRefresh} disabled={busy} title="Refresh temporal truth" aria-label="Refresh temporal truth"><RefreshCw size={16} /></button>
+          <button className="secondaryButton" onClick={onRebuild} disabled={busy || !readiness.ledger_intact}><RotateCcw size={15} /> Rebuild projections</button>
+        </div>
+      </header>
+
+      <div className="truthMetrics" aria-label="Temporal truth counts">
+        <article><strong>{safeNumber(counts.events)}</strong><span>Immutable events</span></article>
+        <article><strong>{safeNumber(counts.current_claims)}</strong><span>Current claims</span></article>
+        <article className={counts.contradictions ? "warn" : ""}><strong>{safeNumber(counts.contradictions)}</strong><span>Contradictions</span></article>
+        <article className={counts.failed_validators ? "danger" : ""}><strong>{safeNumber(counts.failed_validators)}</strong><span>Failed validators</span></article>
+        <article><strong>{safeNumber(counts.abstentions)}</strong><span>Abstentions</span></article>
+      </div>
+
+      <div className="truthTabs" role="tablist" aria-label="Temporal truth views">
+        {["timeline", "claims", "conflicts", "validators", "diff"].map((item) => (
+          <button key={item} role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>
+            {item === "conflicts" ? "Contradictions" : item === "validators" ? "Validator Health" : item[0].toUpperCase() + item.slice(1)}
+          </button>
+        ))}
+      </div>
+
+      <div className="truthBody">
+        <div className="truthPrimary">
+          {tab === "timeline" && (
+            <div className="truthTimeline" role="tabpanel">
+              {(data.events || []).map((event) => (
+                <article key={event.event_id}>
+                  <div className="timelineRail"><i /><span>{event.project_sequence}</span></div>
+                  <div className="timelineCard">
+                    <header><strong>{String(event.event_type).replace(/\.v\d+$/, "").replaceAll("_", " ")}</strong><time>{new Date(event.recorded_at).toLocaleString()}</time></header>
+                    <p>{event.stream_id} / v{event.stream_version}</p>
+                    <code>{objectText(event.payload_summary || {})}</code>
+                    <footer>{event.actor_type}:{event.actor_id} / {event.source} / {event.verification_status}</footer>
+                  </div>
+                </article>
+              ))}
+              {!data.events?.length && <div className="truthEmpty"><Activity size={24} /><strong>No temporal events yet</strong><span>Create the first consequential claim through the CLI or operator API.</span></div>}
+            </div>
+          )}
+
+          {tab === "claims" && (
+            <div className="truthClaimList" role="tabpanel">
+              {(data.claims || []).map((claim) => (
+                <button key={claim.claim_id} onClick={() => onInspect(claim.claim_id)} className={selectedClaim?.claim_id === claim.claim_id ? "active" : ""}>
+                  <span className={`truthState ${claim.effective_state}`}>{claim.effective_state}</span>
+                  <strong>{claim.redacted ? `${String(claim.privacy_class || "private").replace(/^./, (letter) => letter.toUpperCase())} claim` : claim.subject}</strong>
+                  <span>{claim.redacted ? "Value hidden by privacy policy" : `${claim.predicate} = ${objectText(claim.object)}`}</span>
+                  <small>Recorded from sequence {claim.recorded_from_sequence}</small>
+                </button>
+              ))}
+              {!data.claims?.length && <div className="truthEmpty"><Database size={24} /><strong>No current claims</strong><span>The legacy memory index remains available while temporal truth starts empty.</span></div>}
+            </div>
+          )}
+
+          {tab === "conflicts" && (
+            <div className="truthConflictList" role="tabpanel">
+              {(data.contradictions || []).map((item) => (
+                <article key={item.relation_id}>
+                  <ShieldAlert size={18} />
+                  <div><strong>{item.from_claim_id}</strong><span>contradicts</span><strong>{item.to_claim_id}</strong></div>
+                  <small>{item.authority_class} / confidence {Number(item.confidence || 0).toFixed(2)}</small>
+                </article>
+              ))}
+              {!data.contradictions?.length && <div className="truthEmpty"><CheckCircle2 size={24} /><strong>No active contradictions</strong><span>Competing branches will appear here without being silently resolved.</span></div>}
+            </div>
+          )}
+
+          {tab === "validators" && (
+            <div className="truthValidatorList" role="tabpanel">
+              {(data.validators || []).map((validator) => (
+                <article key={validator.validator_id} className={validator.outcome === "fail" || validator.outcome === "error" ? "failed" : ""}>
+                  <div className={`validatorOutcome ${validator.outcome}`}><CircleDot size={15} /> {validator.outcome}</div>
+                  <strong>{validator.validator_id}</strong>
+                  <span>{validator.type} protects {validator.claim_id}</span>
+                  <small>Failure makes the claim {validator.failure_effect}</small>
+                </article>
+              ))}
+              {!data.validators?.length && <div className="truthEmpty"><ShieldCheck size={24} /><strong>No validators defined</strong><span>Add deterministic proof checks from the CLI or operator API.</span></div>}
+            </div>
+          )}
+
+          {tab === "diff" && (
+            <div className="truthDiff" role="tabpanel">
+              <form onSubmit={(event) => { event.preventDefault(); onCompare(fromSequence, toSequence, validAt); }}>
+                <label>From sequence<input type="number" min="1" value={fromSequence} onChange={(event) => setFromSequence(Number(event.target.value))} /></label>
+                <label>To sequence<input type="number" min="1" value={toSequence} onChange={(event) => setToSequence(Number(event.target.value))} /></label>
+                <label>Valid at<input value={validAt} onChange={(event) => setValidAt(event.target.value)} /></label>
+                <button className="primaryButton" type="submit" disabled={busy || fromSequence >= toSequence}><GitBranch size={15} /> Compare</button>
+              </form>
+              <div className="truthDiffResults">
+                {(diff?.changes || []).map((change) => (
+                  <article key={change.claim_id}>
+                    <strong>{change.claim_id}</strong>
+                    <div><span>Before</span><code>{objectText(change.before || { status: "absent" })}</code></div>
+                    <div><span>After</span><code>{objectText(change.after || { status: "absent" })}</code></div>
+                  </article>
+                ))}
+                {diff && !diff.changes?.length && <div className="truthEmpty"><CheckCircle2 size={24} /><strong>No truth changes</strong><span>The selected recorded-time interval produced the same valid-time view.</span></div>}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <aside className="truthInspector" aria-label="Selected truth claim evidence">
+          <span className="sectionEyebrow">Claim inspector</span>
+          {selectedClaim ? (
+            <>
+              <span className={`truthState ${selectedClaim.effective_state}`}>{selectedClaim.effective_state}</span>
+              <h3>{selectedClaim.redacted ? `${String(selectedClaim.privacy_class || "private").replace(/^./, (letter) => letter.toUpperCase())} claim` : selectedClaim.subject}</h3>
+              <p>{selectedClaim.redacted ? "Value hidden by privacy policy" : `${selectedClaim.predicate} = ${objectText(selectedClaim.object)}`}</p>
+              <section><strong>Evidence</strong>{(detail.evidence || []).map((item) => <div key={item.evidence_id} className="truthEvidence"><span>{item.polarity}</span><b>{item.evidence_id}</b><small>{item.method} / {item.authority_class}</small></div>)}{!detail.evidence?.length && <small>No evidence attached.</small>}</section>
+              <section><strong>Relations</strong>{(detail.relations || []).map((item) => <div key={item.relation_id} className="truthEvidence"><span>{item.relation_type}</span><b>{item.from_claim_id} → {item.to_claim_id}</b></div>)}{!detail.relations?.length && <small>No relations attached.</small>}</section>
+            </>
+          ) : (
+            <div className="truthEmpty"><Eye size={24} /><strong>Select a claim</strong><span>Open Claims to inspect its evidence, contradictions, and provenance.</span></div>
+          )}
+        </aside>
+      </div>
+    </section>
+  );
+}
+
 
 function GraphCanvas({ graph, selectedNode, onSelect, query, showLabels, showEdges }) {
   const canvasRef = useRef(null);

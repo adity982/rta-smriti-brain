@@ -51,6 +51,13 @@ from .workspaces import (
     add_project_to_workspace, create_workspace, delete_workspace, get_workspace, list_workspaces,
     remove_project_from_workspace, search_workspace, workspace_health,
 )
+from .temporal import (
+    append_claim, attach_evidence, change_claim_state, define_validator,
+    observe_repository_anchor, rebuild_projections, record_abstention,
+    relate_claims, revise_claim, run_validator, truth_as_of, truth_at_commit,
+    truth_current, truth_diff, truth_explain, truth_history, validator_history,
+    verify_ledger,
+)
 
 
 def default_db_path() -> Path:
@@ -68,6 +75,13 @@ def emit(payload, as_json: bool) -> None:
         print(payload, end="" if payload.endswith("\n") else "\n")
     else:
         print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def parse_json_argument(name: str, value: str):
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{name} must contain valid JSON") from exc
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -199,6 +213,196 @@ def build_parser() -> argparse.ArgumentParser:
     graph_query_cmd.add_argument("--type", dest="query_type", choices=("dependencies", "dependents", "impact", "evidence", "relevance"), default="impact")
     graph_query_cmd.add_argument("--depth", type=int, default=2)
     graph_query_cmd.add_argument("--limit", type=int, default=100)
+
+    truth_cmd = sub.add_parser("truth", help="Read and write temporal project truth")
+    add_common_options(truth_cmd)
+    truth_actions = truth_cmd.add_subparsers(dest="truth_action", required=True)
+
+    truth_assert = truth_actions.add_parser("assert", help="Append a new truth claim")
+    truth_assert.add_argument("--project", default="default")
+    truth_assert.add_argument("--root", required=True, help="Exact canonical project root")
+    truth_assert.add_argument("--claim-id")
+    truth_assert.add_argument("--subject", required=True)
+    truth_assert.add_argument("--predicate", required=True)
+    truth_assert.add_argument("--value-json", required=True)
+    truth_assert.add_argument("--idempotency-key", required=True)
+    truth_assert.add_argument("--expected-version", type=int, required=True)
+    truth_assert.add_argument("--valid-from")
+    truth_assert.add_argument("--valid-to")
+    truth_assert.add_argument("--expires-at")
+    truth_assert.add_argument(
+        "--state",
+        default="observed",
+        choices=(
+            "hypothesis", "observed", "corroborated", "accepted", "disputed",
+            "stale", "refuted", "superseded", "retracted",
+        ),
+    )
+    truth_assert.add_argument("--confidence", type=float, default=1.0)
+    truth_assert.add_argument("--actor-type", choices=("operator", "agent"), default="operator")
+    truth_assert.add_argument("--actor-id", default="local-operator")
+
+    truth_current_cmd = truth_actions.add_parser("current", help="Read one current truth claim")
+    truth_current_cmd.add_argument("--project", default="default")
+    truth_current_cmd.add_argument("--claim-id", required=True)
+    truth_current_cmd.add_argument("--valid-at")
+
+    truth_state = truth_actions.add_parser("state", help="Append an epistemic state transition")
+    truth_state.add_argument("--project", default="default")
+    truth_state.add_argument("--root", required=True, help="Exact canonical project root")
+    truth_state.add_argument("--claim-id", required=True)
+    truth_state.add_argument(
+        "--state", required=True,
+        choices=(
+            "hypothesis", "observed", "corroborated", "accepted", "disputed",
+            "stale", "refuted", "superseded", "retracted",
+        ),
+    )
+    truth_state.add_argument("--reason", required=True)
+    truth_state.add_argument("--idempotency-key", required=True)
+    truth_state.add_argument("--expected-version", type=int, required=True)
+    truth_state.add_argument("--actor-type", choices=("operator", "agent"), default="operator")
+    truth_state.add_argument("--actor-id", default="local-operator")
+
+    truth_history_cmd = truth_actions.add_parser("history", help="Read recorded history for one claim")
+    truth_history_cmd.add_argument("--project", default="default")
+    truth_history_cmd.add_argument("--claim-id", required=True)
+    truth_history_cmd.add_argument("--limit", type=int, default=500)
+
+    truth_as_of_cmd = truth_actions.add_parser("as-of", help="Read valid-time truth at a recorded sequence")
+    truth_as_of_cmd.add_argument("--project", default="default")
+    truth_as_of_cmd.add_argument("--claim-id", required=True)
+    truth_as_of_cmd.add_argument("--valid-at", required=True)
+    truth_as_of_cmd.add_argument("--recorded-sequence", type=int, required=True)
+
+    truth_revise = truth_actions.add_parser("revise", help="Append a corrected truth claim value")
+    truth_revise.add_argument("--project", default="default")
+    truth_revise.add_argument("--root", required=True)
+    truth_revise.add_argument("--claim-id", required=True)
+    truth_revise.add_argument("--value-json", required=True)
+    truth_revise.add_argument("--reason", required=True)
+    truth_revise.add_argument("--idempotency-key", required=True)
+    truth_revise.add_argument("--expected-version", type=int, required=True)
+    truth_revise.add_argument("--valid-from")
+    truth_revise.add_argument("--valid-to")
+    truth_revise.add_argument("--actor-type", choices=("operator", "agent"), default="operator")
+    truth_revise.add_argument("--actor-id", default="local-operator")
+
+    truth_relate = truth_actions.add_parser("relate", help="Append a typed relation between current claims")
+    truth_relate.add_argument("--project", default="default")
+    truth_relate.add_argument("--root", required=True)
+    truth_relate.add_argument("--relation-id")
+    truth_relate.add_argument("--from-claim", required=True)
+    truth_relate.add_argument("--type", required=True, choices=(
+        "supports", "contradicts", "supersedes", "retracts", "refutes",
+        "derived_from", "alternate_of", "specialization_of",
+    ))
+    truth_relate.add_argument("--to-claim", required=True)
+    truth_relate.add_argument("--idempotency-key", required=True)
+    truth_relate.add_argument("--expected-version", type=int, required=True)
+    truth_relate.add_argument("--confidence", type=float, default=0.7)
+    truth_relate.add_argument("--actor-type", choices=("operator", "agent"), default="operator")
+    truth_relate.add_argument("--actor-id", default="local-operator")
+
+    truth_evidence = truth_actions.add_parser("evidence", help="Attach provenance-bearing evidence to a claim")
+    truth_evidence.add_argument("--project", default="default")
+    truth_evidence.add_argument("--root", required=True)
+    truth_evidence.add_argument("--claim-id", required=True)
+    truth_evidence.add_argument("--evidence-id", required=True)
+    truth_evidence.add_argument("--source-identifier", required=True)
+    truth_evidence.add_argument("--source-hash")
+    truth_evidence.add_argument("--method", required=True)
+    truth_evidence.add_argument("--polarity", required=True, choices=("supporting", "weakening", "refuting"))
+    truth_evidence.add_argument("--authority-class", required=True)
+    truth_evidence.add_argument("--confidence", type=float, required=True)
+    truth_evidence.add_argument("--uncertainty", default="")
+    truth_evidence.add_argument("--provenance-json", required=True)
+    truth_evidence.add_argument("--idempotency-key", required=True)
+    truth_evidence.add_argument("--expected-version", type=int, required=True)
+    truth_evidence.add_argument("--verification-status", default="unverified", choices=("unverified", "verified", "failed", "stale"))
+    truth_evidence.add_argument("--actor-type", choices=("operator", "agent"), default="operator")
+    truth_evidence.add_argument("--actor-id", default="local-operator")
+
+    truth_abstain = truth_actions.add_parser("abstain", help="Record an explicit evidence-bound abstention")
+    truth_abstain.add_argument("--project", default="default")
+    truth_abstain.add_argument("--root", required=True)
+    truth_abstain.add_argument("--abstention-id")
+    truth_abstain.add_argument("--query-scope", required=True)
+    truth_abstain.add_argument("--missing-evidence-json", required=True)
+    truth_abstain.add_argument("--unresolved-conflicts-json", required=True)
+    truth_abstain.add_argument("--minimum-revalidation-action", required=True)
+    truth_abstain.add_argument("--idempotency-key", required=True)
+    truth_abstain.add_argument("--expected-version", type=int, required=True)
+    truth_abstain.add_argument("--actor-type", choices=("operator", "agent"), default="operator")
+    truth_abstain.add_argument("--actor-id", default="local-operator")
+
+    truth_explain_cmd = truth_actions.add_parser("explain", help="Explain a claim with evidence and relations")
+    truth_explain_cmd.add_argument("--project", default="default")
+    truth_explain_cmd.add_argument("--claim-id", required=True)
+    truth_explain_cmd.add_argument("--valid-at")
+
+    truth_diff_cmd = truth_actions.add_parser("diff", help="Compare truth at two recorded sequences")
+    truth_diff_cmd.add_argument("--project", default="default")
+    truth_diff_cmd.add_argument("--from-sequence", type=int, required=True)
+    truth_diff_cmd.add_argument("--to-sequence", type=int, required=True)
+    truth_diff_cmd.add_argument("--valid-at", required=True)
+    truth_diff_cmd.add_argument("--limit", type=int, default=500)
+
+    truth_anchor = truth_actions.add_parser("anchor", help="Observe the exact current Git repository anchor")
+    truth_anchor.add_argument("--project", default="default")
+    truth_anchor.add_argument("--root", required=True)
+    truth_anchor.add_argument("--anchor-id", required=True)
+    truth_anchor.add_argument("--idempotency-key", required=True)
+    truth_anchor.add_argument("--expected-version", type=int, required=True)
+
+    truth_commit = truth_actions.add_parser("at-commit", help="Read truth at an explicitly observed Git commit")
+    truth_commit.add_argument("--project", default="default")
+    truth_commit.add_argument("--claim-id", required=True)
+    truth_commit.add_argument("--commit", required=True)
+    truth_commit.add_argument("--valid-at", required=True)
+
+    truth_validator = truth_actions.add_parser("validator", help="Define, run, or inspect deterministic validators")
+    validator_actions = truth_validator.add_subparsers(dest="validator_action", required=True)
+    validator_add = validator_actions.add_parser("add", help="Define an inert validator policy")
+    validator_add.add_argument("--project", default="default")
+    validator_add.add_argument("--root", required=True)
+    validator_add.add_argument("--validator-id", required=True)
+    validator_add.add_argument("--type", required=True, choices=(
+        "file_exists", "file_sha256", "json_pointer_equals", "sqlite_integrity",
+        "git_head_equals", "git_clean_state", "command_exit",
+    ))
+    validator_add.add_argument("--claim-id", required=True)
+    validator_add.add_argument("--config-json", required=True)
+    validator_add.add_argument("--failure-effect", required=True, choices=("disputed", "stale", "refuted"))
+    validator_add.add_argument("--idempotency-key", required=True)
+    validator_add.add_argument("--expected-version", type=int, required=True)
+    validator_add.add_argument("--actor-id", default="local-operator")
+    validator_run = validator_actions.add_parser("run", help="Execute a registered deterministic validator")
+    validator_run.add_argument("--project", default="default")
+    validator_run.add_argument("--root", required=True)
+    validator_run.add_argument("--validator-id", required=True)
+    validator_run.add_argument("--idempotency-key", required=True)
+    validator_run.add_argument("--expected-version", type=int, required=True)
+    validator_run.add_argument("--allow-command", action="store_true")
+    validator_run.add_argument("--trusted-executable", action="append", default=[])
+    validator_run.add_argument("--actor-id", default="local-operator")
+    validator_history_cmd = validator_actions.add_parser("history", help="Read bounded validator result history")
+    validator_history_cmd.add_argument("--project", default="default")
+    validator_history_cmd.add_argument("--validator-id", required=True)
+    validator_history_cmd.add_argument("--limit", type=int, default=100)
+
+    truth_ledger = truth_actions.add_parser("ledger", help="Verify the immutable event ledger")
+    ledger_actions = truth_ledger.add_subparsers(dest="ledger_action", required=True)
+    ledger_verify = ledger_actions.add_parser("verify")
+    ledger_verify.add_argument("--project", default="default")
+
+    truth_projection = truth_actions.add_parser("projection", help="Rebuild or compare temporal projections")
+    projection_actions = truth_projection.add_subparsers(dest="projection_action", required=True)
+    projection_rebuild = projection_actions.add_parser("rebuild")
+    projection_rebuild.add_argument("--project", default="default")
+    projection_rebuild.add_argument("--root", required=True)
+    projection_compare = projection_actions.add_parser("compare")
+    projection_compare.add_argument("--project", default="default")
 
     diagnostics_cmd = sub.add_parser("retrieval-diagnostics", help="Explain retrieval mode, coverage, ranking, evidence, and freshness")
     add_common_options(diagnostics_cmd)
@@ -884,6 +1088,206 @@ def main(argv=None) -> int:
                     include_fresh_details=args.details,
                     active_root=Path(args.root) if args.root else None,
                 )
+            elif args.command == "truth":
+                if args.truth_action == "assert":
+                    payload = append_claim(
+                        conn,
+                        project=args.project,
+                        active_root=Path(args.root),
+                        claim_id=args.claim_id,
+                        subject=args.subject,
+                        predicate=args.predicate,
+                        value=parse_json_argument("--value-json", args.value_json),
+                        idempotency_key=args.idempotency_key,
+                        expected_stream_version=args.expected_version,
+                        valid_from=args.valid_from,
+                        valid_to=args.valid_to,
+                        expires_at=args.expires_at,
+                        epistemic_state=args.state,
+                        confidence=args.confidence,
+                        actor_type=args.actor_type,
+                        actor_id=args.actor_id,
+                        source="cli",
+                    )
+                elif args.truth_action == "current":
+                    payload = truth_current(
+                        conn,
+                        project=args.project,
+                        claim_id=args.claim_id,
+                        valid_at=args.valid_at,
+                    )
+                elif args.truth_action == "state":
+                    payload = change_claim_state(
+                        conn,
+                        project=args.project,
+                        active_root=Path(args.root),
+                        claim_id=args.claim_id,
+                        new_state=args.state,
+                        reason=args.reason,
+                        idempotency_key=args.idempotency_key,
+                        expected_stream_version=args.expected_version,
+                        actor_type=args.actor_type,
+                        actor_id=args.actor_id,
+                        source="cli",
+                    )
+                elif args.truth_action == "history":
+                    payload = truth_history(
+                        conn,
+                        project=args.project,
+                        claim_id=args.claim_id,
+                        limit=args.limit,
+                    )
+                elif args.truth_action == "as-of":
+                    payload = truth_as_of(
+                        conn,
+                        project=args.project,
+                        claim_id=args.claim_id,
+                        valid_at=args.valid_at,
+                        recorded_sequence=args.recorded_sequence,
+                    )
+                elif args.truth_action == "revise":
+                    payload = revise_claim(
+                        conn,
+                        project=args.project,
+                        active_root=Path(args.root),
+                        claim_id=args.claim_id,
+                        value=parse_json_argument("--value-json", args.value_json),
+                        reason=args.reason,
+                        idempotency_key=args.idempotency_key,
+                        expected_stream_version=args.expected_version,
+                        valid_from=args.valid_from,
+                        valid_to=args.valid_to,
+                        actor_type=args.actor_type,
+                        actor_id=args.actor_id,
+                        source="cli",
+                    )
+                elif args.truth_action == "relate":
+                    payload = relate_claims(
+                        conn,
+                        project=args.project,
+                        active_root=Path(args.root),
+                        relation_id=args.relation_id,
+                        from_claim_id=args.from_claim,
+                        relation_type=args.type,
+                        to_claim_id=args.to_claim,
+                        confidence=args.confidence,
+                        idempotency_key=args.idempotency_key,
+                        expected_stream_version=args.expected_version,
+                        actor_type=args.actor_type,
+                        actor_id=args.actor_id,
+                        source="cli",
+                    )
+                elif args.truth_action == "evidence":
+                    provenance = parse_json_argument("--provenance-json", args.provenance_json)
+                    if not isinstance(provenance, dict):
+                        raise ValueError("--provenance-json must contain a JSON object")
+                    payload = attach_evidence(
+                        conn,
+                        project=args.project,
+                        active_root=Path(args.root),
+                        claim_id=args.claim_id,
+                        evidence_id=args.evidence_id,
+                        source_identifier=args.source_identifier,
+                        source_hash=args.source_hash,
+                        method=args.method,
+                        polarity=args.polarity,
+                        authority_class=args.authority_class,
+                        confidence=args.confidence,
+                        uncertainty=args.uncertainty,
+                        provenance=provenance,
+                        idempotency_key=args.idempotency_key,
+                        expected_stream_version=args.expected_version,
+                        verification_status=args.verification_status,
+                        actor_type=args.actor_type,
+                        actor_id=args.actor_id,
+                        source="cli",
+                    )
+                elif args.truth_action == "abstain":
+                    missing = parse_json_argument("--missing-evidence-json", args.missing_evidence_json)
+                    conflicts = parse_json_argument("--unresolved-conflicts-json", args.unresolved_conflicts_json)
+                    if not isinstance(missing, list) or not isinstance(conflicts, list):
+                        raise ValueError("abstention evidence and conflicts must be JSON arrays")
+                    payload = record_abstention(
+                        conn,
+                        project=args.project,
+                        active_root=Path(args.root),
+                        abstention_id=args.abstention_id,
+                        query_scope=args.query_scope,
+                        missing_evidence=missing,
+                        unresolved_conflicts=conflicts,
+                        minimum_revalidation_action=args.minimum_revalidation_action,
+                        idempotency_key=args.idempotency_key,
+                        expected_stream_version=args.expected_version,
+                        actor_type=args.actor_type,
+                        actor_id=args.actor_id,
+                        source="cli",
+                    )
+                elif args.truth_action == "explain":
+                    payload = truth_explain(
+                        conn, project=args.project, claim_id=args.claim_id,
+                        valid_at=args.valid_at,
+                    )
+                elif args.truth_action == "diff":
+                    payload = truth_diff(
+                        conn, project=args.project,
+                        from_sequence=args.from_sequence,
+                        to_sequence=args.to_sequence,
+                        valid_at=args.valid_at,
+                        limit=args.limit,
+                    )
+                elif args.truth_action == "anchor":
+                    payload = observe_repository_anchor(
+                        conn, project=args.project, active_root=Path(args.root),
+                        anchor_id=args.anchor_id,
+                        idempotency_key=args.idempotency_key,
+                        expected_stream_version=args.expected_version,
+                        actor_type="operator", actor_id="local-operator", source="cli",
+                    )
+                elif args.truth_action == "at-commit":
+                    payload = truth_at_commit(
+                        conn, project=args.project, claim_id=args.claim_id,
+                        commit=args.commit, valid_at=args.valid_at,
+                    )
+                elif args.truth_action == "validator":
+                    if args.validator_action == "add":
+                        config = parse_json_argument("--config-json", args.config_json)
+                        if not isinstance(config, dict):
+                            raise ValueError("--config-json must contain a JSON object")
+                        payload = define_validator(
+                            conn, project=args.project, active_root=Path(args.root),
+                            validator_id=args.validator_id, validator_type=args.type,
+                            claim_id=args.claim_id, config=config,
+                            failure_effect=args.failure_effect,
+                            idempotency_key=args.idempotency_key,
+                            expected_stream_version=args.expected_version,
+                            actor_type="operator", actor_id=args.actor_id, source="cli",
+                        )
+                    elif args.validator_action == "run":
+                        payload = run_validator(
+                            conn, project=args.project, active_root=Path(args.root),
+                            validator_id=args.validator_id,
+                            idempotency_key=args.idempotency_key,
+                            expected_stream_version=args.expected_version,
+                            allow_command=args.allow_command,
+                            trusted_executables=tuple(args.trusted_executable),
+                            actor_type="operator", actor_id=args.actor_id, source="cli",
+                        )
+                    else:
+                        payload = validator_history(
+                            conn, project=args.project,
+                            validator_id=args.validator_id, limit=args.limit,
+                        )
+                elif args.truth_action == "ledger":
+                    payload = verify_ledger(conn, project=args.project)
+                elif args.truth_action == "projection":
+                    if args.projection_action == "rebuild":
+                        payload = rebuild_projections(
+                            conn, project=args.project, active_root=Path(args.root),
+                        )
+                    else:
+                        payload = verify_ledger(conn, project=args.project)
+                else:
+                    raise ValueError(f"unsupported truth action: {args.truth_action}")
             elif args.command == "integrity-diagnostics":
                 payload = integrity_diagnostics(
                     conn, project=args.project, active_root=Path(args.root) if args.root else None,
