@@ -9,9 +9,17 @@ import time
 from pathlib import Path
 
 from .db import (
-    connect, doctor, ensure_project, ingest_repo, init_project, init_schema,
-    project_binding_status, stale_check, update_project_settings,
+    connect,
+    doctor,
+    ensure_project,
+    ingest_repo,
+    init_project,
+    init_schema,
+    project_binding_status,
+    stale_check,
+    update_project_settings,
 )
+from .repository import RepositoryInspection
 
 
 def _slug(value: str) -> str:
@@ -283,6 +291,7 @@ def self_check(
     project: str,
     check_files: bool = False,
     active_root: str | Path | None = None,
+    repository_inspection: RepositoryInspection | None = None,
 ) -> dict:
     from .continuity import operational_readiness
 
@@ -306,7 +315,11 @@ def self_check(
         and (not check_files or freshness.get("state") in {"fresh", "fresh_with_warnings"})
     )
     operational = operational_readiness(
-        conn, project, include_event_count=False, active_root=active_root,
+        conn,
+        project,
+        include_event_count=False,
+        active_root=active_root,
+        repository_inspection=repository_inspection,
     )
     ready = bool(database_ready and operational["integrity"]["operationally_ready"])
     return {

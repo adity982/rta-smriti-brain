@@ -16,36 +16,105 @@ from socketserver import TCPServer
 from urllib.parse import parse_qs, urlparse
 
 from .context import build_context_pack, build_continuation_prompt
+from .context_host import (
+    audit_context_for_operator,
+    authorize_context_contract,
+    build_task_contract,
+    compile_context_for_agent,
+    ensure_context_agent_profile,
+    explain_context_for_agent,
+    record_context_outcome_for_operator,
+    revoke_context_compilation_grant,
+)
+from .continuity import operational_readiness
+from .continuity_daemon import continuity_status, start_continuity, stop_continuity
 from .db import (
-    attach_memory_provenance, connect, get_project_settings, graph, graph_query, ingest_repo, init_schema,
-    integrity_diagnostics, latest_checkpoint, reflect, remember, save_checkpoint, search, stale_check,
+    attach_memory_provenance,
+    connect,
+    get_project_settings,
+    graph,
+    graph_query,
+    ingest_repo,
+    init_schema,
+    integrity_diagnostics,
+    latest_checkpoint,
+    reflect,
+    remember,
+    save_checkpoint,
+    search,
+    stale_check,
     update_project_settings,
 )
 from .diagnostics import retrieval_diagnostics
-from .parsers import ParserRegistry
-from .project import mcp_config_payload, mcp_doctor, runtime_shell, shell_cli_command, projects_list, self_check
-from .repository import canonical_root, canonical_root_key, repository_state, trusted_git_candidates
-from .governance import build_operational_context, create_policy, list_policies, list_receipts, preflight, retire_policy
+from .governance import (
+    build_operational_context,
+    create_policy,
+    list_policies,
+    list_receipts,
+    preflight,
+    retire_policy,
+)
 from .hooks import install_git_hooks, uninstall_git_hooks
 from .lifecycle import apply_memory_feedback, run_conservative_decay
+from .parsers import ParserRegistry
 from .portability import (
-    export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_create_encrypted,
-    snapshot_keygen, snapshot_passphrase_keygen, snapshot_restore_encrypted, snapshot_verify,
+    export_bundle,
+    import_bundle,
+    inspect_bundle,
+    snapshot_create,
+    snapshot_create_encrypted,
+    snapshot_keygen,
+    snapshot_passphrase_keygen,
+    snapshot_restore_encrypted,
+    snapshot_verify,
     snapshot_verify_encrypted,
+)
+from .project import (
+    mcp_config_payload,
+    mcp_doctor,
+    projects_list,
+    runtime_shell,
+    self_check,
+    shell_cli_command,
+)
+from .repository import (
+    canonical_root,
+    canonical_root_key,
+    inspect_repository,
+    trusted_git_candidates,
+)
+from .temporal import (
+    append_claim,
+    attach_evidence,
+    change_claim_state,
+    define_validator,
+    observe_repository_anchor,
+    rebuild_projections,
+    record_abstention,
+    redact_truth_for_operator,
+    relate_claims,
+    revise_claim,
+    run_validator,
+    truth_as_of,
+    truth_at_commit,
+    truth_current,
+    truth_diff,
+    truth_explain,
+    truth_history,
+    truth_overview,
+    validator_history,
+    verify_ledger,
 )
 from .watch_daemon import start_watcher, stop_watcher, watcher_status
 from .workspaces import (
-    add_project_to_workspace, create_workspace, delete_workspace, get_workspace, list_workspaces,
-    remove_project_from_workspace, search_workspace, workspace_health,
-)
-from .continuity_daemon import continuity_status, start_continuity, stop_continuity
-from .continuity import operational_readiness
-from .temporal import (
-    append_claim, attach_evidence, change_claim_state, define_validator,
-    observe_repository_anchor, rebuild_projections, record_abstention,
-    relate_claims, revise_claim, run_validator, truth_as_of, truth_at_commit,
-    truth_current, truth_diff, truth_explain, truth_history, truth_overview,
-    redact_truth_for_operator, validator_history, verify_ledger,
+    add_project_to_workspace,
+    create_workspace,
+    delete_workspace,
+    get_workspace,
+    list_workspaces,
+    remove_project_from_workspace,
+    search_workspace,
+    workspace_health,
 )
 
 
@@ -115,6 +184,7 @@ def scan_brain_databases(brain_dir: Path) -> list[dict]:
     if not brain_dir.exists():
         return []
     entries: list[dict] = []
+    repository_inspections = {}
     for db_path in sorted(brain_dir.glob("*.sqlite")):
         conn = None
         try:
@@ -124,14 +194,22 @@ def scan_brain_databases(brain_dir: Path) -> list[dict]:
             init_schema(conn)
             payload = projects_list(conn)
             for project in payload["projects"]:
-                health = self_check(conn, project=project["name"], check_files=False)
-                project_id = int(project["id"])
-                git = repository_state(project.get("root_path"))
-                integrity = integrity_diagnostics(
+                root_path = project.get("root_path")
+                root_key = canonical_root_key(root_path) if root_path else ""
+                inspection = repository_inspections.get(root_key)
+                if inspection is None:
+                    inspection = inspect_repository(root_path)
+                    repository_inspections[root_key] = inspection
+                health = self_check(
                     conn,
                     project=project["name"],
-                    active_root=project.get("root_path") if project.get("root_path") and Path(project["root_path"]).is_dir() else None,
+                    check_files=False,
+                    active_root=root_path if root_path and Path(root_path).is_dir() else None,
+                    repository_inspection=inspection,
                 )
+                project_id = int(project["id"])
+                git = inspection.state()
+                integrity = health["integrity"]
                 entries.append(
                     {
                         "status": "ok",
@@ -919,6 +997,104 @@ def make_handler(config: ConsoleConfig):
                     self._json({"status": "error", "error": {"type": "UnsupportedMediaType", "message": "application/json is required"}}, status=415)
                     return
                 payload = _read_body(self)
+                if self.path == "/api/context-compiler":
+                    database = resolve_brain_db(config, payload["db_path"])
+                    conn = _open_db(database)
+                    try:
+                        project = str(payload["project"])
+                        action = str(payload["action"])
+                        if action == "authorize-and-compile":
+                            profile = ensure_context_agent_profile(
+                                conn,
+                                project=project,
+                                profile_id=str(payload["profile_id"]),
+                                actor_id="dashboard-operator",
+                                max_input_tokens=int(payload["max_input_tokens"]),
+                                privacy_ceiling=str(
+                                    payload.get("privacy_ceiling", "internal")
+                                ),
+                            )
+                            contract = build_task_contract(
+                                project=project,
+                                agent_profile_id=str(payload["profile_id"]),
+                                objective=str(payload["objective"]),
+                                actor_id="dashboard-operator",
+                                comparison_modes=list(payload.get("comparison_modes", [])),
+                                compiler_mode=str(payload.get("compiler_mode", "balanced")),
+                                max_input_tokens=int(payload["max_input_tokens"]),
+                                privacy_ceiling=str(
+                                    payload.get("privacy_ceiling", "internal")
+                                ),
+                            )
+                            authorized = authorize_context_contract(
+                                conn,
+                                project=project,
+                                agent_profile_version_id=profile[
+                                    "agent_profile_version_id"
+                                ],
+                                contract=contract,
+                                actor_id="dashboard-operator",
+                            )
+                            result = compile_context_for_agent(
+                                conn,
+                                db_path=database,
+                                project=project,
+                                active_root=_project_root(conn, project),
+                                task_contract_id=authorized["task_contract_id"],
+                                principal_id=str(payload["principal_id"]),
+                                session_id=str(payload["session_id"]),
+                                variant_id=str(payload.get("variant", "primary")),
+                            )
+                            result["authorization"] = {
+                                "task_contract_id": authorized["task_contract_id"],
+                                "contract_id": authorized["contract_id"],
+                                "agent_profile_version_id": profile[
+                                    "agent_profile_version_id"
+                                ],
+                            }
+                        elif action == "explain":
+                            result = explain_context_for_agent(
+                                conn,
+                                db_path=database,
+                                project=project,
+                                compilation_id=str(payload["compilation_id"]),
+                                principal_id=str(payload["principal_id"]),
+                                session_id=str(payload["session_id"]),
+                            )
+                        elif action == "audit":
+                            result = audit_context_for_operator(
+                                conn,
+                                db_path=database,
+                                project=project,
+                                compilation_id=str(payload["compilation_id"]),
+                                operator_id="dashboard-operator",
+                                session_id=str(payload["session_id"]),
+                            )
+                        elif action == "outcome":
+                            result = record_context_outcome_for_operator(
+                                conn,
+                                db_path=database,
+                                project=project,
+                                compilation_id=str(payload["compilation_id"]),
+                                operator_id="dashboard-operator",
+                                session_id=str(payload["session_id"]),
+                                outcome=dict(payload["outcome"]),
+                            )
+                        elif action == "revoke":
+                            result = revoke_context_compilation_grant(
+                                conn,
+                                db_path=database,
+                                project=project,
+                                compilation_id=str(payload["compilation_id"]),
+                                operator_id="dashboard-operator",
+                                reason=str(payload["reason"]),
+                            )
+                        else:
+                            raise ValueError("unknown context compiler action")
+                        self._json(result)
+                    finally:
+                        conn.close()
+                    return
                 if self.path == "/api/context-pack":
                     conn = _open_db(resolve_brain_db(config, payload["db_path"]))
                     try:

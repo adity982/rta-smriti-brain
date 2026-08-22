@@ -235,6 +235,27 @@ class GovernanceTests(unittest.TestCase):
         self.assertTrue(decision["operational_context"]["consequential_action"])
         self.assertTrue(decision["decision_receipt"]["operational_digest"])
 
+    def test_operational_context_warns_when_git_cleanliness_is_unknown(self):
+        decision = preflight(
+            self.conn,
+            project="demo",
+            action="Publish the next release",
+            operational_context={
+                "git": {
+                    "is_git_repo": True,
+                    "repository_root": self.tempdir.name,
+                    "branch": "main",
+                    "head": "abc123",
+                    "dirty_files": None,
+                },
+            },
+        )
+
+        matches = {item["kind"]: item for item in decision["matches"]}
+        self.assertEqual(decision["decision"], "warn")
+        self.assertIn("git_state_unknown", matches)
+        self.assertIn("could not be verified", matches["git_state_unknown"]["reason"])
+
     def test_cli_block_decision_uses_a_nonzero_exit_code(self):
         db_path = Path(self.tempdir.name) / "brain.sqlite"
         add = subprocess.run(

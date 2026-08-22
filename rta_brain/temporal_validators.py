@@ -193,7 +193,9 @@ def evaluate_validator(
         }
     if validator_type == "git_clean_state":
         state = git_anchor_state(active_root)
-        actual_clean = int(state["dirty_files"] or 0) == 0
+        if state["dirty_files"] is None:
+            return "unavailable", {"reason": "git_status_unknown"}
+        actual_clean = int(state["dirty_files"]) == 0
         passed = actual_clean is bool(config["clean"])
         return "pass" if passed else "fail", {
             "expected_clean": bool(config["clean"]), "actual_clean": actual_clean,

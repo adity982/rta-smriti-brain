@@ -22,6 +22,7 @@ from .ingest import (
 )
 from .parsers import ParserRegistry
 from .repository import (
+    RepositoryInspection,
     canonical_root,
     canonical_root_key,
     checkout_identity,
@@ -31,9 +32,8 @@ from .repository import (
     stable_git_identity,
 )
 
-
 VALID_PRAMANA = {"pratyaksha", "sabda", "anumana", "smriti", "kalpana"}
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 MAX_THREAD_BYTES = 10 * 1024 * 1024
 MAX_THREAD_PROMOTIONS = 100
 MAX_SEARCH_LIMIT = 50
@@ -133,6 +133,13 @@ def connect(db_path: Path) -> sqlite3.Connection:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA recursive_triggers = ON")
+        schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if schema_version > SCHEMA_VERSION:
+            raise ValueError(
+                "brain database uses newer schema version "
+                f"{schema_version}; this runtime supports up to {SCHEMA_VERSION}"
+            )
         for attempt in range(50):
             try:
                 conn.execute("PRAGMA journal_mode = WAL")
@@ -156,9 +163,61 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _execute_schema_statements(conn: sqlite3.Connection, script: str) -> None:
+    statement = ""
+    for line in script.splitlines(keepends=True):
+        statement += line
+        if sqlite3.complete_statement(statement):
+            sql = statement.strip()
+            if sql:
+                conn.execute(sql)
+            statement = ""
+    if statement.strip():
+        raise ValueError("incomplete internal schema statement")
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
-    starting_schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-    conn.executescript(
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA recursive_triggers = ON")
+    if int(conn.execute("PRAGMA foreign_keys").fetchone()[0]) != 1:
+        raise RuntimeError(
+            "foreign key enforcement must be enabled before schema initialization"
+        )
+    observed_schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    if observed_schema_version > SCHEMA_VERSION:
+        raise ValueError(
+            "brain database uses newer schema version "
+            f"{observed_schema_version}; this runtime supports up to {SCHEMA_VERSION}"
+        )
+    if observed_schema_version == SCHEMA_VERSION:
+        from .context_schema import validate_context_schema_v9
+
+        validate_context_schema_v9(conn)
+        return
+    owns_transaction = not conn.in_transaction
+    migration_savepoint = "rta_schema_migration"
+    try:
+        if owns_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+        else:
+            conn.execute(f"SAVEPOINT {migration_savepoint}")
+        starting_schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if starting_schema_version > SCHEMA_VERSION:
+            raise ValueError(
+                "brain database uses newer schema version "
+                f"{starting_schema_version}; this runtime supports up to {SCHEMA_VERSION}"
+            )
+        if starting_schema_version == SCHEMA_VERSION:
+            from .context_schema import validate_context_schema_v9
+
+            validate_context_schema_v9(conn)
+            if owns_transaction:
+                conn.commit()
+            else:
+                conn.execute(f"RELEASE SAVEPOINT {migration_savepoint}")
+            return
+        _execute_schema_statements(
+            conn,
         """
         CREATE TABLE IF NOT EXISTS projects (
             id INTEGER PRIMARY KEY,
@@ -639,11 +698,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_truth_repository_anchors_commit
             ON truth_repository_anchors(project_id, repository_commit, recorded_sequence DESC);
         """
-    )
-    try:
+        )
         # Serialize introspection and ALTER statements across dashboard, MCP, and
         # daemon connections opening an older brain at the same time.
-        conn.execute("BEGIN IMMEDIATE")
         project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
         if "repository_identity" not in project_columns:
             conn.execute("ALTER TABLE projects ADD COLUMN repository_identity TEXT")
@@ -664,14 +721,25 @@ def init_schema(conn: sqlite3.Connection) -> None:
             SELECT id, created_at, 'unverified', '{}' FROM memories
             """
         )
-        if starting_schema_version < SCHEMA_VERSION:
+        if starting_schema_version < 8:
             from .temporal import migrate_legacy_memories
 
             migrate_legacy_memories(conn)
+        if starting_schema_version < 9:
+            from .context_schema import migrate_context_schema_v9
+
+            migrate_context_schema_v9(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        conn.commit()
-    except Exception:
-        conn.rollback()
+        if owns_transaction:
+            conn.commit()
+        else:
+            conn.execute(f"RELEASE SAVEPOINT {migration_savepoint}")
+    except BaseException:
+        if owns_transaction:
+            conn.rollback()
+        else:
+            conn.execute(f"ROLLBACK TO SAVEPOINT {migration_savepoint}")
+            conn.execute(f"RELEASE SAVEPOINT {migration_savepoint}")
         raise
 
 
@@ -707,6 +775,7 @@ def project_binding_status(
     conn: sqlite3.Connection,
     project: str,
     active_root: str | Path | None = None,
+    repository_inspection: RepositoryInspection | None = None,
 ) -> dict:
     """Compare the stored project binding with its current and operator-active checkout."""
     init_schema(conn)
@@ -724,8 +793,14 @@ def project_binding_status(
     stored_repository = row["repository_identity"]
     stored_checkout = row["checkout_identity"]
     bound_exists = bool(stored_root and Path(stored_root).is_dir())
-    bound_repository = _inspect_repository_identity(Path(stored_root)) if bound_exists else None
-    bound_checkout = _inspect_checkout_identity(Path(stored_root)) if bound_exists else None
+    if repository_inspection is not None and stored_root:
+        if repository_inspection.root_key != canonical_root_key(stored_root):
+            raise ValueError("repository inspection root does not match the stored project root")
+        bound_repository = repository_inspection.repository_identity if bound_exists else None
+        bound_checkout = repository_inspection.checkout_identity if bound_exists else None
+    else:
+        bound_repository = _inspect_repository_identity(Path(stored_root)) if bound_exists else None
+        bound_checkout = _inspect_checkout_identity(Path(stored_root)) if bound_exists else None
     bound_repository_match = bool(
         stored_repository and bound_repository
         and _repository_identities_match(stored_repository, bound_repository, stored_root)
@@ -749,8 +824,12 @@ def project_binding_status(
 
     requested = canonical_root(active_root)
     requested_exists = Path(requested).is_dir()
-    requested_repository = _inspect_repository_identity(Path(requested)) if requested_exists else None
-    requested_checkout = _inspect_checkout_identity(Path(requested)) if requested_exists else None
+    if repository_inspection is not None and repository_inspection.root_key == canonical_root_key(requested):
+        requested_repository = repository_inspection.repository_identity if requested_exists else None
+        requested_checkout = repository_inspection.checkout_identity if requested_exists else None
+    else:
+        requested_repository = _inspect_repository_identity(Path(requested)) if requested_exists else None
+        requested_checkout = _inspect_checkout_identity(Path(requested)) if requested_exists else None
     root_match = bool(stored_root and same_root(stored_root, requested))
     repository_match = bool(
         stored_repository and requested_repository
@@ -785,6 +864,7 @@ def ensure_project(
     name: str,
     root_path: str | None = None,
     allow_root_rebind: bool = False,
+    _commit: bool = True,
 ) -> int:
     init_schema(conn)
     row = conn.execute(
@@ -823,19 +903,22 @@ def ensure_project(
                     "UPDATE projects SET root_path = ?, repository_identity = ?, checkout_identity = ? WHERE id = ?",
                     (requested, requested_identity, requested_checkout, row["id"]),
                 )
-                conn.commit()
+                if _commit:
+                    conn.commit()
             elif not stored_identity:
                 conn.execute(
                     "UPDATE projects SET repository_identity = ?, checkout_identity = ? WHERE id = ?",
                     (requested_identity, requested_checkout, row["id"]),
                 )
-                conn.commit()
+                if _commit:
+                    conn.commit()
             elif not stored_checkout:
                 conn.execute(
                     "UPDATE projects SET checkout_identity = ? WHERE id = ?",
                     (requested_checkout, row["id"]),
                 )
-                conn.commit()
+                if _commit:
+                    conn.commit()
             elif requested_checkout != stored_checkout:
                 raise ValueError(
                     f"checkout identity mismatch for project '{name}': the canonical path now resolves to a different checkout"
@@ -848,7 +931,8 @@ def ensure_project(
         "INSERT INTO projects(name, root_path, repository_identity, checkout_identity, created_at) VALUES (?, ?, ?, ?, ?)",
         (name, canonical, identity, checkout, now_iso()),
     )
-    conn.commit()
+    if _commit:
+        conn.commit()
     return int(cur.lastrowid)
 
 
@@ -1007,6 +1091,30 @@ def add_edge(
     memory_id: int | None = None,
     confidence: float = 1.0,
 ) -> bool:
+    endpoint_rows = conn.execute(
+        "SELECT id, project_id FROM entities WHERE id IN (?, ?)",
+        (from_id, to_id),
+    ).fetchall()
+    endpoint_projects = {int(row["id"]): int(row["project_id"]) for row in endpoint_rows}
+    if (
+        from_id not in endpoint_projects
+        or to_id not in endpoint_projects
+        or endpoint_projects[from_id] != project_id
+        or endpoint_projects[to_id] != project_id
+    ):
+        raise ValueError("edge endpoints must belong to the same project")
+    for table, reference_id, label in (
+        ("sources", source_id, "source"),
+        ("memories", memory_id, "memory"),
+    ):
+        if reference_id is None:
+            continue
+        owner = conn.execute(
+            f"SELECT project_id FROM {table} WHERE id = ?",
+            (reference_id,),
+        ).fetchone()
+        if owner is None or int(owner["project_id"]) != project_id:
+            raise ValueError(f"edge {label} must belong to the same project")
     before = conn.total_changes
     conn.execute(
         """
@@ -1224,12 +1332,17 @@ def save_checkpoint(
     for key, value in values.items():
         if len(value) > 20_000:
             raise ValueError(f"checkpoint {key} exceeds the 20,000 character limit")
-    project_id = ensure_project(conn, project)
     source = str(source).strip() or "operator"
     trigger = str(trigger).strip() or "manual"
     session_id = str(session_id).strip() if session_id else None
+    owns_transaction = not conn.in_transaction
+    checkpoint_savepoint = "rta_save_checkpoint"
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        if owns_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+        else:
+            conn.execute(f"SAVEPOINT {checkpoint_savepoint}")
+        project_id = ensure_project(conn, project, _commit=False)
         current = conn.execute(
             "SELECT version FROM checkpoints WHERE project_id = ? ORDER BY version DESC, id DESC LIMIT 1",
             (project_id,),
@@ -1254,10 +1367,16 @@ def save_checkpoint(
                 version, timestamp, timestamp,
             ),
         )
-        if _commit:
+        if owns_transaction and _commit:
             conn.commit()
-    except Exception:
-        conn.rollback()
+        elif not owns_transaction:
+            conn.execute(f"RELEASE SAVEPOINT {checkpoint_savepoint}")
+    except BaseException:
+        if owns_transaction:
+            conn.rollback()
+        else:
+            conn.execute(f"ROLLBACK TO SAVEPOINT {checkpoint_savepoint}")
+            conn.execute(f"RELEASE SAVEPOINT {checkpoint_savepoint}")
         raise
     return {
         "status": "ok",
@@ -2073,10 +2192,16 @@ def integrity_diagnostics(
     *,
     project: str = "default",
     active_root: str | Path | None = None,
+    repository_inspection: RepositoryInspection | None = None,
 ) -> dict:
     """Return bounded integrity evidence without raw project names or filesystem paths."""
     init_schema(conn)
-    binding = project_binding_status(conn, project, active_root)
+    binding = project_binding_status(
+        conn,
+        project,
+        active_root,
+        repository_inspection=repository_inspection,
+    )
     project_row = conn.execute("SELECT id, root_path FROM projects WHERE name = ?", (project,)).fetchone()
     duplicate_root_count = 0
     latest_migration = None
@@ -2094,7 +2219,11 @@ def integrity_diagnostics(
         latest_migration = dict(migration) if migration else None
     quick_check = conn.execute("PRAGMA quick_check").fetchone()[0]
     schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-    git_state = repository_state(project_row["root_path"], include_worktree=True) if project_row else {}
+    git_state = (
+        repository_inspection.state()
+        if project_row and repository_inspection is not None
+        else repository_state(project_row["root_path"], include_worktree=True) if project_row else {}
+    )
     privacy_safe_repository_state = {
         "is_git_repo": bool(git_state.get("is_git_repo")),
         "branch_fingerprint": _fingerprint(git_state.get("branch")),

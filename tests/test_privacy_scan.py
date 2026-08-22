@@ -1,18 +1,37 @@
+import io
+import os
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
-from rta_brain.privacy import find_sensitive_text
+from rta_brain.privacy import find_sensitive_text, redact_sensitive_text
 from scripts.privacy_scan import scan
 
 
 class PrivacyScanTests(unittest.TestCase):
+    def test_missing_file_and_empty_release_roots_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            missing = parent / "missing"
+            file_root = parent / "artifact.txt"
+            file_root.write_text("artifact", encoding="utf-8")
+            empty = parent / "empty"
+            empty.mkdir()
+
+            self.assertIn((".", "missing-release-root"), scan(missing, []))
+            self.assertIn((".", "invalid-release-root"), scan(file_root, []))
+            self.assertIn((".", "empty-release-root"), scan(empty, []))
+
     def test_privacy_scan_runs_as_a_direct_script(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            (root / "README.md").write_text("# Public artifact\n", encoding="utf-8")
             result = subprocess.run(
                 [sys.executable, str(Path(__file__).parents[1] / "scripts" / "privacy_scan.py"), "--root", str(root)],
                 capture_output=True,
@@ -49,6 +68,18 @@ class PrivacyScanTests(unittest.TestCase):
             (root / "poster.png").write_bytes(b"PNG" + metadata)
             self.assertIn(("poster.png", "windows-user-path"), scan(root, []))
 
+    def test_detects_extended_unc_paths_in_utf8_and_utf16_artifacts(self):
+        extended_unc = "\\\\?\\UNC\\private-host\\private-share\\proof.txt"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.txt").write_text(extended_unc, encoding="utf-8")
+            (root / "metadata.bin").write_bytes(extended_unc.encode("utf-16-le"))
+
+            findings = scan(root, [])
+
+        self.assertIn(("config.txt", "unc-path"), findings)
+        self.assertIn(("metadata.bin", "unc-path"), findings)
+
     def test_privacy_module_is_not_exempt_from_user_path_detection(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -81,6 +112,151 @@ class PrivacyScanTests(unittest.TestCase):
             detector.write_text(detector_line + "\n", encoding="utf-8")
 
             self.assertEqual(scan(root, []), [])
+
+    def test_scans_plain_artifact_directory_without_git_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            private_path = "C:" + r"\Users\Private User\project\proof.txt"
+            (root / "release.txt").write_text(private_path, encoding="utf-8")
+
+            self.assertIn(("release.txt", "windows-user-path"), scan(root, []))
+
+    def test_git_deleted_paths_are_not_treated_as_release_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            deleted = root / "deleted.txt"
+            deleted.write_text("historical", encoding="utf-8")
+            subprocess.run(["git", "add", "deleted.txt"], cwd=root, check=True)
+            deleted.unlink()
+            (root / "README.md").write_text("# Candidate\n", encoding="utf-8")
+
+            findings = scan(root, [])
+
+            self.assertNotIn(("deleted.txt", "unreadable-release-file"), findings)
+
+    def test_scans_wheel_members_instead_of_only_compressed_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            wheel = root / "rta_fixture-1.0-py3-none-any.whl"
+            private_path = "C:" + r"\Users\Private User\project\proof.txt"
+            with zipfile.ZipFile(wheel, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("rta_fixture/config.py", f'PATH = r"{private_path}"\n')
+
+            self.assertIn(
+                ("rta_fixture-1.0-py3-none-any.whl!rta_fixture/config.py", "windows-user-path"),
+                scan(root, []),
+            )
+
+    def test_unc_detector_rejects_binary_noise_with_invalid_share_component(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "release.exe").write_bytes(b"prefix\\\\E\\ S suffix")
+
+            self.assertNotIn(("release.exe", "unc-path"), scan(root, []))
+
+    def test_packaged_detector_definition_is_still_narrowly_suppressed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            detector = root / "wheel" / "rta_brain" / "privacy.py"
+            detector.parent.mkdir(parents=True)
+            source_root = Path(__file__).parents[1]
+            detector_line = next(
+                line for line in (source_root / "rta_brain" / "privacy.py").read_text(encoding="utf-8").splitlines()
+                if line.strip().startswith('"unc-path"')
+            )
+            detector.write_text(detector_line + "\n", encoding="utf-8")
+
+            self.assertEqual(scan(root, []), [])
+
+    def test_hard_linked_artifact_is_rejected_without_following_the_alias(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            root = parent / "release"
+            root.mkdir()
+            source = parent / "outside.txt"
+            source.write_text("private source outside release root", encoding="utf-8")
+            alias = root / "artifact.txt"
+            os.link(source, alias)
+
+            self.assertIn(("artifact.txt", "linked-release-file"), scan(root, []))
+
+    def test_broken_and_directory_links_are_rejected_before_target_filtering(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "release"
+            target = Path(tmp) / "outside"
+            root.mkdir()
+            target.mkdir()
+            try:
+                os.symlink(target, root / "directory-link", target_is_directory=True)
+                os.symlink(Path(tmp) / "missing", root / "broken-link")
+            except OSError as exc:
+                self.skipTest(f"symbolic links are unavailable: {exc}")
+
+            findings = scan(root, [])
+            self.assertIn(("directory-link", "linked-release-file"), findings)
+            self.assertIn(("broken-link", "linked-release-file"), findings)
+
+    def test_archive_directory_payload_and_link_entries_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive_path = root / "release.zip"
+            with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("hidden/", b"payload")
+                linked = zipfile.ZipInfo("linked-dir/")
+                linked.external_attr = (stat.S_IFLNK | 0o777) << 16
+                archive.writestr(linked, b"outside")
+
+            findings = scan(root, [])
+            self.assertIn(("release.zip!hidden/", "payload-bearing-archive-directory"), findings)
+            self.assertIn(("release.zip!linked-dir/", "linked-archive-entry"), findings)
+
+    def test_nested_and_renamed_zip_payloads_are_scanned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            private_path = "C:" + r"\Users\Private User\project\proof.txt"
+            nested_buffer = io.BytesIO()
+            with zipfile.ZipFile(nested_buffer, "w", compression=zipfile.ZIP_DEFLATED) as nested:
+                nested.writestr("private.txt", private_path)
+            with zipfile.ZipFile(root / "outer.zip", "w", compression=zipfile.ZIP_DEFLATED) as outer:
+                outer.writestr("nested.bin", nested_buffer.getvalue())
+            (root / "renamed.jar").write_bytes(nested_buffer.getvalue())
+
+            findings = scan(root, [])
+            self.assertIn(("outer.zip!nested.bin!private.txt", "windows-user-path"), findings)
+            self.assertIn(("renamed.jar!private.txt", "windows-user-path"), findings)
+
+    def test_archive_paths_use_platform_neutral_safety_rules(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with zipfile.ZipFile(root / "release.zip", "w") as archive:
+                archive.writestr("C:/escape.txt", "escape")
+                archive.writestr("\\\\server\\share\\escape.txt", "escape")
+
+            findings = scan(root, [])
+            self.assertIn(("release.zip!C:/escape.txt", "unsafe-archive-path"), findings)
+            self.assertIn(("release.zip!//server/share/escape.txt", "unsafe-archive-path"), findings)
+
+    def test_unc_redaction_consumes_the_complete_share_and_path(self):
+        value = "prefix " + "\\\\" + r"server\R&D\private\file.txt suffix"
+
+        redacted, count = redact_sensitive_text(value)
+
+        self.assertEqual(count, 1)
+        self.assertEqual(redacted, "prefix [REDACTED]")
+        self.assertNotIn("R&D", redacted)
+        self.assertNotIn("private", redacted)
+
+    def test_scan_wide_file_budget_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "one.txt").write_text("one", encoding="utf-8")
+            (root / "two.txt").write_text("two", encoding="utf-8")
+
+            with patch("scripts.privacy_scan.MAX_SCAN_FILES", 1, create=True):
+                findings = scan(root, [])
+
+            self.assertIn((".", "scan-over-1-files"), findings)
 
 
 if __name__ == "__main__":

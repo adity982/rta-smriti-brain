@@ -54,6 +54,46 @@ class TemporalTruthMcpTests(unittest.TestCase):
             self.assertEqual(result["status"], "ok")
             self.assertEqual(result["claim"]["object"], {"phase": "candidate"})
 
+    def test_agent_mcp_checkpoint_is_unverified_and_non_mandatory(self):
+        from rta_brain.context_candidates import (
+            adapt_context_candidates,
+            candidate_is_mandatory,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            conn, database, _root = self._brain(tmp)
+            conn.close()
+            server = RtaBrainMcpServer(database, "demo", allow_memory_writes=True)
+            server.call_tool(
+                "brain_checkpoint",
+                {
+                    "objective": "Continue the agent task.",
+                    "verified_evidence": "Agent-observed test output.",
+                    "next_action": "Ask the operator to verify the checkpoint.",
+                },
+            )
+
+            stored = connect(database)
+            try:
+                row = stored.execute(
+                    "SELECT source, trigger FROM checkpoints ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                checkpoint = next(
+                    candidate
+                    for candidate in adapt_context_candidates(
+                        stored, project="demo"
+                    )["candidates"]
+                    if candidate["source_type"] == "checkpoint"
+                )
+            finally:
+                stored.close()
+
+        self.assertEqual(dict(row), {"source": "agent", "trigger": "mcp"})
+        self.assertEqual(checkpoint["authority_class"], "agent_checkpoint")
+        self.assertEqual(checkpoint["verification_status"], "unverified")
+        self.assertEqual(checkpoint["epistemic_state"], "observed")
+        self.assertFalse(candidate_is_mandatory(checkpoint))
+
     def test_default_agent_reads_redact_sensitive_truth(self):
         with tempfile.TemporaryDirectory() as tmp:
             conn, database, root = self._brain(tmp)

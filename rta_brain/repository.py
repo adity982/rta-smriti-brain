@@ -3,14 +3,43 @@ import re
 import stat
 import subprocess
 import tempfile
+import threading
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
-
 
 IDENTITY_DIR = ".rta-smriti"
 IDENTITY_FILE = "brain_id"
 GIT_IDENTITY_FILE = "rta-smriti-brain-id"
 GIT_CHECKOUT_IDENTITY_FILE = "rta-smriti-checkout-id"
+DEFAULT_GIT_OUTPUT_BYTES = 16 * 1024 * 1024
+MAX_GIT_CONFIG_OUTPUT_BYTES = 1 * 1024 * 1024
+_GIT_READ_CHUNK_BYTES = 64 * 1024
+
+
+@dataclass(frozen=True)
+class RepositoryInspection:
+    root_key: str
+    repository_identity: str | None
+    checkout_identity: str | None
+    is_git_repo: bool
+    repository_root: str | None
+    branch: str | None
+    head: str | None
+    dirty_files: int | None
+    remote: str | None
+    head_source: str | None
+
+    def state(self) -> dict:
+        return {
+            "is_git_repo": self.is_git_repo,
+            "repository_root": self.repository_root,
+            "branch": self.branch,
+            "head": self.head,
+            "dirty_files": self.dirty_files,
+            "remote": self.remote,
+            "head_source": self.head_source,
+        }
 
 
 def _is_reparse_point(path: Path) -> bool:
@@ -72,23 +101,114 @@ def _git_environment() -> dict[str, str]:
     return environment
 
 
+def _run_bounded_capture(
+    command: list[str],
+    *,
+    timeout: float,
+    max_output_bytes: int,
+    creationflags: int,
+    environment: dict[str, str],
+) -> subprocess.CompletedProcess[str] | None:
+    """Capture combined process output without allowing either pipe to grow unbounded."""
+    if max_output_bytes <= 0:
+        raise ValueError("max_output_bytes must be positive")
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=creationflags,
+        env=environment,
+    )
+    if process.stdout is None or process.stderr is None:
+        process.kill()
+        process.wait()
+        raise OSError("bounded process pipes were not created")
+    lock = threading.Lock()
+    exceeded = threading.Event()
+    read_error = threading.Event()
+    output: dict[str, list[bytes]] = {"stdout": [], "stderr": []}
+    captured_bytes = 0
+
+    def drain(stream, label: str) -> None:
+        nonlocal captured_bytes
+        try:
+            while not exceeded.is_set():
+                read_available = getattr(stream, "read1", stream.read)
+                chunk = read_available(_GIT_READ_CHUNK_BYTES)
+                if not chunk:
+                    return
+                should_stop = False
+                with lock:
+                    remaining = max_output_bytes - captured_bytes
+                    if len(chunk) > remaining:
+                        if remaining > 0:
+                            output[label].append(chunk[:remaining])
+                            captured_bytes += remaining
+                        exceeded.set()
+                        should_stop = True
+                    else:
+                        output[label].append(chunk)
+                        captured_bytes += len(chunk)
+                if should_stop:
+                    try:
+                        process.terminate()
+                    except OSError:
+                        pass
+                    return
+        except OSError:
+            read_error.set()
+            try:
+                process.terminate()
+            except OSError:
+                pass
+
+    readers = [
+        threading.Thread(target=drain, args=(process.stdout, "stdout"), daemon=True),
+        threading.Thread(target=drain, args=(process.stderr, "stderr"), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    try:
+        returncode = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        raise
+    finally:
+        for reader in readers:
+            reader.join(timeout=2)
+        process.stdout.close()
+        process.stderr.close()
+    if any(reader.is_alive() for reader in readers) or read_error.is_set():
+        return None
+    if exceeded.is_set():
+        return None
+    return subprocess.CompletedProcess(
+        command,
+        returncode,
+        b"".join(output["stdout"]).decode("utf-8", errors="replace"),
+        b"".join(output["stderr"]).decode("utf-8", errors="replace"),
+    )
+
+
 def _configured_command_keys(
     git: Path, root: Path, environment: dict[str, str],
 ) -> set[str] | None:
     try:
-        result = subprocess.run(
+        result = _run_bounded_capture(
             [
                 str(git), "--no-pager", "-C", str(root), "config", "--null", "--name-only",
                 "--get-regexp", r"^(filter\..*\.(clean|process|required)|diff\..*\.(command|textconv))$",
             ],
-            text=True,
-            capture_output=True,
             timeout=5,
-            check=False,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-            env=environment,
+            environment=environment,
+            max_output_bytes=MAX_GIT_CONFIG_OUTPUT_BYTES,
         )
     except (OSError, subprocess.SubprocessError):
+        return None
+    if result is None:
         return None
     if result.returncode not in (0, 1):
         return None
@@ -152,6 +272,7 @@ def _git_command(
 def run_git_inspection(
     root: Path,
     *args: str,
+    max_output_bytes: int | None = None,
 ) -> subprocess.CompletedProcess[str] | None:
     """Run trusted Git with repository-controlled executable features disabled."""
     candidates = trusted_git_candidates()
@@ -166,14 +287,17 @@ def run_git_inspection(
                 candidates[0], resolved, tuple(args), hooks_path=Path(empty_hooks),
                 disable_hooks=True, environment=environment,
             )
-            return subprocess.run(
+            selected_limit = (
+                DEFAULT_GIT_OUTPUT_BYTES
+                if max_output_bytes is None
+                else max_output_bytes
+            )
+            return _run_bounded_capture(
                 command,
-                text=True,
-                capture_output=True,
                 timeout=8,
-                check=False,
+                max_output_bytes=selected_limit,
                 creationflags=creationflags,
-                env=environment,
+                environment=environment,
             )
         except (OSError, subprocess.SubprocessError, ValueError):
             return None
@@ -442,6 +566,88 @@ def checkout_identity(root: str | Path, create_marker: bool = True) -> str:
     return f"checkout-{local_identity}"
 
 
+def inspect_repository(root: str | Path | None, include_worktree: bool = True) -> RepositoryInspection:
+    """Capture one fail-closed identity and Git-state view for a bounded operation."""
+    requested = Path(root).expanduser().resolve() if root else None
+    root_key = canonical_root_key(requested) if requested else ""
+    if requested is None or not requested.exists() or not requested.is_dir():
+        return RepositoryInspection(
+            root_key=root_key,
+            repository_identity=None,
+            checkout_identity=None,
+            is_git_repo=False,
+            repository_root=None,
+            branch=None,
+            head=None,
+            dirty_files=None,
+            remote=None,
+            head_source=None,
+        )
+
+    local_identity = None
+    local_identity_invalid = False
+    try:
+        local_identity = _marker_identity(requested, create=False)
+    except ValueError:
+        local_identity_invalid = True
+
+    native_layout = _git_layout(requested)
+    verified_layout = verified_git_layout(requested) if native_layout else None
+    repository_value = None
+    checkout_value = None
+    if not local_identity_invalid and local_identity:
+        repository_value = local_identity
+    elif not local_identity_invalid and verified_layout:
+        repository_root, git_dir, common_dir = verified_layout
+        git_marker_invalid = False
+        try:
+            repository_value = _git_marker_identity(common_dir, create=False)
+        except ValueError:
+            git_marker_invalid = True
+        if not repository_value and not git_marker_invalid:
+            repository_value = stable_git_identity(repository_root)
+        try:
+            checkout_value = _git_checkout_identity(git_dir, create=False)
+        except ValueError:
+            checkout_value = None
+    if checkout_value is None and not local_identity_invalid and local_identity:
+        checkout_value = f"checkout-{local_identity}"
+
+    if not native_layout:
+        return RepositoryInspection(
+            root_key=root_key,
+            repository_identity=repository_value,
+            checkout_identity=checkout_value,
+            is_git_repo=False,
+            repository_root=None,
+            branch=None,
+            head=None,
+            dirty_files=None,
+            remote=None,
+            head_source=None,
+        )
+
+    git_root, git_dir, common_dir = native_layout
+    branch, full_head = _native_head(git_dir, common_dir)
+    dirty_files = None
+    if include_worktree:
+        status = _git(git_root, "status", "--porcelain=v1", "--untracked-files=normal")
+        if status is not None and status.returncode == 0:
+            dirty_files = len([line for line in status.stdout.splitlines() if line.strip()])
+    return RepositoryInspection(
+        root_key=root_key,
+        repository_identity=repository_value,
+        checkout_identity=checkout_value,
+        is_git_repo=True,
+        repository_root=str(git_root),
+        branch=branch or "unknown",
+        head=full_head[:12] if full_head else None,
+        dirty_files=dirty_files,
+        remote=_origin_remote(common_dir),
+        head_source="native",
+    )
+
+
 def repository_state(root: str | Path | None, include_worktree: bool = True) -> dict:
     empty = {
         "is_git_repo": False, "repository_root": None, "branch": None,
@@ -459,10 +665,9 @@ def repository_state(root: str | Path | None, include_worktree: bool = True) -> 
     branch, full_head = _native_head(git_dir, common_dir)
     dirty_files = None
     if include_worktree:
-        # Normal mode reports untracked directories as one dirty entry and avoids
-        # recursively walking generated trees during every dashboard refresh.
-        status = _stdout(git_root, "status", "--porcelain=v1", "--untracked-files=normal")
-        dirty_files = len([line for line in status.splitlines() if line.strip()])
+        status = _git(git_root, "status", "--porcelain=v1", "--untracked-files=normal")
+        if status is not None and status.returncode == 0:
+            dirty_files = len([line for line in status.stdout.splitlines() if line.strip()])
     return {
         "is_git_repo": True,
         "repository_root": str(git_root),

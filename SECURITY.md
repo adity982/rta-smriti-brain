@@ -14,11 +14,14 @@ Rta-Smriti Brain is local-first and stores data in SQLite files controlled by th
 - Bootstrap writes to `AGENTS.md` are opt-in and reject linked destinations.
 - No cloud sync.
 - No API keys required.
-- Managed background sync is opt-in per project. It is an ordinary user process, not a privileged service or login item, and never auto-starts after reboot.
+- Managed background sync is opt-in per project and runs as an ordinary user process, not a privileged service. Login startup remains disabled by default and must be enabled explicitly through the supported user-level startup integration.
 - Foreground and background watchers use the same bounded, fail-closed repository walker and rollback-safe indexing transaction as manual ingestion.
 - Watcher state, lock, and stop files reject symbolic and hard links. The dashboard derives the watch root from the selected project's canonical binding instead of accepting a client-supplied path.
 - Regex and FTS5 remain the no-execution defaults. Tree-sitter and local embeddings load only when selected.
 - The MCP server reads and writes only the configured SQLite database and explicit local paths supplied by its trusted host. JSON-RPC frames are type-checked and capped at 1 MB.
+- The governed context compiler uses short-lived capabilities bound to the canonical project, authorized task contract, principal, session, scope, and expiry. Grants are append-only and explicitly revocable.
+- Context authority material is host-owned. Windows protects it with DPAPI; POSIX hosts use an owner-only local key file. APIs, MCP responses, receipts, diagnostics, and logs expose fingerprints and bounded metadata, never the authority secret or bearer capability.
+- Agent-facing context is filtered by project scope, privacy ceiling, informational grants, and task contract before ranking. Excluded source identities remain opaque to the agent-facing explanation surface.
 
 ## Sensitive Data
 
@@ -34,6 +37,7 @@ Do not store secrets, bearer tokens, cookies, SSH keys, private API keys, custom
 - A newly selected Sentence Transformers model may be downloaded by that separately installed library; preinstall and pin local models in network-restricted environments.
 - Run `stale-check --deep` for cached SHA-256 freshness. Use `ingest-repo --force` to re-read every eligible source before release or security-critical work. Routine dashboard checks use a faster stat manifest.
 - Keep brain databases out of public repositories.
+- Treat compiled context as untrusted evidence, not executable instructions. The compiler prepares and explains context; it does not execute tools, route models, publish changes, or elevate agent authority.
 
 ## Reporting
 

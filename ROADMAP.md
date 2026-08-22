@@ -1,6 +1,14 @@
 # Roadmap
 
-## Current v0.6.1-alpha Candidate
+## Current v0.8.0-alpha Candidate
+
+- Agent-profile-aware context compilation with explicit token, privacy, and authority contracts
+- Immutable task contracts, candidate selection, context envelopes, receipts, explanations, and revocation
+- Multi-mode context comparison and outcome recording without silent self-reinforcement
+- Canonical-root-aware repository inspection reused across local brain databases
+- Event-sourced bitemporal truth from v0.7 remains the evidence kernel beneath context compilation
+
+## Included From v0.7.0-alpha
 
 - Canonical repository and per-checkout identity with clone/worktree distinction
 - Wrong-root freshness, readiness, MCP startup, and long-running MCP call rejection
@@ -21,7 +29,7 @@
 - Metadata-only large-file isolation plus explicit strict blocking
 - Safe local language-server discovery and loopback-only Ollama continuity compaction
 
-## Next After v0.6.0-alpha
+## Next After v0.8.0-alpha
 
 - Expand the public benchmark with community-reviewed corpora and blinded human relevance judgments
 - Add approximate nearest-neighbor indexes for very large local embedding collections

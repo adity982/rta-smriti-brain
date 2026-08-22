@@ -53,7 +53,12 @@ def continuity_paths(db_path: Path, project: str) -> dict[str, Path]:
     }
 
 
-def continuity_status(db_path: Path, project: str) -> dict:
+def continuity_status(
+    db_path: Path,
+    project: str,
+    *,
+    include_binding_diagnostics: bool = True,
+) -> dict:
     payload = _read_json(continuity_paths(db_path, project)["state"])
     if not payload:
         return {"status": "ok", "state": "stopped", "project": project, "db_path": str(db_path.expanduser().resolve())}
@@ -72,7 +77,7 @@ def continuity_status(db_path: Path, project: str) -> dict:
         payload["process_alive"] = process_alive
         if not process_alive or not heartbeat_fresh:
             state = "stale"
-    if payload.get("root") and payload.get("sessions_root"):
+    if include_binding_diagnostics and payload.get("root") and payload.get("sessions_root"):
         payload["binding_diagnostics"] = continuity_binding_diagnostics(
             Path(str(payload["sessions_root"])), Path(str(payload["root"])),
             lookback_days=float(payload.get("lookback_days", 30) or 30),
@@ -139,7 +144,7 @@ def start_continuity(
         raise ValueError("session backlog tail must be between 64 KB and 100 MB")
     paths = continuity_paths(database, project)
     _prepare_control_dir(paths["directory"])
-    current = continuity_status(database, project)
+    current = continuity_status(database, project, include_binding_diagnostics=False)
     if current["state"] in {"starting", "running", "stopping"}:
         return current
     if current["state"] == "stale" and current.get("process_alive"):
@@ -171,7 +176,7 @@ def start_continuity(
         log_stream.close()
     deadline = time.monotonic() + max(1.0, float(startup_timeout))
     while time.monotonic() < deadline:
-        state = continuity_status(database, project)
+        state = continuity_status(database, project, include_binding_diagnostics=False)
         if state.get("token_hash") == token_hash and state["state"] == "running":
             _SPAWNED_PROCESSES[str(paths["state"])] = process
             return state
@@ -188,14 +193,14 @@ def start_continuity(
 
 def stop_continuity(db_path: Path, project: str, timeout: float = 10.0) -> dict:
     paths = continuity_paths(db_path, project)
-    state = continuity_status(db_path, project)
+    state = continuity_status(db_path, project, include_binding_diagnostics=False)
     if state["state"] in {"stopped", "error"} or (state["state"] == "stale" and not state.get("process_alive")):
         _clear_stale_control(paths)
         return {**state, "state": "stopped"}
     _write_stop_request(paths["stop"])
     deadline = time.monotonic() + max(0.1, float(timeout))
     while time.monotonic() < deadline:
-        state = continuity_status(db_path, project)
+        state = continuity_status(db_path, project, include_binding_diagnostics=False)
         if state["state"] == "stopped" or (
             state["state"] in {"stale", "error"} and not state.get("process_alive")
         ):

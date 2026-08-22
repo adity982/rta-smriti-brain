@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from rta_brain import db
 from rta_brain import continuity as continuity_module
+from rta_brain import db
 from rta_brain.continuity import (
     append_event,
     ingest_codex_session,
@@ -347,6 +347,27 @@ class ContinuityTests(unittest.TestCase):
                 db.save_checkpoint(conn, "demo", "Reviewed continuation", verified_evidence="Operator reviewed the retained tail.")
                 self.assertNotIn("continuity_history_truncated", operational_readiness(conn, "demo")["reasons"])
             finally:
+                conn.close()
+
+    def test_checkpoint_write_rolls_back_on_keyboard_interrupt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = db.connect(Path(tmp) / "brain.sqlite")
+            try:
+                db.init_project(conn, "demo", tmp)
+                with (
+                    patch("rta_brain.db.now_iso", side_effect=KeyboardInterrupt),
+                    self.assertRaises(KeyboardInterrupt),
+                ):
+                    db.save_checkpoint(conn, "demo", "Interrupted checkpoint")
+
+                self.assertFalse(conn.in_transaction)
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM checkpoints").fetchone()[0],
+                    0,
+                )
+            finally:
+                if conn.in_transaction:
+                    conn.rollback()
                 conn.close()
 
 

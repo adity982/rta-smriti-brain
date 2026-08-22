@@ -8,8 +8,9 @@ import json
 import re
 import sqlite3
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from . import db
 from .repository import (
@@ -20,7 +21,6 @@ from .repository import (
     same_root,
 )
 from .temporal_validators import evaluate_validator, git_anchor_state
-
 
 MAX_EVENT_PAYLOAD_BYTES = 256 * 1024
 MAX_EVENT_JSON_DEPTH = 24
@@ -69,6 +69,20 @@ def _canonical_json(value: Any) -> str:
     return encoded
 
 
+def _row_as_dict(
+    row: sqlite3.Row,
+    *,
+    exclude: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    """Detach a SQLite row without treating its iterable values as column names."""
+
+    return {
+        key: row[key]
+        for key in row.keys()  # noqa: SIM118 - sqlite3.Row iteration yields values.
+        if key not in exclude
+    }
+
+
 def _canonical_event_payload(value: Any) -> str:
     """Encode a bounded event payload without recursive parser exhaustion."""
 
@@ -92,7 +106,7 @@ def _canonical_event_payload(value: Any) -> str:
                 raise ValueError("truth event payload collection exceeds the item limit")
             for key, child in item.items():
                 if not isinstance(key, str):
-                    raise ValueError("truth event payload object keys must be strings")
+                    raise TypeError("truth event payload object keys must be strings")
                 if len(key) > 512:
                     raise ValueError("truth event payload object key exceeds 512 characters")
                 pending.append((child, depth + 1))
@@ -375,7 +389,7 @@ def _append_project_event(
         )
         projector(conn, project_id, project_sequence, event_id, payload)
         conn.commit()
-    except Exception:
+    except BaseException:
         conn.rollback()
         raise
     event = conn.execute(
@@ -426,7 +440,21 @@ def append_claim(
     selected_state = str(epistemic_state).strip().lower()
     if selected_state not in VALID_EPISTEMIC_STATES:
         raise ValueError(f"unsupported epistemic state: {epistemic_state}")
-    if selected_state == "accepted" and str(actor_type).strip().lower() == "agent":
+    selected_actor_type = _required_text("actor_type", actor_type).casefold()
+    selected_authority_class = _required_text(
+        "authority_class", authority_class, maximum=128
+    )
+    selected_verification_status = _required_text(
+        "verification_status", verification_status, maximum=64
+    ).casefold()
+    if selected_actor_type == "agent" and not (
+        selected_authority_class.casefold().startswith("agent-")
+        or selected_authority_class.casefold().startswith("agent:")
+    ):
+        raise PermissionError("agents must use an agent authority class")
+    if selected_actor_type == "agent" and selected_verification_status != "unverified":
+        raise PermissionError("agents cannot self-verify claims")
+    if selected_state == "accepted" and selected_actor_type == "agent":
         raise PermissionError("agents cannot create accepted claims")
     selected_privacy = str(privacy_class).strip().lower()
     if selected_privacy not in VALID_PRIVACY_CLASSES:
@@ -442,7 +470,7 @@ def append_claim(
     selected_valid_from = valid_from or occurred_at or recorded_at
     object_json = _canonical_json(value)
     payload = {
-        "authority_class": _required_text("authority_class", authority_class),
+        "authority_class": selected_authority_class,
         "claim_id": selected_claim_id,
         "confidence": selected_confidence,
         "epistemic_state": selected_state,
@@ -460,9 +488,7 @@ def append_claim(
         "subject_key": subject_key,
         "valid_from": selected_valid_from,
         "valid_to": valid_to,
-        "verification_status": _required_text(
-            "verification_status", verification_status
-        ),
+        "verification_status": selected_verification_status,
     }
     payload_json = _canonical_event_payload(payload)
     payload_sha256 = _sha256_text(payload_json)
@@ -485,7 +511,7 @@ def append_claim(
                 duplicate,
                 stream_id=stream_id,
                 event_type="claim_asserted.v1",
-                actor_type=actor_type,
+                actor_type=selected_actor_type,
                 actor_id=actor_id,
                 source=source,
                 payload_sha256=payload_sha256,
@@ -522,7 +548,7 @@ def append_claim(
         state = repository_state(active_root)
         envelope = {
             "actor_id": _required_text("actor_id", actor_id),
-            "actor_type": _required_text("actor_type", actor_type),
+            "actor_type": selected_actor_type,
             "checkout_identity": project_row["checkout_identity"],
             "dirty_digest": None,
             "event_id": event_id,
@@ -614,7 +640,7 @@ def append_claim(
             ),
         )
         conn.commit()
-    except Exception:
+    except BaseException:
         conn.rollback()
         raise
 
@@ -1407,7 +1433,7 @@ def attach_evidence(
     if not 0.0 <= selected_confidence <= 1.0:
         raise ValueError("confidence must be between 0 and 1")
     if not isinstance(provenance, dict):
-        raise ValueError("provenance must be an object")
+        raise TypeError("provenance must be an object")
     selected_actor_type = _required_text("actor_type", actor_type).lower()
     selected_actor_id = _required_text("actor_id", actor_id)
     payload = {
@@ -1535,7 +1561,7 @@ def truth_explain(
             for row in evidence_rows[:selected_limit]
         ],
         "relations": [
-            {key: row[key] for key in row.keys()}
+            _row_as_dict(row)
             for row in relation_rows[:selected_limit]
         ],
         "evidence_truncated": len(evidence_rows) > selected_limit,
@@ -1702,7 +1728,7 @@ def _project_validator_definition(
 
 def _validate_validator_config(validator_type: str, config: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(config, dict):
-        raise ValueError("validator config must be an object")
+        raise TypeError("validator config must be an object")
     selected = dict(config)
     if validator_type in {
         "file_exists", "file_sha256", "json_pointer_equals", "sqlite_integrity"
@@ -2441,7 +2467,7 @@ def _projection_payload(conn: sqlite3.Connection, project_id: int) -> list[dict[
         """,
         (project_id,),
     ).fetchall()
-    return [{key: row[key] for key in row.keys()} for row in rows]
+    return [_row_as_dict(row) for row in rows]
 
 
 def _relation_projection_payload(
@@ -2458,7 +2484,7 @@ def _relation_projection_payload(
         """,
         (project_id,),
     ).fetchall()
-    return [{key: row[key] for key in row.keys()} for row in rows]
+    return [_row_as_dict(row) for row in rows]
 
 
 def _all_projection_payload(conn: sqlite3.Connection, project_id: int) -> dict[str, Any]:
@@ -2515,15 +2541,13 @@ def _all_projection_payload(conn: sqlite3.Connection, project_id: int) -> dict[s
         (project_id,),
     ).fetchall()
     return {
-        "abstentions": [{key: row[key] for key in row.keys()} for row in abstentions],
-        "anchors": [{key: row[key] for key in row.keys()} for row in anchors],
+        "abstentions": [_row_as_dict(row) for row in abstentions],
+        "anchors": [_row_as_dict(row) for row in anchors],
         "claims": _projection_payload(conn, project_id),
-        "evidence": [{key: row[key] for key in row.keys()} for row in evidence],
+        "evidence": [_row_as_dict(row) for row in evidence],
         "relations": _relation_projection_payload(conn, project_id),
-        "validator_results": [
-            {key: row[key] for key in row.keys()} for row in validator_results
-        ],
-        "validators": [{key: row[key] for key in row.keys()} for row in validators],
+        "validator_results": [_row_as_dict(row) for row in validator_results],
+        "validators": [_row_as_dict(row) for row in validators],
     }
 
 
@@ -2535,7 +2559,12 @@ def projection_digest(conn: sqlite3.Connection, *, project: str) -> str:
     return _streaming_projection_digest(conn, project_id)
 
 
-def _streaming_projection_digest(conn: sqlite3.Connection, project_id: int) -> str:
+def _streaming_projection_digest(
+    conn: sqlite3.Connection,
+    project_id: int,
+    *,
+    row_observer: Callable[[sqlite3.Row, str], None] | None = None,
+) -> str:
     """Digest projections with constant aggregate memory and deterministic ordering."""
 
     tables = (
@@ -2556,9 +2585,9 @@ def _streaming_projection_digest(conn: sqlite3.Connection, project_id: int) -> s
             (project_id,),
         )
         for row in cursor:
-            value = {
-                key: row[key] for key in row.keys() if key not in {"id", "project_id"}
-            }
+            if row_observer is not None:
+                row_observer(row, table)
+            value = _row_as_dict(row, exclude=frozenset({"id", "project_id"}))
             encoded = _canonical_json(value).encode("utf-8")
             digest.update(len(encoded).to_bytes(8, "big"))
             digest.update(encoded)
@@ -3128,7 +3157,8 @@ def temporal_readiness(
         ledger = verify_ledger(conn, project=project)
         ledger_intact = True
         ledger_error = None
-    except Exception as exc:
+    # Readiness must fail closed and still report unexpected ledger corruption.
+    except Exception as exc:  # noqa: BLE001
         ledger = None
         ledger_intact = False
         ledger_error = {"type": type(exc).__name__, "message": str(exc)[:500]}

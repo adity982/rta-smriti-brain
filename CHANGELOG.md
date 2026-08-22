@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.0-alpha] - Unreleased
+
+- Added governed context compilation for named agent profiles, immutable task contracts, bounded candidate selection, and privacy-scoped envelopes.
+- Added durable authorization, explanation, outcome, comparison, and revocation receipts without exposing capability secrets.
+- Added context compiler workflows across CLI, MCP, and the local operator console.
+- Reused one fail-closed repository inspection across brain databases bound to the same canonical root, eliminating repeated health-scan Git subprocess amplification.
+- Hardened release privacy scanning for non-Git roots, links, nested or renamed ZIP containers, unsafe archive paths, aggregate work limits, and stable in-memory archive inspection.
+- Fail-closed governed MCP compilation now requires an exact process-scoped contract ID and digest; stored context chunks, dashboard result bindings, Git-status uncertainty, Windows archive paths, trusted Git resolution, immutable baselines, and extended UNC privacy detection have dedicated regression coverage.
+
+## [0.7.0-alpha] - Unreleased foundation
+
+- Added an append-only event-sourced bitemporal truth kernel with claim history, evidence links, contradictions, validators, abstentions, and as-of/commit-time queries.
+- Added canonical project-brain integrity enforcement across root identity, checkout identity, readiness, MCP startup, and dashboard discovery.
+
 ## [0.6.0-alpha] - 2026-08-21
 
 - Added bounded Codex `turn_context` rebinding so a task started elsewhere can be captured after it enters the canonical project, without importing the earlier foreign transcript.

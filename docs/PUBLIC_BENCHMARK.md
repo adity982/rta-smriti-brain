@@ -20,11 +20,22 @@ or production memories. Its SHA-256 digest appears in every result.
 - simple contradiction detection
 - structured continuation success
 - governance allow/block accuracy
+- v0.6 context-pack versus v0.8 context-compiler recovery of explicit continuation controls
+- required-control density per 1,000 estimated input tokens at the same effective budget
 
 The default run compares `no_memory`, lexical FTS5, and dependency-free
 hash-hybrid retrieval. It also emits an `optional_semantic` record with
 `status: not_requested`, so omitted optional evidence cannot be mistaken for a
 completed comparison.
+
+The `context_compiler` section runs a separate deterministic synthetic project
+through both real implementations. It measures objective, acceptance criterion,
+stop condition, and prohibited-repetition recovery at the same 1,024-token
+effective input budget. Host-specific repository identity lines are canonicalized
+before token measurement so repeated runs remain comparable. The fixture digest,
+raw control counts, used-token estimates, deltas, and pass/fail gates are emitted.
+This proves a regression property of the packaged implementations only. It is not
+an external agent-success study or evidence of superiority over another product.
 
 To include an explicitly selected Sentence Transformers model:
 

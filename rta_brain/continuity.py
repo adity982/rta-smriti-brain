@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from .db import ensure_project, integrity_diagnostics, latest_checkpoint, now_iso
+from .repository import RepositoryInspection
 from .temporal import temporal_readiness
-
 
 MAX_EVENT_BYTES = 256_000
 MAX_CODEX_EVENTS_PER_RUN = 5_000
@@ -499,12 +499,18 @@ def reconcile_work_items(conn, project: str) -> dict:
 def operational_readiness(
     conn, project: str, *, lifecycle: dict | None = None, include_event_count: bool = True,
     active_root: str | Path | None = None,
+    repository_inspection: RepositoryInspection | None = None,
 ) -> dict:
     init_continuity_schema(conn)
     project_id = ensure_project(conn, project)
     checkpoint = latest_checkpoint(conn, project)
     reconciliation = reconcile_work_items(conn, project)
-    integrity = integrity_diagnostics(conn, project=project, active_root=active_root)
+    integrity = integrity_diagnostics(
+        conn,
+        project=project,
+        active_root=active_root,
+        repository_inspection=repository_inspection,
+    )
     temporal = temporal_readiness(conn, project=project)
     event_count = (
         int(conn.execute("SELECT COUNT(*) AS c FROM session_events WHERE project_id = ?", (project_id,)).fetchone()["c"])

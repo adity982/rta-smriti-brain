@@ -1,7 +1,10 @@
 import argparse
 import asyncio
 import copy
+import hmac
 import json
+import re
+import secrets
 import stat
 import sys
 from collections.abc import Awaitable, Callable
@@ -12,15 +15,47 @@ from typing import Any
 from . import __version__
 from .binding_guard import McpBindingLease
 from .context import build_context_pack, build_continuation_prompt
-from .continuity import append_event, ingest_codex_session, list_events, operational_readiness, reconcile_work_items, upsert_work_item
-from .continuity_daemon import continuity_status, start_continuity, stop_continuity, validate_codex_session_binding
+from .context_host import compile_context_for_agent, explain_context_for_agent
+from .continuity import (
+    append_event,
+    ingest_codex_session,
+    list_events,
+    operational_readiness,
+    reconcile_work_items,
+    upsert_work_item,
+)
+from .continuity_daemon import (
+    continuity_status,
+    start_continuity,
+    stop_continuity,
+    validate_codex_session_binding,
+)
 from .db import (
-    connect, doctor, graph, graph_query, ingest_repo, ingest_thread, reflect, remember, remember_many,
-    integrity_diagnostics, project_binding_status, save_checkpoint, search, stale_check,
+    connect,
+    doctor,
+    graph,
+    graph_query,
+    ingest_repo,
+    ingest_thread,
+    integrity_diagnostics,
+    project_binding_status,
+    reflect,
+    remember,
+    remember_many,
+    save_checkpoint,
+    search,
+    stale_check,
+)
+from .diagnostics import retrieval_diagnostics
+from .governance import (
+    build_operational_context,
+    create_policy,
+    list_policies,
+    list_receipts,
+    preflight,
+    retire_policy,
 )
 from .ingest import _lexical_root_for_candidate
-from .diagnostics import retrieval_diagnostics
-from .governance import build_operational_context, create_policy, list_policies, list_receipts, preflight, retire_policy
 from .temporal import (
     append_claim,
     attach_evidence,
@@ -37,7 +72,12 @@ from .temporal import (
     truth_explain,
     truth_history,
 )
-from .workspaces import get_workspace, list_workspaces, search_workspace, workspace_health
+from .workspaces import (
+    get_workspace,
+    list_workspaces,
+    search_workspace,
+    workspace_health,
+)
 
 
 def tool_schema(name: str, description: str, properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
@@ -88,6 +128,31 @@ TOOLS = [
             "max_tokens": {"type": "integer", "minimum": 256, "maximum": 100000, "default": 4000},
         },
         ["task"],
+    ),
+    tool_schema(
+        "brain_context_compile",
+        "Compile one operator-authorized context variant for this bound MCP session.",
+        {
+            "task_contract_id": {"type": "integer", "minimum": 1},
+            "variant": {
+                "type": "string",
+                "enum": [
+                    "primary",
+                    "mode:minimal",
+                    "mode:balanced",
+                    "mode:investigative",
+                    "mode:handoff",
+                ],
+                "default": "primary",
+            },
+        },
+        ["task_contract_id"],
+    ),
+    tool_schema(
+        "brain_context_explain",
+        "Explain one compilation bound to this MCP server principal and session.",
+        {"compilation_id": {"type": "string"}},
+        ["compilation_id"],
     ),
     tool_schema(
         "brain_remember",
@@ -526,9 +591,12 @@ TEMPORAL_WRITE_TOOLS = {
     "brain_truth_validator_define",
 }
 TEMPORAL_VALIDATOR_RUN_TOOLS = {"brain_truth_validator_run"}
+CONTEXT_DELEGATED_TOOLS = {"brain_context_compile", "brain_context_explain"}
 PROJECT_BOUND_READ_TOOLS = {
     "brain_search",
     "brain_context_pack",
+    "brain_context_compile",
+    "brain_context_explain",
     "brain_repo_map",
     "brain_stale_check",
     "brain_integrity_diagnostics",
@@ -713,6 +781,7 @@ class RtaBrainMcpServer:
         allow_truth_writes: bool = False,
         allow_validator_run: bool = False,
         allowed_thread_roots: tuple[Path, ...] = (),
+        context_contract_delegations: dict[int, str] | None = None,
     ):
         if (db_path is None) == (brain_dir is None):
             raise ValueError("configure exactly one of db_path or brain_dir")
@@ -723,7 +792,19 @@ class RtaBrainMcpServer:
             raise ValueError("default project must not be empty")
         if expected_root is not None and self.db_path is None:
             raise ValueError("an expected root is valid only in single-database MCP mode")
+        if context_contract_delegations and self.db_path is None:
+            raise ValueError("context contract delegation is valid only in single-database MCP mode")
+        self.context_contract_delegations: dict[int, str] = {}
+        for raw_id, raw_digest in (context_contract_delegations or {}).items():
+            if isinstance(raw_id, bool) or not isinstance(raw_id, int) or raw_id < 1:
+                raise ValueError("context contract delegation IDs must be positive integers")
+            digest = str(raw_digest).strip().casefold()
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ValueError("context contract delegation digests must be a 64-character SHA-256")
+            self.context_contract_delegations[raw_id] = digest
         self.expected_root = expected_root.expanduser().resolve() if expected_root else None
+        self.context_principal_id = "mcp-agent"
+        self.context_session_id = f"mcp-{secrets.token_hex(16)}"
         self.expected_binding_token: tuple[str, str, str] | None = None
         if self.db_path is not None:
             conn = connect(self.db_path)
@@ -755,6 +836,8 @@ class RtaBrainMcpServer:
         else:
             enabled = set(PROJECT_BOUND_READ_TOOLS)
             enabled.update({"brain_session_events", "brain_reconcile", "brain_operational_readiness", "brain_continuity_status"})
+            if not self.context_contract_delegations:
+                enabled.difference_update(CONTEXT_DELEGATED_TOOLS)
         if allow_memory_writes:
             enabled.update(MEMORY_WRITE_TOOLS)
             enabled.update({"brain_session_event", "brain_work_item", "brain_continuity_control"})
@@ -774,6 +857,36 @@ class RtaBrainMcpServer:
             (copy.deepcopy(TOOL_BY_NAME[name]) if self.brain_dir is not None else _agent_tool_schema(TOOL_BY_NAME[name]))
             for name in TOOL_BY_NAME if name in enabled
         ]
+
+    def _require_context_contract_delegation(self, conn, task_contract_id: int) -> None:
+        delegated_digest = self.context_contract_delegations.get(int(task_contract_id))
+        if delegated_digest is None:
+            raise PermissionError("context contract is not delegated to this MCP server process")
+        row = conn.execute(
+            """
+            SELECT tc.digest
+            FROM task_contracts tc
+            JOIN projects p ON p.id = tc.project_id
+            WHERE tc.id = ? AND p.name = ? AND tc.authorization_state = 'operator_authorized'
+            """,
+            (int(task_contract_id), self.default_project),
+        ).fetchone()
+        if row is None or not hmac.compare_digest(str(row["digest"]), delegated_digest):
+            raise PermissionError("delegated context contract does not match the authorized project contract")
+
+    def _context_compilation_contract_id(self, conn, compilation_id: str) -> int:
+        row = conn.execute(
+            """
+            SELECT c.task_contract_id
+            FROM context_compilations c
+            JOIN projects p ON p.id = c.project_id
+            WHERE c.compilation_id = ? AND p.name = ?
+            """,
+            (str(compilation_id).strip(), self.default_project),
+        ).fetchone()
+        if row is None:
+            raise ValueError("unknown project context compilation")
+        return int(row["task_contract_id"])
 
     def _bound_project(self, args: dict[str, Any]) -> str:
         requested = args.get("project")
@@ -889,6 +1002,34 @@ class RtaBrainMcpServer:
                 max_tokens=int(args.get("max_tokens", 4_000)),
             )
             return text_result(text)
+        if name == "brain_context_compile":
+            task_contract_id = int(args["task_contract_id"])
+            self._require_context_contract_delegation(conn, task_contract_id)
+            payload = compile_context_for_agent(
+                conn,
+                db_path=db_path,
+                project=project,
+                active_root=self._bound_repository_root(conn, {}, project),
+                task_contract_id=task_contract_id,
+                principal_id=self.context_principal_id,
+                session_id=self.context_session_id,
+                variant_id=str(args.get("variant", "primary")),
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_context_explain":
+            self._require_context_contract_delegation(
+                conn,
+                self._context_compilation_contract_id(conn, str(args["compilation_id"])),
+            )
+            payload = explain_context_for_agent(
+                conn,
+                db_path=db_path,
+                project=project,
+                compilation_id=str(args["compilation_id"]),
+                principal_id=self.context_principal_id,
+                session_id=self.context_session_id,
+            )
+            return text_result(json_text(payload), payload)
         if name == "brain_remember":
             payload = remember(
                 conn,
@@ -997,6 +1138,8 @@ class RtaBrainMcpServer:
                 next_action=str(args.get("next_action", "")),
                 prohibited_repetition=str(args.get("prohibited_repetition", "")),
                 expected_version=args.get("expected_version"),
+                source="agent",
+                trigger="mcp",
             )
             return text_result(json_text(payload), payload)
         if name == "brain_continuation_prompt":
@@ -1394,6 +1537,8 @@ MUTATING_TOOLS = {
     "brain_work_item",
     "brain_continuity_control",
     "brain_reflect",
+    "brain_context_compile",
+    "brain_context_explain",
     *TEMPORAL_WRITE_TOOLS,
     *TEMPORAL_VALIDATOR_RUN_TOOLS,
 }
@@ -1492,6 +1637,7 @@ async def serve_stdio_async(
     allow_truth_writes: bool = False,
     allow_validator_run: bool = False,
     allowed_thread_roots: tuple[Path, ...] = (),
+    context_contract_delegations: dict[int, str] | None = None,
 ) -> int:
     server = RtaBrainMcpServer(
         db_path=db_path,
@@ -1504,6 +1650,7 @@ async def serve_stdio_async(
         allow_truth_writes=allow_truth_writes,
         allow_validator_run=allow_validator_run,
         allowed_thread_roots=allowed_thread_roots,
+        context_contract_delegations=context_contract_delegations,
     )
     stream = sys.stdin.buffer
     write_lock = asyncio.Lock()
@@ -1554,6 +1701,7 @@ def serve_stdio(
     allow_truth_writes: bool = False,
     allow_validator_run: bool = False,
     allowed_thread_roots: tuple[Path, ...] = (),
+    context_contract_delegations: dict[int, str] | None = None,
 ) -> int:
     return asyncio.run(serve_stdio_async(
         db_path,
@@ -1566,6 +1714,7 @@ def serve_stdio(
         allow_truth_writes=allow_truth_writes,
         allow_validator_run=allow_validator_run,
         allowed_thread_roots=allowed_thread_roots,
+        context_contract_delegations=context_contract_delegations,
     ))
 
 
@@ -1600,6 +1749,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-validator-run", action="store_true",
         help="Allow deterministic non-command truth validators; requires --allow-truth-writes",
     )
+    parser.add_argument(
+        "--context-contract", action="append", default=[], metavar="ID:DIGEST",
+        help="Delegate one operator-authorized context contract to this MCP process; may be repeated",
+    )
     return parser
 
 
@@ -1609,13 +1762,22 @@ def main(argv=None) -> int:
     if args.brain_dir and (
         args.root or args.allow_memory_writes or args.allow_repo_ingestion
         or args.allow_thread_ingestion or args.allow_thread_root
-        or args.allow_truth_writes or args.allow_validator_run
+        or args.allow_truth_writes or args.allow_validator_run or args.context_contract
     ):
         parser.error("root and capability flags are only valid with --db single-project mode")
     if args.allow_thread_ingestion and not args.allow_thread_root:
         parser.error("--allow-thread-ingestion requires at least one --allow-thread-root")
     if args.allow_validator_run and not args.allow_truth_writes:
         parser.error("--allow-validator-run requires --allow-truth-writes")
+    context_contract_delegations: dict[int, str] = {}
+    for value in args.context_contract:
+        match = re.fullmatch(r"([1-9][0-9]*):([0-9A-Fa-f]{64})", str(value).strip())
+        if match is None:
+            parser.error("--context-contract must use ID:DIGEST with a positive ID and 64-character SHA-256")
+        contract_id = int(match.group(1))
+        if contract_id in context_contract_delegations:
+            parser.error(f"--context-contract ID {contract_id} is duplicated")
+        context_contract_delegations[contract_id] = match.group(2).casefold()
     return serve_stdio(
         Path(args.db) if args.db else None,
         args.project,
@@ -1627,6 +1789,7 @@ def main(argv=None) -> int:
         allow_truth_writes=args.allow_truth_writes,
         allow_validator_run=args.allow_validator_run,
         allowed_thread_roots=tuple(Path(root) for root in args.allow_thread_root),
+        context_contract_delegations=context_contract_delegations,
     )
 
 

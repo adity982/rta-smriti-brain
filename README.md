@@ -9,7 +9,7 @@
 
 **A local project brain for AI coding agents. `v0.6.0-alpha` is now published with lower-friction indexing, safer continuity, encrypted snapshots, and multi-project operation.**
 
-The current development checkout is preparing `v0.6.1-alpha`, a canonical-integrity update that binds each brain to one verified checkout and fails closed on wrong-root freshness. The latest public prerelease remains `v0.6.0-alpha` until the candidate passes review and is explicitly approved for publication.
+The current development line has completed the local canonical-identity and temporal-truth kernels and is qualifying an uncommitted `v0.8.0-alpha` cognitive-context compiler candidate. The latest public prerelease remains `v0.6.0-alpha`; no later candidate is represented as published until its exact diff, cross-platform evidence, privacy review, and owner approval are complete.
 
 [Latest prerelease assets](https://github.com/sulabhdubey/rta-smriti-brain/releases) · [Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second product demo](launch-assets/product-hunt/rta-smriti-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Public benchmark](docs/PUBLIC_BENCHMARK.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
 
@@ -53,6 +53,7 @@ and resilient multi-project workspaces.
 - Ingests long threads or handoff notes as explicitly unverified prior memory so useful context survives compaction without self-assigning trust.
 - Incrementally captures matching local Codex sessions with resumable byte cursors, bounded/redacted event payloads, and conservative interruption checkpoints.
 - Builds a focused **context pack** for the next agent task.
+- Compiles governed agent-specific context from immutable task contracts, explicit acceptance and stop conditions, privacy grants, and explainable selection receipts.
 - Enforces a hard context token budget and keeps direct evidence ahead of low-trust historical memory.
 - Runs a local operator console with graph, canvas, typed bases, context-pack receipts, memory ledger, freshness checks, and bootstrap flow.
 - Exposes a dependency-light stdio MCP server for agent integrations.
@@ -284,6 +285,8 @@ ingest-thread     Index a long thread, transcript, or handoff file
 search            Search memories and indexed files
 graph             Read the local entity graph
 graph-query       Traverse a bounded dependency, dependent, impact, evidence, or relevance subgraph
+truth             Query the bitemporal truth ledger and validator history
+context           Govern and compile agent-specific context
 retrieval-diagnostics Explain retrieval mode, coverage, rank components, freshness, and evidence
 benchmark         Run the packaged reproducible public benchmark
 workspace         Create, inspect, and search an isolated multi-brain workspace
@@ -340,6 +343,8 @@ Tools exposed:
 
 - `brain_search`
 - `brain_context_pack`
+- `brain_context_compile`
+- `brain_context_explain`
 - `brain_remember`
 - `brain_remember_batch`
 - `brain_ingest_repo`
@@ -367,6 +372,12 @@ Tools exposed:
 - `brain_preflight` (agents cannot attest checks or override)
 - `brain_governance_receipts`
 - `brain_doctor`
+
+`brain_context_compile` and `brain_context_explain` are fail-closed MCP tools.
+They are exposed only when the operator starts a single-project MCP server with
+`--context-contract ID:DIGEST` for an authorized task contract. A plain
+generated MCP configuration keeps search, context packs, repository maps, and
+truth reads available without granting governed compilation rights.
 
 ## Real-World Use Cases
 

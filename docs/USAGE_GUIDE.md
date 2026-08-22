@@ -149,6 +149,37 @@ review auth boundaries before changing user roles
 continue the release hardening work from the previous thread
 ```
 
+### Compile A Governed Agent Context
+
+The legacy `context-pack` command is the quick copy-and-paste path. Use the
+`context` command family when the task needs an explicit agent profile, immutable
+acceptance and stop conditions, privacy scope, comparison variants, revocation,
+and durable explanation receipts.
+
+```powershell
+& $RtaBrain --db "$BrainDir\project-name.sqlite" --json context authority-status
+& $RtaBrain --db "$BrainDir\project-name.sqlite" context profile-register --help
+& $RtaBrain --db "$BrainDir\project-name.sqlite" context contract-authorize --help
+& $RtaBrain --db "$BrainDir\project-name.sqlite" context compile --help
+& $RtaBrain --db "$BrainDir\project-name.sqlite" context explain --help
+```
+
+```bash
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" --json context authority-status
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" context profile-register --help
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" context contract-authorize --help
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" context compile --help
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" context explain --help
+```
+
+Profile and contract inputs are bounded JSON files read through stable unlinked
+descriptors. Authorization is an operator action. Compilation and explanation are
+bound to the named agent principal and session; capability secrets never appear in
+normal JSON output. Use `context audit` for metadata-only operator receipts,
+`context outcome` for an explicitly confirmed result, and `context revoke` to
+invalidate the exact compilation grant. These commands prepare and explain
+context; they do not execute the task.
+
 ## Use The Dashboard
 
 For the first use, onboard the project and open the console in one command:
@@ -238,6 +269,21 @@ Probe the exact generated server before editing the host configuration:
 A `ready` result proves initialize, tools/list, and ping worked for that command.
 Copy the returned config into the host, then start a fresh agent task. Existing
 tasks cannot dynamically acquire newly registered MCP tools.
+
+Governed context compilation is a narrower, fail-closed delegation. After the
+operator authorizes a task contract, append its exact positive ID and SHA-256
+digest to a **single-project** server's generated `args`:
+
+```text
+--context-contract ID:DIGEST
+```
+
+The argument may be repeated for multiple explicitly authorized contracts.
+Without it, `brain_context_compile` and `brain_context_explain` are absent from
+the server's tool list; clients cannot enumerate contract IDs. The server
+rechecks the delegated digest against the selected project's stored contract on
+every compile or explanation request. Multi-project gateways do not accept
+contract delegations.
 
 ### Use Multi-Project Workspaces
 

@@ -5,10 +5,12 @@ from pathlib import Path
 
 from . import __version__
 from .autostart import autostart_status, disable_autostart, enable_autostart
-from .context import build_context_pack, build_continuation_prompt
 from .benchmark import (
-    append_benchmark_history, benchmark_history, default_public_benchmark_path,
-    run_public_benchmark, write_benchmark_report,
+    append_benchmark_history,
+    benchmark_history,
+    default_public_benchmark_path,
+    run_public_benchmark,
+    write_benchmark_report,
 )
 from .console import publish_readiness, run_dashboard
 from .console_daemon import (
@@ -19,44 +21,120 @@ from .console_daemon import (
     start_console,
     stop_console,
 )
+from .context import build_context_pack, build_continuation_prompt
+from .context_host import (
+    audit_context_for_operator,
+    authorize_context_contract,
+    compile_context_for_agent,
+    context_authority_status,
+    ensure_context_agent_profile,
+    explain_context_for_agent,
+    load_bounded_context_json,
+    record_context_outcome_for_operator,
+    revoke_context_compilation_grant,
+)
 from .continuity import (
-    append_event, ingest_codex_session, list_events, operational_readiness,
-    reconcile_work_items, upsert_work_item,
+    append_event,
+    ingest_codex_session,
+    list_events,
+    operational_readiness,
+    reconcile_work_items,
+    upsert_work_item,
 )
 from .continuity_daemon import (
-    continuity_status, run_continuity_worker, start_continuity, stop_continuity,
+    continuity_status,
+    run_continuity_worker,
+    start_continuity,
+    stop_continuity,
 )
 from .db import (
-    connect, doctor, get_project_settings, graph, graph_query, ingest_repo, ingest_thread, init_project, reflect,
-    integrity_diagnostics, project_binding_status, rebind_project_root, remember, save_checkpoint, search,
-    stale_check, update_project_settings,
+    connect,
+    doctor,
+    get_project_settings,
+    graph,
+    graph_query,
+    ingest_repo,
+    ingest_thread,
+    init_project,
+    integrity_diagnostics,
+    project_binding_status,
+    rebind_project_root,
+    reflect,
+    remember,
+    save_checkpoint,
+    search,
+    stale_check,
+    update_project_settings,
 )
-from .governance import build_operational_context, create_policy, list_policies, list_receipts, preflight, retire_policy
 from .diagnostics import retrieval_diagnostics
+from .governance import (
+    build_operational_context,
+    create_policy,
+    list_policies,
+    list_receipts,
+    preflight,
+    retire_policy,
+)
 from .hooks import install_git_hooks, uninstall_git_hooks
 from .lifecycle import apply_memory_feedback, run_conservative_decay
 from .onboarding import SUPPORTED_TARGET_AGENTS, onboard_project
 from .portability import (
-    export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_create_encrypted,
-    snapshot_keygen, snapshot_passphrase_keygen, snapshot_restore_encrypted, snapshot_verify,
+    export_bundle,
+    import_bundle,
+    inspect_bundle,
+    snapshot_create,
+    snapshot_create_encrypted,
+    snapshot_keygen,
+    snapshot_passphrase_keygen,
+    snapshot_restore_encrypted,
+    snapshot_verify,
     snapshot_verify_encrypted,
 )
 from .project import (
-    bootstrap_project, install_local, mcp_config_payload, mcp_doctor,
-    mcp_gateway_config_payload, projects_list, self_check,
-)
-from .watch import watch_repository
-from .watch_daemon import run_watcher_worker, start_watcher, stop_watcher, watcher_status
-from .workspaces import (
-    add_project_to_workspace, create_workspace, delete_workspace, get_workspace, list_workspaces,
-    remove_project_from_workspace, search_workspace, workspace_health,
+    bootstrap_project,
+    install_local,
+    mcp_config_payload,
+    mcp_doctor,
+    mcp_gateway_config_payload,
+    projects_list,
+    self_check,
 )
 from .temporal import (
-    append_claim, attach_evidence, change_claim_state, define_validator,
-    observe_repository_anchor, rebuild_projections, record_abstention,
-    relate_claims, revise_claim, run_validator, truth_as_of, truth_at_commit,
-    truth_current, truth_diff, truth_explain, truth_history, validator_history,
+    append_claim,
+    attach_evidence,
+    change_claim_state,
+    define_validator,
+    observe_repository_anchor,
+    rebuild_projections,
+    record_abstention,
+    relate_claims,
+    revise_claim,
+    run_validator,
+    truth_as_of,
+    truth_at_commit,
+    truth_current,
+    truth_diff,
+    truth_explain,
+    truth_history,
+    validator_history,
     verify_ledger,
+)
+from .watch import watch_repository
+from .watch_daemon import (
+    run_watcher_worker,
+    start_watcher,
+    stop_watcher,
+    watcher_status,
+)
+from .workspaces import (
+    add_project_to_workspace,
+    create_workspace,
+    delete_workspace,
+    get_workspace,
+    list_workspaces,
+    remove_project_from_workspace,
+    search_workspace,
+    workspace_health,
 )
 
 
@@ -403,6 +481,79 @@ def build_parser() -> argparse.ArgumentParser:
     projection_rebuild.add_argument("--root", required=True)
     projection_compare = projection_actions.add_parser("compare")
     projection_compare.add_argument("--project", default="default")
+
+    context_cmd = sub.add_parser(
+        "context", help="Authorize, compile, explain, and audit bounded agent context"
+    )
+    add_common_options(context_cmd)
+    context_actions = context_cmd.add_subparsers(dest="context_action", required=True)
+    context_actions.add_parser(
+        "authority-status", help="Verify host-owned context authority readiness"
+    )
+
+    context_profile = context_actions.add_parser(
+        "profile-register", help="Register an operator-verified agent consumption profile"
+    )
+    context_profile.add_argument("--project", default="default")
+    context_profile.add_argument("--profile-id", required=True)
+    context_profile.add_argument("--operator-id", required=True)
+    context_profile.add_argument("--max-input-tokens", type=int, required=True)
+    context_profile.add_argument(
+        "--privacy-ceiling",
+        choices=("public", "internal", "sensitive", "restricted"),
+        default="internal",
+    )
+
+    context_contract = context_actions.add_parser(
+        "contract-authorize", help="Authorize one bounded task contract JSON document"
+    )
+    context_contract.add_argument("--project", default="default")
+    context_contract.add_argument("--profile-version-id", type=int, required=True)
+    context_contract.add_argument("--contract-file", required=True)
+    context_contract.add_argument("--operator-id", required=True)
+
+    context_compile = context_actions.add_parser(
+        "compile", help="Compile one authorized agent context variant"
+    )
+    context_compile.add_argument("--project", default="default")
+    context_compile.add_argument("--root", required=True)
+    context_compile.add_argument("--task-contract-id", type=int, required=True)
+    context_compile.add_argument("--principal-id", required=True)
+    context_compile.add_argument("--session-id", required=True)
+    context_compile.add_argument("--variant", default="primary")
+
+    context_explain = context_actions.add_parser(
+        "explain", help="Explain a compilation to its bound agent session"
+    )
+    context_explain.add_argument("--project", default="default")
+    context_explain.add_argument("--compilation-id", required=True)
+    context_explain.add_argument("--principal-id", required=True)
+    context_explain.add_argument("--session-id", required=True)
+
+    context_audit = context_actions.add_parser(
+        "audit", help="Read metadata-only compilation receipts as the operator"
+    )
+    context_audit.add_argument("--project", default="default")
+    context_audit.add_argument("--compilation-id", required=True)
+    context_audit.add_argument("--operator-id", required=True)
+    context_audit.add_argument("--session-id", required=True)
+
+    context_outcome = context_actions.add_parser(
+        "outcome", help="Record one bounded operator-confirmed outcome document"
+    )
+    context_outcome.add_argument("--project", default="default")
+    context_outcome.add_argument("--compilation-id", required=True)
+    context_outcome.add_argument("--outcome-file", required=True)
+    context_outcome.add_argument("--operator-id", required=True)
+    context_outcome.add_argument("--session-id", required=True)
+
+    context_revoke = context_actions.add_parser(
+        "revoke", help="Revoke the exact capability grant used by a compilation"
+    )
+    context_revoke.add_argument("--project", default="default")
+    context_revoke.add_argument("--compilation-id", required=True)
+    context_revoke.add_argument("--operator-id", required=True)
+    context_revoke.add_argument("--reason", required=True)
 
     diagnostics_cmd = sub.add_parser("retrieval-diagnostics", help="Explain retrieval mode, coverage, ranking, evidence, and freshness")
     add_common_options(diagnostics_cmd)
@@ -1074,6 +1225,76 @@ def main(argv=None) -> int:
                 payload = run_conservative_decay(
                     conn, project=args.project, minimum_age_days=args.minimum_age_days, step=args.step,
                 )
+            elif args.command == "context":
+                if args.context_action == "authority-status":
+                    payload = context_authority_status(Path(args.db))
+                elif args.context_action == "profile-register":
+                    payload = ensure_context_agent_profile(
+                        conn,
+                        project=args.project,
+                        profile_id=args.profile_id,
+                        actor_id=args.operator_id,
+                        max_input_tokens=args.max_input_tokens,
+                        privacy_ceiling=args.privacy_ceiling,
+                    )
+                elif args.context_action == "contract-authorize":
+                    payload = authorize_context_contract(
+                        conn,
+                        project=args.project,
+                        agent_profile_version_id=args.profile_version_id,
+                        contract=load_bounded_context_json(args.contract_file),
+                        actor_id=args.operator_id,
+                    )
+                elif args.context_action == "compile":
+                    payload = compile_context_for_agent(
+                        conn,
+                        db_path=Path(args.db),
+                        project=args.project,
+                        active_root=Path(args.root),
+                        task_contract_id=args.task_contract_id,
+                        principal_id=args.principal_id,
+                        session_id=args.session_id,
+                        variant_id=args.variant,
+                    )
+                elif args.context_action == "explain":
+                    payload = explain_context_for_agent(
+                        conn,
+                        db_path=Path(args.db),
+                        project=args.project,
+                        compilation_id=args.compilation_id,
+                        principal_id=args.principal_id,
+                        session_id=args.session_id,
+                    )
+                elif args.context_action == "audit":
+                    payload = audit_context_for_operator(
+                        conn,
+                        db_path=Path(args.db),
+                        project=args.project,
+                        compilation_id=args.compilation_id,
+                        operator_id=args.operator_id,
+                        session_id=args.session_id,
+                    )
+                elif args.context_action == "outcome":
+                    payload = record_context_outcome_for_operator(
+                        conn,
+                        db_path=Path(args.db),
+                        project=args.project,
+                        compilation_id=args.compilation_id,
+                        operator_id=args.operator_id,
+                        session_id=args.session_id,
+                        outcome=load_bounded_context_json(args.outcome_file),
+                    )
+                elif args.context_action == "revoke":
+                    payload = revoke_context_compilation_grant(
+                        conn,
+                        db_path=Path(args.db),
+                        project=args.project,
+                        compilation_id=args.compilation_id,
+                        operator_id=args.operator_id,
+                        reason=args.reason,
+                    )
+                else:
+                    raise ValueError(f"unknown context action: {args.context_action}")
             elif args.command == "context-pack":
                 payload = build_context_pack(
                     conn, args.task, project=args.project, limit=args.limit, max_tokens=args.max_tokens

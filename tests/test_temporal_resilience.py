@@ -12,6 +12,44 @@ from rta_brain import db
 
 
 class TemporalResilienceTests(unittest.TestCase):
+    def test_claim_append_rolls_back_on_keyboard_interrupt(self):
+        from rta_brain.temporal import append_claim
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            conn = db.connect(Path(tmp) / "brain.sqlite")
+            try:
+                db.init_project(conn, "demo", str(root))
+                with (
+                    mock.patch(
+                        "rta_brain.temporal._project_for_write",
+                        side_effect=KeyboardInterrupt,
+                    ),
+                    self.assertRaises(KeyboardInterrupt),
+                ):
+                    append_claim(
+                        conn,
+                        project="demo",
+                        active_root=root,
+                        claim_id="interrupted-claim",
+                        subject="release",
+                        predicate="status",
+                        value="candidate",
+                        idempotency_key="interrupted:1",
+                        expected_stream_version=0,
+                    )
+
+                self.assertFalse(conn.in_transaction)
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM truth_events").fetchone()[0],
+                    0,
+                )
+            finally:
+                if conn.in_transaction:
+                    conn.rollback()
+                conn.close()
+
     def test_concurrent_writers_serialize_and_one_stale_version_fails_cleanly(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
@@ -127,8 +165,10 @@ class TemporalResilienceTests(unittest.TestCase):
                     verify.execute("SELECT text FROM memories WHERE id = 7").fetchone()[0],
                     "original legacy memory",
                 )
-                self.assertEqual(
-                    verify.execute("SELECT COUNT(*) FROM truth_events").fetchone()[0], 0
+                self.assertIsNone(
+                    verify.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'truth_events'"
+                    ).fetchone()
                 )
             finally:
                 verify.close()
@@ -266,7 +306,9 @@ class TemporalResilienceTests(unittest.TestCase):
             except OSError as exc:
                 self.skipTest(f"hard links unavailable: {exc}")
             from rta_brain.temporal_validators import (
-                evaluate_validator, stable_file_bytes, stable_file_sha256,
+                evaluate_validator,
+                stable_file_bytes,
+                stable_file_sha256,
             )
 
             with self.assertRaisesRegex(ValueError, "hard linked"):
@@ -311,7 +353,11 @@ class TemporalResilienceTests(unittest.TestCase):
             conn = db.connect(Path(tmp) / "brain.sqlite")
             try:
                 db.init_project(conn, "demo", str(root))
-                from rta_brain.temporal import append_claim, attach_evidence, truth_explain
+                from rta_brain.temporal import (
+                    append_claim,
+                    attach_evidence,
+                    truth_explain,
+                )
 
                 append_claim(
                     conn, project="demo", active_root=root, claim_id="claim-a",

@@ -5,7 +5,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "rta-brain.py"
 
@@ -37,6 +36,7 @@ class TemporalTruthCliTests(unittest.TestCase):
                 "--claim-id", "release-status",
                 "--subject", "release:v0.7", "--predicate", "status",
                 "--value-json", '"candidate"',
+                "--valid-from", "2026-08-22T00:00:00+00:00",
                 "--idempotency-key", "cli:release-status:1",
                 "--expected-version", "0",
             )

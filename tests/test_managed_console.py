@@ -1,6 +1,7 @@
 import json
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -32,7 +33,6 @@ from rta_brain.runtime_control import (
     spawn_detached_worker,
     write_json,
 )
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -421,6 +421,82 @@ class ManagedConsoleTests(unittest.TestCase):
             "reason": "Release policy replaced.",
         })
         self.assertEqual(retired["policy"]["status"], "retired")
+
+    def test_context_compiler_api_keeps_authority_material_off_the_wire(self):
+        root = Path(self.tempdir.name) / "context-repo"
+        root.mkdir()
+        subprocess.run(["git", "-C", str(root), "init"], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(root), "config", "user.email", "fixture@example.invalid"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(root), "config", "user.name", "Fixture"],
+            check=True,
+        )
+        (root / "state.txt").write_text("ready\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "state.txt"], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "-m", "fixture"],
+            check=True,
+            capture_output=True,
+        )
+        database = self.brain_dir / "context.sqlite"
+        conn = connect(database)
+        try:
+            init_project(conn, "demo", str(root))
+        finally:
+            conn.close()
+        started = start_console(
+            ROOT, self.brain_dir, port=0, open_browser=False, startup_timeout=10.0
+        )
+        token = started["url"].split("#token=", 1)[1]
+        endpoint = f"http://127.0.0.1:{started['port']}/api/context-compiler"
+        headers = {
+            "X-Rta-Smriti-Token": token,
+            "Content-Type": "application/json",
+        }
+
+        def post(payload):
+            request = urllib.request.Request(
+                endpoint,
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        project_ref = {"db_path": str(database), "project": "demo"}
+        compiled = post(
+            {
+                **project_ref,
+                "action": "authorize-and-compile",
+                "profile_id": "codex",
+                "max_input_tokens": 8_192,
+                "objective": "Resume the verified project task.",
+                "comparison_modes": ["minimal"],
+                "principal_id": "codex",
+                "session_id": "dashboard-task",
+                "variant": "primary",
+            }
+        )
+        compilation_id = compiled["compilation_receipt"]["compilation_id"]
+        audited = post(
+            {
+                **project_ref,
+                "action": "audit",
+                "compilation_id": compilation_id,
+                "session_id": "dashboard-operator-task",
+            }
+        )
+
+        serialized = json.dumps({"compiled": compiled, "audited": audited})
+        self.assertEqual(compiled["status"], "stable")
+        self.assertTrue(audited["receipt_integrity_verified"])
+        self.assertNotIn("capability_token", serialized)
+        self.assertNotIn("authority_secret", serialized)
+        self.assertNotIn("operator_audit", serialized)
 
     def test_intelligence_workspace_and_feedback_apis_use_selected_brains(self):
         api_root = Path(self.tempdir.name) / "api"

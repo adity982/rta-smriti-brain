@@ -29,6 +29,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
@@ -39,8 +40,16 @@ jobs:
         run: python scripts/build_binary.py
       - name: Smoke test executable
         run: python scripts/smoke_binary.py
+      - name: Stage versioned binary and SHA256SUMS.txt
+        if: matrix.os != 'ubuntu-latest'
+        run: python scripts/package_release_artifacts.py
+      - name: Stage versioned binary, wheel, and SHA256SUMS.txt
+        if: matrix.os == 'ubuntu-latest'
+        run: python scripts/package_release_artifacts.py --include-wheel
+      - name: Privacy-scan staged release bundle
+        run: python scripts/privacy_scan.py --root release-artifacts
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.executable }}
+          path: release-artifacts/
           if-no-files-found: error

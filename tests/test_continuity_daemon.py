@@ -33,6 +33,21 @@ class ContinuityDaemonTests(unittest.TestCase):
         self.assertEqual(result["state"], "stopped")
         self.assertFalse(result["process_alive"])
 
+    def test_stop_polling_does_not_scan_session_bindings(self):
+        running = {"state": "running", "process_alive": True, "pid": 42}
+        stopped = {"state": "stopped", "process_alive": False, "pid": 42}
+        with patch("rta_brain.continuity_daemon.continuity_paths", return_value={
+            "directory": Path("control"), "state": Path("control/state"),
+            "stop": Path("control/stop"), "lock": Path("control/lock"), "log": Path("control/log"),
+        }), patch(
+            "rta_brain.continuity_daemon.continuity_status",
+            side_effect=[running, stopped],
+        ) as status, patch("rta_brain.continuity_daemon._write_stop_request"):
+            result = stop_continuity(Path("brain.sqlite"), "demo", timeout=1)
+
+        self.assertEqual(result["state"], "stopped")
+        self.assertTrue(all(call.kwargs == {"include_binding_diagnostics": False} for call in status.call_args_list))
+
     @unittest.skipIf(os.name == "nt", "POSIX permission contract")
     def test_control_directory_and_state_are_private_on_posix(self):
         with tempfile.TemporaryDirectory() as tmp:

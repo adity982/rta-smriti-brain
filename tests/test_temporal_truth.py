@@ -1,10 +1,10 @@
-import sqlite3
-import tempfile
-import unittest
 import hashlib
 import json
+import sqlite3
 import subprocess
 import sys
+import tempfile
+import unittest
 from pathlib import Path
 
 from rta_brain import db
@@ -17,7 +17,7 @@ class TemporalTruthSchemaTests(unittest.TestCase):
             try:
                 db.init_schema(conn)
 
-                self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 8)
+                self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 9)
                 tables = {
                     row["name"]
                     for row in conn.execute(
@@ -346,6 +346,7 @@ class TemporalTruthQueryTests(unittest.TestCase):
                     predicate="status",
                     value="ready",
                     claim_id="release-status",
+                    valid_from="2026-08-22T00:00:00+00:00",
                     idempotency_key="test:release-status:1",
                     expected_stream_version=0,
                 )
@@ -460,6 +461,80 @@ class TemporalTruthQueryTests(unittest.TestCase):
 
 
 class TemporalTruthGovernanceTests(unittest.TestCase):
+    def test_agent_cannot_forge_claim_authority_or_verification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            conn = db.connect(Path(tmp) / "brain.sqlite")
+            try:
+                db.init_project(conn, "demo", str(root))
+                from rta_brain.temporal import append_claim
+
+                with self.assertRaisesRegex(
+                    PermissionError, "agents must use an agent authority class"
+                ):
+                    append_claim(
+                        conn,
+                        project="demo",
+                        active_root=root,
+                        subject="release:v0.8",
+                        predicate="status",
+                        value="ready",
+                        authority_class="operator",
+                        actor_type="agent",
+                        actor_id="codex",
+                        idempotency_key="agent-forgery:authority:1",
+                        expected_stream_version=0,
+                    )
+                with self.assertRaisesRegex(
+                    PermissionError, "agents cannot self-verify claims"
+                ):
+                    append_claim(
+                        conn,
+                        project="demo",
+                        active_root=root,
+                        subject="release:v0.8",
+                        predicate="status",
+                        value="ready",
+                        authority_class="agent-proposal",
+                        verification_status="verified",
+                        actor_type="agent",
+                        actor_id="codex",
+                        idempotency_key="agent-forgery:verification:1",
+                        expected_stream_version=0,
+                    )
+
+                proposed = append_claim(
+                    conn,
+                    project="demo",
+                    active_root=root,
+                    subject="release:v0.8",
+                    predicate="status",
+                    value="candidate",
+                    authority_class="agent-proposal",
+                    verification_status="unverified",
+                    actor_type="agent",
+                    actor_id="codex",
+                    idempotency_key="agent-proposal:valid:1",
+                    expected_stream_version=0,
+                )
+
+                projection = conn.execute(
+                    """
+                    SELECT authority_class, verification_status
+                    FROM truth_claim_versions
+                    WHERE claim_id = ? AND recorded_to_sequence IS NULL
+                    """,
+                    (proposed["claim"]["claim_id"],),
+                ).fetchone()
+                self.assertEqual(projection["authority_class"], "agent-proposal")
+                self.assertEqual(projection["verification_status"], "unverified")
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM truth_events").fetchone()[0], 1
+                )
+            finally:
+                conn.close()
+
     def test_agent_cannot_self_promote_but_operator_can_accept(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
@@ -623,7 +698,11 @@ class TemporalTruthGovernanceTests(unittest.TestCase):
             conn = db.connect(Path(tmp) / "brain.sqlite")
             try:
                 db.init_project(conn, "demo", str(root))
-                from rta_brain.temporal import append_claim, define_validator, run_validator
+                from rta_brain.temporal import (
+                    append_claim,
+                    define_validator,
+                    run_validator,
+                )
 
                 append_claim(
                     conn,
@@ -1354,7 +1433,10 @@ class TemporalTruthGovernanceTests(unittest.TestCase):
             try:
                 db.init_project(conn, "demo", str(root))
                 from rta_brain.temporal import (
-                    append_claim, define_validator, relate_claims, revise_claim,
+                    append_claim,
+                    define_validator,
+                    relate_claims,
+                    revise_claim,
                 )
 
                 append_claim(
@@ -1407,11 +1489,17 @@ class TemporalTruthGovernanceTests(unittest.TestCase):
                 db.init_project(conn, "demo", str(root))
                 from rta_brain.temporal import append_claim
 
-                request = dict(
-                    conn=conn, project="demo", active_root=root,
-                    claim_id="claim-a", subject="a", predicate="value", value=1,
-                    idempotency_key="shared-key", expected_stream_version=0,
-                )
+                request = {
+                    "conn": conn,
+                    "project": "demo",
+                    "active_root": root,
+                    "claim_id": "claim-a",
+                    "subject": "a",
+                    "predicate": "value",
+                    "value": 1,
+                    "idempotency_key": "shared-key",
+                    "expected_stream_version": 0,
+                }
                 append_claim(**request)
                 replay = append_claim(**request)
                 self.assertTrue(replay["idempotent_replay"])

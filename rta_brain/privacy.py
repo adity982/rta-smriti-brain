@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-
 MAX_SENSITIVE_TEXT_CHARS = 100_000
 
 
@@ -34,7 +33,11 @@ SECRET_TEXT_PATTERNS = {
 PATH_TEXT_PATTERNS = {
     "windows-user-path": re.compile(r"(?i)\b[A-Z]:[\\/]Users[\\/][^\\/\x00\r\n]{1,100}[\\/]"),
     "posix-user-path": re.compile(r"/(?:Users|home)/[^/\x00\r\n]{1,100}/"),
-    "unc-path": re.compile(r"\\\\[^\\/\x00\r\n]{1,253}\\[^\\/\x00\r\n]{1,100}(?:\\[^\x00\r\n]{1,4096})?"),
+    "unc-path": re.compile(
+        r"\\\\(?:\?\\UNC\\)?[A-Za-z0-9](?:[A-Za-z0-9._-]{0,251}[A-Za-z0-9])?"
+        r"\\[A-Za-z0-9$][^\\\x00-\x1f]{0,99}(?=\\|$)"
+        r"(?:\\[^\x00\r\n]{1,4096})?"
+    ),
     "windows-absolute-path": re.compile(
         r"(?i)(?<![A-Za-z0-9_])[A-Z]:[\\/]"
         r"(?:[A-Za-z0-9._ -]{1,120}[\\/]){1,32}[A-Za-z0-9._ -]{1,200}"

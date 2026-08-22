@@ -1346,6 +1346,43 @@ button:disabled {
   cursor: pointer;
 }
 
+.studioModeSwitch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  margin: -2px 0 10px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.studioModeSwitch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 9px;
+  border-color: transparent;
+  background: transparent;
+  color: #9fb0c3;
+  cursor: pointer;
+}
+
+.studioModeSwitch button.active {
+  border-color: rgba(94, 234, 212, 0.28);
+  background: rgba(20, 184, 166, 0.12);
+  color: #dffdfa;
+}
+
+.studioModeSwitch > span {
+  margin-left: auto;
+  padding-right: 7px;
+  color: #8298ad;
+  font-size: 11px;
+}
+
 .composerGrid {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) minmax(290px, 415px);
@@ -3376,6 +3413,69 @@ textarea:focus {
   cursor: pointer;
 }
 
+.governedPreview {
+  align-content: center;
+}
+
+.governedPreview > div:not(.freshRing):not(.compilerReceiptSummary) strong {
+  display: block;
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.compilerReceiptSummary {
+  grid-column: 1 / 4;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 8px 9px;
+  border: 1px solid rgba(94, 234, 212, 0.22);
+  border-radius: 7px;
+  background: rgba(20, 184, 166, 0.06);
+}
+
+.compilerReceiptSummary span {
+  display: block;
+  margin-bottom: 3px;
+  color: #8298ad;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.compilerReceiptSummary code {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #b8f7ee;
+  font-size: 10px;
+}
+
+.compilerReceiptActions {
+  display: flex;
+  gap: 6px;
+}
+
+.compilerReceiptActions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.compilerReceiptSummary p {
+  grid-column: 1 / 3;
+  margin: 0;
+  color: #9fb0c3;
+  font-size: 11px;
+}
+
 .integritySettings {
   align-items: stretch;
   flex-direction: column;
@@ -3808,6 +3908,31 @@ textarea:focus {
 
   .packPreview {
     align-items: start;
+  }
+
+  .studioModeSwitch {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .studioModeSwitch > span {
+    width: 100%;
+    margin-left: 0;
+    padding: 2px 7px 4px;
+  }
+
+  .generateButton,
+  .compilerReceiptSummary {
+    grid-column: 1;
+  }
+
+  .compilerReceiptSummary {
+    grid-template-columns: 1fr;
+  }
+
+  .compilerReceiptActions,
+  .compilerReceiptSummary p {
+    grid-column: 1;
   }
 
   .freshRing {

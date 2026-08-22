@@ -389,6 +389,14 @@ function App() {
   const [selectedProject, setSelectedProject] = useState(null);
   const [task, setTask] = useState(DEFAULT_TASK);
   const [contextBudget, setContextBudget] = useState(4000);
+  const [contextStudioMode, setContextStudioMode] = useState("quick");
+  const [compilerMode, setCompilerMode] = useState("balanced");
+  const [comparisonMode, setComparisonMode] = useState("minimal");
+  const [governedCompilation, setGovernedCompilation] = useState(null);
+  const [compilerInspection, setCompilerInspection] = useState(null);
+  const contextSessionRef = useRef(
+    `dashboard-${globalThis.crypto?.randomUUID?.() || Date.now().toString(36)}`,
+  );
   const [packText, setPackText] = useState("");
   const [memories, setMemories] = useState([]);
   const [graphData, setGraphData] = useState({ nodes: [], edges: [] });
@@ -472,6 +480,22 @@ function App() {
   const targetAgentLabel = targetAgent === "custom"
     ? customAgent.trim() || "Custom Agent"
     : targetAgents.find((agent) => agent.value === targetAgent)?.label || "Universal / Any Agent";
+  const contextBinding = useMemo(() => JSON.stringify({
+    dbPath: selectedProject?.db_path || null,
+    project: selectedProject?.project || null,
+    task: task.trim(),
+    contextBudget,
+    contextStudioMode,
+    compilerMode,
+    comparisonMode,
+    targetAgent,
+    customAgent: customAgent.trim(),
+  }), [
+    selectedProject?.db_path, selectedProject?.project, task, contextBudget,
+    contextStudioMode, compilerMode, comparisonMode, targetAgent, customAgent,
+  ]);
+  const contextBindingRef = useRef(contextBinding);
+  contextBindingRef.current = contextBinding;
 
   async function loadHealth(preferredProject = null) {
     setIsLoading(true);
@@ -631,6 +655,12 @@ function App() {
   }, [targetAgent]);
 
   useEffect(() => {
+    setPackText("");
+    setGovernedCompilation(null);
+    setCompilerInspection(null);
+  }, [contextBinding]);
+
+  useEffect(() => {
     if (selectedProject) {
       setFileTree({ entries: [], prefix: "", query: "", total_files: 0 });
       setFilePreview(null);
@@ -690,18 +720,46 @@ function App() {
   async function generatePack() {
     if (!selectedParams) return setMessage("Select a project first.");
     if (!task.trim()) return setMessage("Enter a task first.");
+    const requestBinding = contextBinding;
     setIsGenerating(true);
+    setPackText("");
+    setGovernedCompilation(null);
+    setCompilerInspection(null);
     try {
-      setMessage("Generating context pack...");
-      const payload = await api("/api/context-pack", {
-        method: "POST",
-        body: JSON.stringify({ ...selectedParams, task: task.trim(), limit: 8, max_tokens: contextBudget }),
-      });
-      const rawText = typeof payload.pack === "string" ? payload.pack : JSON.stringify(payload.pack, null, 2);
+      setMessage(contextStudioMode === "governed" ? "Authorizing and compiling context..." : "Generating context pack...");
+      const payload = contextStudioMode === "governed"
+        ? await api("/api/context-compiler", {
+          method: "POST",
+          body: JSON.stringify({
+            ...selectedParams,
+            action: "authorize-and-compile",
+            profile_id: targetAgent === "custom" ? "custom" : targetAgent,
+            max_input_tokens: contextBudget,
+            objective: task.trim(),
+            compiler_mode: compilerMode,
+            comparison_modes: comparisonMode && comparisonMode !== compilerMode ? [comparisonMode] : [],
+            privacy_ceiling: "internal",
+            principal_id: targetAgent === "custom" ? customAgent.trim() || "custom-agent" : targetAgent,
+            session_id: contextSessionRef.current,
+            variant: "primary",
+          }),
+        })
+        : await api("/api/context-pack", {
+          method: "POST",
+          body: JSON.stringify({ ...selectedParams, task: task.trim(), limit: 8, max_tokens: contextBudget }),
+        });
+      if (contextBindingRef.current !== requestBinding) {
+        setMessage("Context inputs changed while compilation was running. The stale result was discarded.");
+        return;
+      }
+      const rawPack = contextStudioMode === "governed" ? payload.context_pack?.context_text : payload.pack;
+      const rawText = typeof rawPack === "string" ? rawPack : JSON.stringify(rawPack, null, 2);
       const text = targetAgent === "universal" ? rawText : `Target agent: ${targetAgentLabel}\n\n${rawText}`;
       setPackText(text);
+      setGovernedCompilation(contextStudioMode === "governed" ? payload : null);
+      setCompilerInspection(null);
       const receipt = {
-        id: `pack-${Date.now()}`,
+        id: payload.compilation_receipt?.compilation_id || `pack-${Date.now()}`,
         createdAt: new Date().toISOString(),
         project: selectedProject.project,
         task: task.trim(),
@@ -710,10 +768,14 @@ function App() {
         nodes: buildGraph(selectedProject, graphData, memories, text, graphOptions).nodes.length,
         bytes: new Blob([text]).size,
         pack: text,
+        governed: contextStudioMode === "governed",
+        mode: payload.context_pack?.compiler_mode,
+        receiptDigest: payload.compilation_receipt?.receipt_digest,
+        variants: payload.available_variants || [],
       };
       const nextReceipts = [receipt, ...receipts].slice(0, 30);
       setReceipts(nextReceipts);
-      setMessage("Context pack generated.");
+      setMessage(contextStudioMode === "governed" ? "Governed context compiled and receipted." : "Context pack generated.");
       showDrawer("receipts");
       setViewMode("graph");
       setGraphMode("task");
@@ -1061,6 +1123,28 @@ function App() {
     }
   }
 
+  async function inspectGovernedCompilation(action) {
+    const compilationId = governedCompilation?.compilation_receipt?.compilation_id;
+    if (!selectedParams || !compilationId) return setMessage("Compile a governed context pack first.");
+    try {
+      setMessage(`${action === "audit" ? "Auditing" : "Explaining"} compilation receipt...`);
+      const payload = await api("/api/context-compiler", {
+        method: "POST",
+        body: JSON.stringify({
+          ...selectedParams,
+          action,
+          compilation_id: compilationId,
+          principal_id: targetAgent === "custom" ? customAgent.trim() || "custom-agent" : targetAgent,
+          session_id: action === "audit" ? `${contextSessionRef.current}-operator` : contextSessionRef.current,
+        }),
+      });
+      setCompilerInspection({ action, payload });
+      setMessage(`${action === "audit" ? "Receipt audit" : "Context explanation"} verified.`);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
   async function inspectTruthClaim(claimId) {
     if (!selectedProject || !claimId) return;
     setIsTruthBusy(true);
@@ -1306,7 +1390,7 @@ function App() {
           </div>
           <div>
             <h1>Rta-Smriti Brain</h1>
-            <span>v0.7 Development Operator Console</span>
+            <span>v0.8 Development Operator Console</span>
           </div>
         </div>
         <div className="topStatus">
@@ -1556,6 +1640,15 @@ function App() {
             setCustomAgent={setCustomAgent}
             contextBudget={contextBudget}
             setContextBudget={setContextBudget}
+            studioMode={contextStudioMode}
+            setStudioMode={setContextStudioMode}
+            compilerMode={compilerMode}
+            setCompilerMode={setCompilerMode}
+            comparisonMode={comparisonMode}
+            setComparisonMode={setComparisonMode}
+            governedCompilation={governedCompilation}
+            compilerInspection={compilerInspection}
+            onInspectCompilation={inspectGovernedCompilation}
           />
         </main>
 
@@ -2629,7 +2722,7 @@ function BasesView({ memories, graph, publish, onSelect, initialTable = "memory"
   );
 }
 
-function TaskComposer({ task, setTask, project, freshness, command, packText, onGenerate, onCopy, onReceipts, onCopyContinuation, receiptCount, isGenerating, targetAgent, setTargetAgent, customAgent, setCustomAgent, contextBudget, setContextBudget }) {
+function TaskComposer({ task, setTask, project, freshness, command, packText, onGenerate, onCopy, onReceipts, onCopyContinuation, receiptCount, isGenerating, targetAgent, setTargetAgent, customAgent, setCustomAgent, contextBudget, setContextBudget, studioMode, setStudioMode, compilerMode, setCompilerMode, comparisonMode, setComparisonMode, governedCompilation, compilerInspection, onInspectCompilation }) {
   const [copyAction, setCopyAction] = useState("");
   const copyTimer = useRef(null);
 
@@ -2662,6 +2755,15 @@ function TaskComposer({ task, setTask, project, freshness, command, packText, on
           </button>
         </div>
       </div>
+      <div className="studioModeSwitch" role="group" aria-label="Context studio mode">
+        <button type="button" aria-pressed={studioMode === "quick"} className={studioMode === "quick" ? "active" : ""} onClick={() => setStudioMode("quick")}>
+          <Zap size={14} /> Quick Pack
+        </button>
+        <button type="button" aria-pressed={studioMode === "governed"} className={studioMode === "governed" ? "active" : ""} onClick={() => setStudioMode("governed")}>
+          <ShieldCheck size={14} /> Governed Compiler
+        </button>
+        <span>{studioMode === "governed" ? "Authorized, receipted, explainable" : "Fast lexical and structural context"}</span>
+      </div>
       <div className="composerGrid">
         <div className="formStack">
           <label>
@@ -2685,31 +2787,76 @@ function TaskComposer({ task, setTask, project, freshness, command, packText, on
               <option value={16000}>Extended / 16K tokens</option>
             </select>
           </label>
+          {studioMode === "governed" && (
+            <>
+              <label>
+                <span>Compiler Mode</span>
+                <select value={compilerMode} onChange={(event) => {
+                  const next = event.target.value;
+                  setCompilerMode(next);
+                  if (comparisonMode === next) setComparisonMode("");
+                }}>
+                  <option value="minimal">Minimal</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="investigative">Investigative</option>
+                  <option value="handoff">Handoff</option>
+                </select>
+              </label>
+              <label>
+                <span>Compare With</span>
+                <select value={comparisonMode} onChange={(event) => setComparisonMode(event.target.value)}>
+                  <option value="">No comparison</option>
+                  {["minimal", "balanced", "investigative", "handoff"].filter((mode) => mode !== compilerMode).map((mode) => (
+                    <option key={mode} value={mode}>{mode[0].toUpperCase() + mode.slice(1)}</option>
+                  ))}
+                </select>
+              </label>
+            </>
+          )}
           <label>
             <span>Objective</span>
             <textarea rows="3" value={task} onChange={(event) => setTask(event.target.value)} />
           </label>
           <label>
-            <span>Command Bridge</span>
-            <code>{command}</code>
+            <span>{studioMode === "governed" ? "Trust Boundary" : "Command Bridge"}</span>
+            <code>{studioMode === "governed" ? "Local authority key / operator contract / agent-safe pack" : command}</code>
           </label>
         </div>
-        <div className="packPreview">
+        <div className={studioMode === "governed" ? "packPreview governedPreview" : "packPreview"}>
           <div className="freshRing">
-            <strong>{freshness?.state === "fresh" ? "OK" : freshness?.state === "stale" ? "!" : "?"}</strong>
-            <span>{freshness?.state || "Checking"}</span>
+            <strong>{studioMode === "governed" && governedCompilation ? "✓" : freshness?.state === "fresh" ? "OK" : freshness?.state === "stale" ? "!" : "?"}</strong>
+            <span>{studioMode === "governed" && governedCompilation ? "receipted" : freshness?.state || "Checking"}</span>
           </div>
           <div>
-            <p>Files</p>
-            <strong>{safeNumber(project?.sources)}</strong>
+            <p>{studioMode === "governed" ? "Mode" : "Files"}</p>
+            <strong>{studioMode === "governed" ? governedCompilation?.context_pack?.compiler_mode || compilerMode : safeNumber(project?.sources)}</strong>
           </div>
           <div>
-            <p>Memories</p>
-            <strong>{safeNumber(project?.memories)}</strong>
+            <p>{studioMode === "governed" ? "Variants" : "Memories"}</p>
+            <strong>{studioMode === "governed" ? governedCompilation?.available_variants?.length || (comparisonMode ? 2 : 1) : safeNumber(project?.memories)}</strong>
           </div>
           <button className="generateButton" onClick={onGenerate} disabled={isGenerating}>
-            <Zap size={18} /> {isGenerating ? "Generating..." : "Generate Context Pack"}
+            {studioMode === "governed" ? <ShieldCheck size={18} /> : <Zap size={18} />}
+            {isGenerating ? "Generating..." : studioMode === "governed" ? "Authorize & Compile" : "Generate Context Pack"}
           </button>
+          {studioMode === "governed" && governedCompilation && (
+            <div className="compilerReceiptSummary">
+              <div>
+                <span>Receipt</span>
+                <code>{governedCompilation.compilation_receipt?.compilation_id}</code>
+              </div>
+              <div className="compilerReceiptActions">
+                <button type="button" onClick={() => onInspectCompilation("explain")}><Eye size={14} /> Explain</button>
+                <button type="button" onClick={() => onInspectCompilation("audit")}><KeyRound size={14} /> Audit</button>
+              </div>
+              {compilerInspection && (
+                <p>
+                  {compilerInspection.action === "audit" ? "Audit verified" : "Explanation verified"}
+                  {" · "}{compilerInspection.payload.selection?.included_count ?? compilerInspection.payload.candidate_receipts?.length ?? 0} included receipts
+                </p>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </section>
