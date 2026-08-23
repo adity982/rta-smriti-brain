@@ -40,6 +40,30 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+      - name: Prepare private Windows test temp root
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP "rta-smriti-private-temp"
+          [IO.Directory]::CreateDirectory($path) | Out-Null
+          $identity = (
+            & "$env:SystemRoot\System32\whoami.exe" /user /fo csv /nh |
+              ConvertFrom-Csv -Header Name,Sid
+          )
+          $icacls = "$env:SystemRoot\System32\icacls.exe"
+          & $icacls $path /setowner ("*" + $identity.Sid) | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "cannot set private temp owner" }
+          & $icacls $path /inheritance:r | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "cannot remove temp inheritance" }
+          $grants = @(
+            ("*" + $identity.Sid + ":(OI)(CI)F"),
+            "*S-1-5-18:(OI)(CI)F",
+            "*S-1-5-32-544:(OI)(CI)F"
+          )
+          & $icacls $path /grant:r $grants | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "cannot grant private temp ACL" }
+          "TEMP=$path" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "TMP=$path" | Out-File -FilePath $env:GITHUB_ENV -Append
       - run: npm ci
       - run: npm audit --audit-level=high
       - run: npm run test:unit
