@@ -56,6 +56,7 @@ from .capture_daemon import (
 )
 from .capture_spool import (
     CaptureSpool,
+    _validate_json_shape,
     capture_control_root_path,
     ensure_windows_path_private,
     windows_path_is_private,
@@ -718,6 +719,10 @@ def _dispatch_capture(args, conn) -> dict:
             return {"status": "rejected", "reason": "invalid_json"}
         if not isinstance(record, dict):
             return {"status": "rejected", "reason": "invalid_record"}
+        try:
+            _validate_json_shape(record, max_depth=12, max_items=10_000)
+        except (TypeError, ValueError, RecursionError, MemoryError):
+            return {"status": "rejected", "reason": "invalid_json"}
         try:
             spool_record = prepare_capture_spool_record(
                 conn,

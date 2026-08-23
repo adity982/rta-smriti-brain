@@ -662,8 +662,7 @@ class CaptureCliMcpTests(unittest.TestCase):
         observed_sizes = []
 
         def record_size(path):
-            candidate = Path(path)
-            observed_sizes.append(candidate.stat().st_size)
+            observed_sizes.append(path.stat().st_size)
 
         with (
             patch("rta_brain.cli.os.name", "nt"),

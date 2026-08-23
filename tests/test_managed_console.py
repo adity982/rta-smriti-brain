@@ -109,6 +109,25 @@ class RuntimeControlTests(unittest.TestCase):
         self.assertTrue(process_alive(os.getpid()))
         self.assertFalse(process_alive(-1))
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux zombie semantics")
+    def test_process_liveness_treats_a_zombie_as_stopped(self):
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        try:
+            deadline = time.monotonic() + 5.0
+            state = ""
+            while time.monotonic() < deadline:
+                stat_line = (Path("/proc") / str(child.pid) / "stat").read_text(
+                    encoding="ascii"
+                )
+                state = stat_line[stat_line.rfind(")") + 2 :].split()[0]
+                if state == "Z":
+                    break
+                time.sleep(0.01)
+            self.assertEqual(state, "Z")
+            self.assertFalse(process_alive(child.pid))
+        finally:
+            child.wait(timeout=5)
+
     def test_detached_spawn_options_are_platform_specific(self):
         options = detached_process_kwargs()
         if os.name == "nt":

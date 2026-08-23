@@ -441,15 +441,80 @@ def _windows_sddl_is_private(sddl: str, current_sid: str) -> bool:
     return bool(principals) and principals.issubset(allowed)
 
 
-_WINDOWS_SDDL_ALIAS_SIDS = {
-    "AN": "S-1-5-7",
-    "AU": "S-1-5-11",
-    "BG": "S-1-5-32-546",
-    "BU": "S-1-5-32-545",
-    "IU": "S-1-5-4",
-    "SU": "S-1-5-6",
-    "WD": "S-1-1-0",
-}
+def _windows_sddl_alias_sid(principal: str) -> str:
+    """Resolve any valid SDDL trustee alias to its canonical SID string."""
+
+    if os.name != "nt":  # pragma: no cover - Windows-only helper
+        raise SpoolUnsafeError("Windows SDDL alias resolution is unavailable")
+    import ctypes
+    from ctypes import wintypes
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    convert_descriptor = (
+        advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW
+    )
+    convert_descriptor.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    convert_descriptor.restype = wintypes.BOOL
+    get_dacl = advapi32.GetSecurityDescriptorDacl
+    get_dacl.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.BOOL),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(wintypes.BOOL),
+    ]
+    get_dacl.restype = wintypes.BOOL
+    get_ace = advapi32.GetAce
+    get_ace.argtypes = [
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    get_ace.restype = wintypes.BOOL
+    convert_sid = advapi32.ConvertSidToStringSidW
+    convert_sid.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+    convert_sid.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+
+    descriptor = ctypes.c_void_p()
+    sid_text = ctypes.c_void_p()
+    try:
+        sddl = f"D:(A;;GA;;;{principal})"
+        if not convert_descriptor(sddl, 1, ctypes.byref(descriptor), None):
+            raise SpoolUnsafeError(
+                "cannot safely resolve a Windows ACL principal"
+            )
+        present = wintypes.BOOL()
+        defaulted = wintypes.BOOL()
+        dacl = ctypes.c_void_p()
+        if not get_dacl(
+            descriptor,
+            ctypes.byref(present),
+            ctypes.byref(dacl),
+            ctypes.byref(defaulted),
+        ) or not present or not dacl:
+            raise SpoolUnsafeError("cannot inspect a Windows ACL principal")
+        ace = ctypes.c_void_p()
+        if not get_ace(dacl, 0, ctypes.byref(ace)) or not ace:
+            raise SpoolUnsafeError("cannot inspect a Windows ACL principal")
+        # ACCESS_ALLOWED_ACE stores SidStart after ACE_HEADER and ACCESS_MASK.
+        sid_pointer = ctypes.c_void_p(int(ace.value) + 8)
+        if not convert_sid(sid_pointer, ctypes.byref(sid_text)):
+            raise SpoolUnsafeError(
+                "cannot serialize a Windows ACL principal"
+            )
+        return ctypes.wstring_at(sid_text)
+    finally:
+        if sid_text:
+            kernel32.LocalFree(sid_text)
+        if descriptor:
+            kernel32.LocalFree(descriptor)
 
 
 def _windows_foreign_allow_sids(sddl: str, current_sid: str) -> tuple[str, ...]:
@@ -465,12 +530,7 @@ def _windows_foreign_allow_sids(sddl: str, current_sid: str) -> tuple[str, ...]:
         if principal.startswith("S-1-"):
             foreign.add(principal)
             continue
-        sid = _WINDOWS_SDDL_ALIAS_SIDS.get(principal)
-        if sid is None:
-            raise SpoolUnsafeError(
-                "cannot safely remove an unknown Windows ACL principal"
-            )
-        foreign.add(sid)
+        foreign.add(_windows_sddl_alias_sid(principal))
     return tuple(sorted(foreign))
 
 

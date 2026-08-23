@@ -651,7 +651,7 @@ class AdapterInstallationTests(unittest.TestCase):
         for (adapter, scope), path in expected.items():
             with self.subTest(adapter=adapter, scope=scope):
                 plan = self.plan(adapter, scope)
-                self.assertEqual(plan.config_path, path)
+                self.assertEqual(plan.config_path, path.resolve())
                 self.assertEqual(plan.action, "create")
                 self.assertFalse(path.exists())
                 self.assertTrue(plan.preview)
@@ -882,7 +882,6 @@ class AdapterInstallationTests(unittest.TestCase):
         plan = self.plan()
         parent = plan.config_path.parent
         displaced = self.project / ".cursor-displaced"
-        real_replace = os.replace
         swapped = False
 
         def swap_parent():
@@ -897,29 +896,18 @@ class AdapterInstallationTests(unittest.TestCase):
                 swapped = True
             return True
 
-        def swap_then_replace(source, target, *args, **kwargs):
-            if swap_parent():
-                source_name = Path(source).name
-                (parent / source_name).write_text('{"attacker":true}', encoding="utf-8")
-            return real_replace(source, target, *args, **kwargs)
+        real_create = capture_adapters._create_new_config
 
-        real_windows_replace = capture_adapters._windows_replace_open_file
-
-        def swap_then_windows_replace(handle, parent_handle, target_name):
+        def swap_then_create(path, **kwargs):
             swap_parent()
-            return real_windows_replace(handle, parent_handle, target_name)
+            return real_create(path, **kwargs)
 
         installed = None
         error = None
-        patch_target = (
-            patch(
-                "rta_brain.capture_adapters._windows_replace_open_file",
-                side_effect=swap_then_windows_replace,
-            )
-            if os.name == "nt"
-            else patch("rta_brain.capture_adapters.os.replace", side_effect=swap_then_replace)
-        )
-        with patch_target:
+        with patch(
+            "rta_brain.capture_adapters._create_new_config",
+            side_effect=swap_then_create,
+        ):
             try:
                 installed = install_adapter(plan)
             except ValueError as exc:

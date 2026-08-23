@@ -221,6 +221,17 @@ def process_alive(pid: int | None) -> bool:
             )
         finally:
             kernel32.CloseHandle(handle)
+    if sys.platform.startswith("linux"):
+        try:
+            stat_line = (Path("/proc") / str(int(pid)) / "stat").read_text(
+                encoding="ascii", errors="strict"
+            )
+            end_name = stat_line.rfind(")")
+            fields = stat_line[end_name + 2 :].split()
+            if end_name >= 0 and fields and fields[0] == "Z":
+                return False
+        except (OSError, UnicodeError, ValueError):
+            pass
     try:
         os.kill(int(pid), 0)
     except (OSError, ValueError):

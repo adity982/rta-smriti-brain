@@ -759,6 +759,28 @@ class CaptureSpoolTests(unittest.TestCase):
         self.assertTrue(_windows_sddl_is_private(safe, sid))
         self.assertFalse(_windows_sddl_is_private(conditional_world, sid))
 
+    def test_windows_foreign_allow_aliases_are_resolved_before_removal(self):
+        from rta_brain import capture_spool
+
+        current_sid = "S-1-5-21-1000"
+        sddl = f"O:{current_sid}D:P(A;;FA;;;{current_sid})(A;;FA;;;CO)"
+        with mock.patch.object(
+            capture_spool,
+            "_windows_sddl_alias_sid",
+            return_value="S-1-3-0",
+        ) as resolve:
+            foreign = capture_spool._windows_foreign_allow_sids(
+                sddl, current_sid
+            )
+        resolve.assert_called_once_with("CO")
+        self.assertEqual(foreign, ("S-1-3-0",))
+
+    @unittest.skipUnless(os.name == "nt", "Windows SDDL alias integration test")
+    def test_windows_sddl_alias_resolver_handles_creator_owner(self):
+        from rta_brain.capture_spool import _windows_sddl_alias_sid
+
+        self.assertEqual(_windows_sddl_alias_sid("CO"), "S-1-3-0")
+
     @unittest.skipUnless(os.name == "nt", "Windows ACL hardening integration test")
     def test_windows_acl_hardening_handles_inherited_foreign_principals(self):
         from rta_brain.capture_spool import (
