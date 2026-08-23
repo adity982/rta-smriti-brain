@@ -93,13 +93,16 @@ def _ensure_windows_private(path: Path) -> None:
     from .capture_spool import (
         SpoolError,
         ensure_windows_path_private,
-        windows_path_is_private,
+        windows_path_privacy_failure,
     )
 
     try:
         ensure_windows_path_private(path)
-        if not windows_path_is_private(path):
-            raise PermissionError(f"brain database path ACL is not private: {path}")
+        failure = windows_path_privacy_failure(path)
+        if failure is not None:
+            raise PermissionError(
+                f"brain database path ACL is not private ({failure}): {path}"
+            )
     except SpoolError as exc:
         raise PermissionError(f"cannot enforce private brain database ACL: {path}") from exc
 
@@ -107,11 +110,14 @@ def _ensure_windows_private(path: Path) -> None:
 def _validate_windows_private(path: Path) -> None:
     if os.name != "nt":
         return
-    from .capture_spool import SpoolError, windows_path_is_private
+    from .capture_spool import SpoolError, windows_path_privacy_failure
 
     try:
-        if not windows_path_is_private(path):
-            raise PermissionError(f"brain database path ACL is not private: {path}")
+        failure = windows_path_privacy_failure(path)
+        if failure is not None:
+            raise PermissionError(
+                f"brain database path ACL is not private ({failure}): {path}"
+            )
     except SpoolError as exc:
         raise PermissionError(f"cannot validate private brain database ACL: {path}") from exc
 

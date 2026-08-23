@@ -407,15 +407,19 @@ def _windows_security_descriptor(path: Path) -> str:
             kernel32.LocalFree(descriptor)
 
 
-def windows_path_is_private(path: Path) -> bool:
+def windows_path_privacy_failure(path: Path) -> str | None:
     if os.name != "nt":
-        return True
+        return None
     try:
         sddl = _windows_security_descriptor(Path(path))
         current_sid = _windows_current_user_sid()
-        return _windows_sddl_is_private(sddl, current_sid)
+        return _windows_sddl_privacy_failure(sddl, current_sid)
     except (OSError, SpoolError, subprocess.SubprocessError):
-        return False
+        return "inspection_unavailable"
+
+
+def windows_path_is_private(path: Path) -> bool:
+    return windows_path_privacy_failure(path) is None
 
 
 def _windows_sddl_privacy_failure(sddl: str, current_sid: str) -> str | None:
