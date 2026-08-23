@@ -86,11 +86,39 @@ try {
   assert.match(await page.title(), /Rta-Smriti Brain/);
   await page.getByRole("heading", { name: "Rta-Smriti Brain", exact: true }).waitFor();
   assert.equal(await page.locator(".heroImage").evaluate((image) => image.naturalWidth > 0), true);
+  const bodyText = await page.locator("body").innerText();
+  assert.match(bodyText, /v0\.9\.0-alpha/);
+  assert.match(bodyText, /Universal Capture/);
+  assert.match(bodyText, /Bitemporal/);
+  assert.match(bodyText, /Context Compiler/i);
 
-  await page.getByRole("tab", { name: "Files", exact: true }).click();
-  assert.match(await page.locator(".productFrame img").getAttribute("src"), /file-explorer\.png$/);
+  const productViews = [
+    ["Graph", /dashboard-hero-v0\.9\.png$/],
+    ["Files", /file-explorer-v0\.9\.png$/],
+    ["Truth", /truth-timeline-v0\.9\.png$/],
+    ["Capture", /universal-capture-v0\.9\.png$/],
+  ];
+  for (const [label, expectedSource] of productViews) {
+    await page.getByRole("tab", { name: label, exact: true }).click();
+    const productImage = page.locator(".productFrame img");
+    assert.match(await productImage.getAttribute("src"), expectedSource);
+    await productImage.evaluate((image) => image.complete && image.naturalWidth > 0 ? true : new Promise((resolve, reject) => { image.addEventListener("load", () => resolve(true), { once: true }); image.addEventListener("error", () => reject(new Error("product image failed to load")), { once: true }); }));
+  }
+
   await page.getByRole("tab", { name: "kalpana", exact: true }).click();
   await page.getByText("Hypothesized", { exact: true }).waitFor();
+
+  await page.getByRole("tab", { name: "macOS", exact: true }).click();
+  assert.match(await page.locator(".terminalBlock").innerText(), /\.\/\.venv\/bin\/python -m pip install \./);
+  await page.getByRole("tab", { name: "Linux", exact: true }).click();
+  assert.match(await page.locator(".terminalBlock").innerText(), /python3 -m venv \.venv/);
+  await page.getByRole("tab", { name: "Windows", exact: true }).click();
+  assert.equal((await page.locator(".terminalBlock").innerText()).includes("& .\\.venv\\Scripts\\python.exe -m pip install ."), true);
+
+  const unloadedImages = await page.locator("img").evaluateAll((images) =>
+    images.filter((image) => !image.complete || image.naturalWidth === 0).map((image) => image.src),
+  );
+  assert.deepEqual(unloadedImages, []);
 
   const duration = await withTimeout(page.locator("video").evaluate((video) => new Promise((resolve, reject) => {
     if (video.readyState >= 1) resolve(video.duration);

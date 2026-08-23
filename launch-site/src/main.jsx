@@ -33,7 +33,29 @@ const ciRunUrl = `${repositoryUrl}/actions/workflows/ci.yml`;
 const nativeRunUrl = `${repositoryUrl}/actions/workflows/binaries.yml`;
 const productHuntUrl = "https://www.producthunt.com/products/rta-smriti-brain?launch=rta-smriti-brain&utm_source=website&utm_medium=referral&utm_campaign=v090_release";
 
-const installCommand = "python -m pip install .";
+const installCommands = {
+  windows: [
+    "git clone https://github.com/sulabhdubey/rta-smriti-brain.git",
+    "cd .\\rta-smriti-brain",
+    "python -m venv .venv",
+    "& .\\.venv\\Scripts\\python.exe -m pip install .",
+    '& .\\.venv\\Scripts\\rta-brain.exe start C:\\path\\to\\project --project my-project --brain-dir "$env:USERPROFILE\\Documents\\Rta-Smriti\\brains" --write-agents',
+  ],
+  macos: [
+    "git clone https://github.com/sulabhdubey/rta-smriti-brain.git",
+    "cd rta-smriti-brain",
+    "python3 -m venv .venv",
+    "./.venv/bin/python -m pip install .",
+    './.venv/bin/rta-brain start /path/to/project --project my-project --brain-dir "$HOME/.local/share/rta-smriti/brains" --write-agents',
+  ],
+  linux: [
+    "git clone https://github.com/sulabhdubey/rta-smriti-brain.git",
+    "cd rta-smriti-brain",
+    "python3 -m venv .venv",
+    "./.venv/bin/python -m pip install .",
+    './.venv/bin/rta-brain start /path/to/project --project my-project --brain-dir "$HOME/.local/share/rta-smriti/brains" --write-agents',
+  ],
+};
 const agents = ["Codex", "Claude Code", "Cursor", "GitHub Copilot CLI", "Gemini CLI", "Aider", "Cline", "Any MCP agent"];
 const pramana = {
   pratyaksha: ["Observed", "Code, tests, files, and tool output", "#5eead4"],
@@ -79,21 +101,21 @@ function HeroGraph() {
 function Hero() {
   return (
     <section className="hero" id="top">
-      <img className="heroImage" src="./assets/dashboard-hero.png" alt="Rta-Smriti operator console showing a project memory graph" />
+      <img className="heroImage" src="./assets/dashboard-hero-v0.9.png" alt="Rta-Smriti v0.9 operator console showing the public release project graph" />
       <div className="heroScrim" />
       <HeroGraph />
       <div className="heroContent shell">
         <div className="eyebrow"><LockKeyhole size={14} /> v0.9.0-alpha · Universal Capture · Local-first</div>
         <h1>Rta-Smriti Brain</h1>
-        <p className="heroLead">Give every software project a private memory that survives new chats, agent switches, context compaction, and interrupted work.</p>
+        <p className="heroLead">A private continuity layer that captures bounded agent events, preserves bitemporal project truth, and compiles governed context for the next task.</p>
         <div className="heroActions">
           <a className="primaryAction" href={releaseUrl}><TerminalSquare size={18} /> Get latest alpha <ArrowRight size={17} /></a>
           <a className="secondaryAction" href="#demo"><Play size={17} /> Watch the product</a>
         </div>
         <a className="launchConversation" href={productHuntUrl}><MessageCircle size={15} /> Live on Product Hunt <span>Join the conversation</span><ExternalLink size={13} /></a>
         <div className="heroProof" aria-label="Product proof points">
-          <span><strong>v0.9</strong> governed continuity</span>
-          <span><strong>hosted</strong> CI green</span>
+          <span><strong>8</strong> verified release assets</span>
+          <span><strong>3 OS</strong> CI and native builds</span>
           <span><strong>0</strong> cloud accounts required</span>
         </div>
       </div>
@@ -109,6 +131,7 @@ function Header() {
       <div className="shell headerInner">
         <Brand />
         <nav className={open ? "siteNav open" : "siteNav"} aria-label="Main navigation">
+          <a href="#release" onClick={() => setOpen(false)}>v0.9</a>
           <a href="#product" onClick={() => setOpen(false)}>Product</a>
           <a href="#architecture" onClick={() => setOpen(false)}>Architecture</a>
           <a href="#difference" onClick={() => setOpen(false)}>Why different</a>
@@ -139,10 +162,10 @@ function ProblemBand() {
 }
 
 const featureTabs = [
-  ["graph", "Graph", Network, "See files, imports, symbols, memories, and evidence as one inspectable project system."],
-  ["files", "Files", FileCode2, "Browse the real indexed tree, preview source, and add exact paths to the next task."],
-  ["memory", "Truth", Database, "Inspect bitemporal claims, evidence, contradictions, checkpoints, and work state instead of flattening them into notes."],
-  ["packs", "Capture", Zap, "Normalize opt-in agent events privately, then compile only governed evidence for the next objective."],
+  ["graph", "Graph", Network, "See files, imports, symbols, memories, and evidence as one inspectable project system.", "./assets/dashboard-hero-v0.9.png"],
+  ["files", "Files", FileCode2, "Browse the indexed public release tree, preview exact source, and add paths to the next task.", "./assets/file-explorer-v0.9.png"],
+  ["truth", "Truth", Database, "Inspect accepted claims, recorded time, valid time, provenance, contradictions, and validator health.", "./assets/truth-timeline-v0.9.png"],
+  ["capture", "Capture", Zap, "Review bounded agent events, source authorization, replay order, privacy controls, and capture diagnostics.", "./assets/universal-capture-v0.9.png"],
 ];
 
 function ProductSection() {
@@ -152,14 +175,14 @@ function ProductSection() {
     <section className="productSection" id="product">
       <div className="shell">
         <div className="sectionHeading">
-          <span className="sectionIndex">02 / THE OPERATOR CONSOLE</span>
+          <span className="sectionIndex">03 / THE OPERATOR CONSOLE</span>
           <h2>Memory you can inspect, not magic you have to trust.</h2>
         </div>
         <div className="featureTabs" role="tablist" aria-label="Product views">
           {featureTabs.map(([id, label, Icon]) => <button key={id} role="tab" aria-selected={active === id} onClick={() => setActive(id)}><Icon size={16} /> {label}</button>)}
         </div>
         <div className="productFrame">
-          <img src={active === "files" ? "./assets/file-explorer.png" : "./assets/dashboard-hero.png"} alt={active === "files" ? "Indexed file explorer and source preview" : "Interactive project brain graph"} />
+          <img src={current[4]} alt={`Rta-Smriti v0.9 ${current[1]} operator view`} />
           <div className="frameCaption"><span>{current[1]}</span><p>{current[3]}</p></div>
         </div>
       </div>
@@ -178,8 +201,8 @@ function Architecture() {
     <section className="architecture" id="architecture">
       <div className="shell">
         <div className="sectionHeading rowHeading">
-          <div><span className="sectionIndex">03 / ARCHITECTURE</span><h2>Small enough to understand. Strong enough to reuse.</h2></div>
-          <p>Inspectable local infrastructure first. Cloud models remain optional; standard installs include AST parsing and modern snapshot cryptography.</p>
+          <div><span className="sectionIndex">04 / ARCHITECTURE</span><h2>Small enough to understand. Strong enough to reuse.</h2></div>
+          <p>Universal Capture feeds an append-only local journal. Bitemporal truth and the context compiler decide what an agent may receive; captured text never promotes itself.</p>
         </div>
         <div className="architectureFlow">
           {stages.map(([title, copy, Icon], index) => (
@@ -190,7 +213,7 @@ function Architecture() {
           ))}
         </div>
         <div className="architectureFacts">
-          <span><Check size={15} /> Python 3.11+</span><span><Check size={15} /> Private bounded spool</span><span><Check size={15} /> Bitemporal SQLite truth</span><span><Check size={15} /> Governed MCP gateway</span><span><Check size={15} /> Ed25519 + encrypted snapshots</span>
+          <span><Check size={15} /> Python 3.11+</span><span><Check size={15} /> Private bounded spool</span><span><Check size={15} /> Bitemporal SQLite truth</span><span><Check size={15} /> Governed context compiler</span><span><Check size={15} /> Capability-separated MCP</span><span><Check size={15} /> Ed25519 + encrypted snapshots</span>
         </div>
       </div>
     </section>
@@ -204,7 +227,7 @@ function PramanaSection() {
     <section className="pramanaSection">
       <div className="shell pramanaGrid">
         <div>
-          <span className="sectionIndex">04 / EVIDENCE-AWARE MEMORY</span>
+          <span className="sectionIndex">05 / EVIDENCE-AWARE MEMORY</span>
           <h2>A fact, an instruction, and a hypothesis are not the same thing.</h2>
           <p>Rta-Smriti uses a Vedic-inspired pramana model to preserve how knowledge became known, not just what the text says.</p>
         </div>
@@ -234,7 +257,7 @@ function Difference() {
     <section className="difference" id="difference">
       <div className="shell">
         <div className="sectionHeading rowHeading">
-          <div><span className="sectionIndex">05 / THE DIFFERENCE</span><h2>Not another notes app. Not another black-box memory.</h2></div>
+          <div><span className="sectionIndex">06 / THE DIFFERENCE</span><h2>Not another notes app. Not another black-box memory.</h2></div>
           <p>The product combines repository structure, durable human knowledge, session handoffs, evidence strength, and agent-ready output.</p>
         </div>
         <div className="comparisonTable" role="table" aria-label="Rta-Smriti comparison">
@@ -255,19 +278,19 @@ function Demo() {
     <section className="demoSection" id="demo">
       <div className="shell demoGrid">
         <div>
-          <span className="sectionIndex">06 / REAL WORKFLOW</span>
-          <h2>From a large repository to one focused handoff.</h2>
+          <span className="sectionIndex">07 / REAL WORKFLOW</span>
+          <h2>From agent activity to a governed handoff.</h2>
           <ol>
-            <li><span>1</span>Select the project brain.</li>
-            <li><span>2</span>Inspect files, evidence, memory, and readiness.</li>
-            <li><span>3</span>Save or refresh the structured checkpoint.</li>
-            <li><span>4</span>Generate a pack for any agent.</li>
+            <li><span>1</span>Start one canonical project brain.</li>
+            <li><span>2</span>Authorize capture sources explicitly.</li>
+            <li><span>3</span>Review truth, provenance, and readiness.</li>
+            <li><span>4</span>Compile a bounded pack for any agent.</li>
           </ol>
         </div>
         <div className="demoVisual">
-          <video controls preload="metadata" poster="./assets/rta-smriti-launch-poster.png" aria-label="60-second Rta-Smriti Brain product tour">
-            <source src="./assets/rta-smriti-launch-demo.mp4" type="video/mp4" />
-            Your browser does not support embedded video. <a href="./assets/rta-smriti-launch-demo.mp4">Open the MP4 demo.</a>
+          <video controls preload="metadata" poster="./assets/rta-smriti-v0.9-launch-poster.png" aria-label="60-second Rta-Smriti Brain v0.9 Universal Capture product tour">
+            <source src="./assets/rta-smriti-v0.9-launch-demo.mp4" type="video/mp4" />
+            Your browser does not support embedded video. <a href="./assets/rta-smriti-v0.9-launch-demo.mp4">Open the v0.9 MP4 demo.</a>
           </video>
         </div>
       </div>
@@ -276,15 +299,21 @@ function Demo() {
 }
 
 function Install() {
+  const [platform, setPlatform] = useState("windows");
+  const labels = { windows: "Windows", macos: "macOS", linux: "Linux" };
+  const commands = installCommands[platform];
   return (
     <section className="installSection" id="install">
       <div className="shell installGrid">
-        <div><span className="sectionIndex">07 / START LOCAL</span><h2>Your first project brain is one command away.</h2><p>Download v0.9.0-alpha or install it from source, then bootstrap one private SQLite brain per project.</p><p><a href={releaseUrl}>Release assets</a> · <a href={ciRunUrl}>CI matrix</a> · <a href={nativeRunUrl}>Native builds</a></p></div>
-        <div className="terminalBlock">
-          <div className="terminalHeader"><span><i /> <i /> <i /></span><strong>PowerShell</strong><CopyButton value={installCommand} /></div>
-          <code><span>$</span> {installCommand}</code>
-          <code><span>$</span> rta-brain bootstrap-project C:\path\to\project --project my-project --write-agents</code>
-          <code><span>$</span> rta-brain dashboard</code>
+        <div><span className="sectionIndex">08 / START LOCAL</span><h2>Install locally. Start a project in one command.</h2><p>Use the source install below or download the verified v0.9.0-alpha binary and checksum for your operating system.</p><p><a href={releaseUrl}>Release assets</a> · <a href={ciRunUrl}>CI matrix</a> · <a href={nativeRunUrl}>Native builds</a></p></div>
+        <div>
+          <div className="platformSwitch" role="tablist" aria-label="Installation platform">
+            {Object.entries(labels).map(([id, label]) => <button key={id} role="tab" aria-selected={platform === id} onClick={() => setPlatform(id)}>{label}</button>)}
+          </div>
+          <div className="terminalBlock">
+            <div className="terminalHeader"><span><i /> <i /> <i /></span><strong>{labels[platform]}</strong><CopyButton value={commands.join("\n")} label={`Copy ${labels[platform]} install commands`} /></div>
+            {commands.map((command) => <code key={command}><span>$</span> {command}</code>)}
+          </div>
         </div>
       </div>
     </section>
@@ -293,7 +322,33 @@ function Install() {
 
 function Footer() {
   return (
-    <footer><div className="shell footerGrid"><Brand compact /><p>Project memory that stays with the project.</p><div><a href="#install">Install</a><a href="#difference">Security & privacy</a><a href="./LICENSE.txt">MIT License</a><a href={productHuntUrl}>Product Hunt <ExternalLink size={13} /></a>{repositoryUrl && <a href={repositoryUrl}>Get source <ExternalLink size={13} /></a>}</div></div></footer>
+    <footer><div className="shell footerGrid"><Brand compact /><p>Project memory that stays with the project.</p><div><a href="#install">Install</a><a href={`${repositoryUrl}/blob/main/SECURITY.md`}>Security & privacy</a><a href="./LICENSE.txt">MIT License</a><a href={productHuntUrl}>Product Hunt <ExternalLink size={13} /></a>{repositoryUrl && <a href={repositoryUrl}>Get source <ExternalLink size={13} /></a>}</div></div></footer>
+  );
+}
+
+function ReleaseStory() {
+  const releases = [
+    ["v0.6", "Hardened runtime", "Cross-platform lifecycle, parsing, hybrid retrieval, signed and encrypted snapshots."],
+    ["v0.7", "Temporal truth", "Append-only event sourcing with recorded time, valid time, claims, evidence, and contradictions."],
+    ["v0.8", "Context compiler", "Capability-bound, privacy-aware packs with fixed-point scoring, receipts, and abstention."],
+    ["v0.9", "Universal Capture", "Opt-in adapters, bounded private spool, normalization, replay, retention, deletion, and diagnostics."],
+  ];
+  return (
+    <section className="releaseStory" id="release">
+      <div className="shell">
+        <div className="sectionHeading rowHeading">
+          <div><span className="sectionIndex">02 / CURRENT RELEASE</span><h2>v0.9 is a continuity system, not a chat transcript dump.</h2></div>
+          <p>The newest layer captures activity conservatively, keeps it untrusted, and routes only governed evidence into the next agent task.</p>
+        </div>
+        <div className="releaseTrack">
+          {releases.map(([version, title, copy], index) => <article className={index === releases.length - 1 ? "current" : ""} key={version}><span>{version}</span><strong>{title}</strong><p>{copy}</p></article>)}
+        </div>
+        <div className="releaseProof">
+          <img src="./assets/universal-capture-v0.9.png" alt="Rta-Smriti v0.9 Agent Flight Recorder showing two bounded unverified events from one authorized source" />
+          <div><span className="sectionIndex">UNIVERSAL CAPTURE</span><h3>Observe first. Promote only with evidence.</h3><p>Captured commands and tool calls are replayed as read-only records. Redaction happens before durable queuing, raw payload retention stays off by default, and destructive retention or deletion operations require preview-derived confirmation.</p><a href={releaseUrl}>Read the v0.9 release evidence <ArrowRight size={15} /></a></div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -303,12 +358,12 @@ function LandingPage() {
     document.querySelectorAll("section:not(.hero)").forEach((section) => observer.observe(section));
     return () => observer.disconnect();
   }, []);
-  return <><Header /><main><Hero /><ProblemBand /><ProductSection /><Architecture /><PramanaSection /><Difference /><AgentRail /><Demo /><Install /></main><Footer /></>;
+  return <><Header /><main><Hero /><ProblemBand /><ReleaseStory /><ProductSection /><Architecture /><PramanaSection /><Difference /><AgentRail /><Demo /><Install /></main><Footer /></>;
 }
 
 const assetContent = {
-  social: ["Give every project a memory.", "Private, evidence-aware project memory with continuity for any AI coding agent.", "dashboard"],
-  "gallery-1": ["Your AI starts with project memory.", "Repo evidence, durable decisions, long-session handoffs, and structured checkpoints — compiled locally for the next task.", "dashboard"],
+  social: ["Give every project governed continuity.", "v0.9 combines Universal Capture, bitemporal truth, and context compilation for any AI coding agent.", "dashboard"],
+  "gallery-1": ["Your AI starts from governed project truth.", "Repository evidence, bounded capture, durable decisions, and structured checkpoints — compiled locally for the next task.", "dashboard"],
   "gallery-2": ["One brain. Any agent.", "Codex · Claude Code · Cursor · GitHub Copilot CLI · Gemini CLI · Aider · Cline · MCP", "agents"],
   "gallery-3": ["Evidence, not vibes.", "Observed facts, trusted instructions, inferences, memories, and hypotheses stay meaningfully different.", "pramana"],
   "gallery-4": ["10,000 synthetic files. One focused pack.", "A public, reproducible performance fixture exercises bounded local retrieval without exposing a private repository.", "performance"],
@@ -321,12 +376,12 @@ function AssetBoard({ name }) {
   return (
     <div className={`assetCanvas ${assetClass}`}>
       <div className="assetTop"><Brand compact /><span>LOCAL ONLY</span></div>
-      <div className="assetCopy"><small>RTA-SMRITI BRAIN</small><h1>{content[0]}</h1><p>{content[1]}</p></div>
-      {content[2] === "dashboard" && <img src="./assets/dashboard-hero.png" alt="" />}
+      <div className="assetCopy"><small>RTA-SMRITI BRAIN · v0.9</small><h1>{content[0]}</h1><p>{content[1]}</p></div>
+      {content[2] === "dashboard" && <img src="./assets/dashboard-hero-v0.9.png" alt="" />}
       {content[2] === "agents" && <div className="assetAgentOrbit"><BrainCircuit />{agents.slice(0, 7).map((agent, i) => <span key={agent} style={{ "--i": i }}>{agent}</span>)}</div>}
       {content[2] === "pramana" && <div className="assetPramana">{Object.entries(pramana).map(([key, value]) => <span key={key} style={{ "--color": value[2] }}><i />{key}<small>{value[0]}</small></span>)}</div>}
       {content[2] === "performance" && <div className="assetMetric"><span><strong>10,000</strong>synthetic files</span><ArrowRight /><span><strong>1</strong>task-specific pack</span></div>}
-      <div className="assetFooter"><span>Private SQLite · FTS5 · Graph · MCP Gateway</span><strong>rta-smriti</strong></div>
+      <div className="assetFooter"><span>v0.9 · Universal Capture · Bitemporal Truth · Context Compiler</span><strong>rta-smriti</strong></div>
     </div>
   );
 }

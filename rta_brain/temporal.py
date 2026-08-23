@@ -490,6 +490,11 @@ def append_claim(
         "valid_to": valid_to,
         "verification_status": selected_verification_status,
     }
+    idempotency_payload_fields = dict(payload)
+    if not claim_id:
+        idempotency_payload_fields.pop("claim_id")
+    if not valid_from and not occurred_at:
+        idempotency_payload_fields.pop("valid_from")
     payload_json = _canonical_event_payload(payload)
     payload_sha256 = _sha256_text(payload_json)
     event_id = uuid.uuid4().hex
@@ -509,12 +514,12 @@ def append_claim(
         if duplicate is not None:
             _require_matching_idempotent_event(
                 duplicate,
-                stream_id=stream_id,
+                stream_id=stream_id if claim_id else str(duplicate["stream_id"]),
                 event_type="claim_asserted.v1",
                 actor_type=selected_actor_type,
                 actor_id=actor_id,
                 source=source,
-                payload_sha256=payload_sha256,
+                payload_fields=idempotency_payload_fields,
             )
             result = _claim_result_from_event(
                 conn, duplicate, idempotent_replay=True
