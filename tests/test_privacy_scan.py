@@ -155,6 +155,19 @@ class PrivacyScanTests(unittest.TestCase):
 
             self.assertIn(("release.txt", "windows-user-path"), scan(root, []))
 
+    def test_scans_explicit_ignored_artifact_directory_inside_git_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = Path(tmp)
+            subprocess.run(["git", "init", "-q"], cwd=checkout, check=True)
+            (checkout / ".gitignore").write_text("release-artifacts\n", encoding="utf-8")
+            artifacts = checkout / "release-artifacts"
+            artifacts.mkdir()
+            (artifacts / "SHA256SUMS.txt").write_text(
+                "fixture  rta-smriti-linux-x64\n", encoding="utf-8",
+            )
+
+            self.assertEqual(scan(artifacts, []), [])
+
     def test_git_deleted_paths_are_not_treated_as_release_candidates(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

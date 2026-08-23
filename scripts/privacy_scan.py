@@ -117,6 +117,24 @@ def is_known_path_definition(relative: str, view: bytes, start: int, end: int) -
     return digest in allowed
 
 
+def _git_repository_root(root: Path) -> Path | None:
+    result = run_git_inspection(
+        root,
+        "rev-parse",
+        "--show-toplevel",
+        max_output_bytes=4_096,
+    )
+    if result is None or result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    if not value:
+        return None
+    try:
+        return Path(value).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+
+
 def candidate_files(root: Path, budget: ScanBudget) -> list[Path]:
     candidates: list[Path] = []
 
@@ -128,23 +146,25 @@ def candidate_files(root: Path, budget: ScanBudget) -> list[Path]:
             raise ScanFileLimitExceeded
         candidates.append(path)
 
-    result = run_git_inspection(
-        root,
-        "ls-files",
-        "--cached",
-        "--others",
-        "--exclude-standard",
-        "-z",
-        max_output_bytes=MAX_ARCHIVE_TOTAL_BYTES,
-    )
-    if result is not None and result.returncode == 0:
-        for item in result.stdout.split("\0"):
-            if not item:
-                continue
-            path = root / item
-            if os.path.lexists(path):
-                add_candidate(path)
-        return candidates
+    git_root = _git_repository_root(root)
+    if git_root == root:
+        result = run_git_inspection(
+            root,
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            max_output_bytes=MAX_ARCHIVE_TOTAL_BYTES,
+        )
+        if result is not None and result.returncode == 0:
+            for item in result.stdout.split("\0"):
+                if not item:
+                    continue
+                path = root / item
+                if os.path.lexists(path):
+                    add_candidate(path)
+            return candidates
 
     directories = [root]
     while directories:
