@@ -272,6 +272,34 @@ class ManagedConsoleTests(unittest.TestCase):
         self.assertEqual(alive.call_count, 2)
         identity.assert_called_once_with(4242)
 
+    def test_stop_terminates_only_the_recorded_worker_after_grace_timeout(self):
+        from rta_brain import console_daemon
+
+        paths = console_paths(self.brain_dir)
+        state = {
+            "state": "running",
+            "pid": 4242,
+            "process_identity": "worker-birth-identity",
+        }
+        process = MagicMock(pid=4242)
+        key = str(paths["state"])
+        console_daemon._SPAWNED_PROCESSES[key] = process
+        try:
+            with (
+                patch.object(console_daemon, "console_status", return_value=state),
+                patch.object(console_daemon, "prepare_control_dir"),
+                patch.object(console_daemon, "write_stop_request"),
+                patch.object(console_daemon, "_worker_process_matches", return_value=True),
+                patch.object(console_daemon, "terminate_worker") as terminate,
+            ):
+                stopped = stop_console(self.brain_dir, timeout=0.1)
+
+            terminate.assert_called_once_with(process, timeout=1.0)
+            self.assertEqual(stopped["state"], "stopped")
+            self.assertNotIn(key, console_daemon._SPAWNED_PROCESSES)
+        finally:
+            console_daemon._SPAWNED_PROCESSES.pop(key, None)
+
     def test_temporal_truth_operator_api_supports_overview_history_and_mutation(self):
         root = Path(self.tempdir.name) / "repo"
         root.mkdir()

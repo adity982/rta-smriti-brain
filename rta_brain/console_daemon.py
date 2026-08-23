@@ -29,6 +29,7 @@ from .runtime_control import (
     read_secret,
     spawn_detached_worker,
     stop_requested,
+    terminate_worker,
     write_json,
     write_secret,
     write_stop_request,
@@ -323,6 +324,17 @@ def stop_console(brain_dir: Path, timeout: float = 10.0) -> dict:
             clear_control_files(paths, ("stop", "lock", "token"))
             return {**state, "state": "stopped" if state["state"] == "stale" else state["state"]}
         time.sleep(0.05)
+    process = _SPAWNED_PROCESSES.get(str(paths["state"]))
+    latest = console_status(brain_dir)
+    if (
+        process is not None
+        and int(process.pid) == int(latest.get("pid") or 0)
+        and _worker_process_matches(latest)
+    ):
+        terminate_worker(process, timeout=1.0)
+        _SPAWNED_PROCESSES.pop(str(paths["state"]), None)
+        clear_control_files(paths, ("stop", "lock", "token"))
+        return {**latest, "state": "stopped"}
     raise TimeoutError(f"console did not stop within {timeout:g} seconds")
 
 
