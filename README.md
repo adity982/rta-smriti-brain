@@ -9,7 +9,7 @@
 
 **A local project brain for AI coding agents. `v0.6.0-alpha` is now published with lower-friction indexing, safer continuity, encrypted snapshots, and multi-project operation.**
 
-The current development line has completed the local canonical-identity and temporal-truth kernels and is qualifying an uncommitted `v0.8.0-alpha` cognitive-context compiler candidate. The latest public prerelease remains `v0.6.0-alpha`; no later candidate is represented as published until its exact diff, cross-platform evidence, privacy review, and owner approval are complete.
+The current development line has completed the canonical-identity, temporal-truth, and governed-context kernels and is qualifying an uncommitted `v0.9.0-alpha` universal-capture candidate. The latest public prerelease remains `v0.6.0-alpha`; no later candidate is represented as published until its exact diff, cross-platform evidence, privacy review, and owner approval are complete.
 
 [Latest prerelease assets](https://github.com/sulabhdubey/rta-smriti-brain/releases) · [Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second product demo](launch-assets/product-hunt/rta-smriti-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Public benchmark](docs/PUBLIC_BENCHMARK.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
 
@@ -280,6 +280,7 @@ ingest-repo       Index a repository or folder
 watch-repo        Continuously refresh a repository using incremental indexing
 watcher           Start, inspect, or stop managed background repository sync
 continuity        Start, inspect, or stop managed Codex transcript capture
+capture           Operate the governed universal capture journal
 settings          Read or update a project's indexing and retrieval policy
 ingest-thread     Index a long thread, transcript, or handoff file
 search            Search memories and indexed files
@@ -330,7 +331,8 @@ Python environment; do not hand-edit a Windows path into a macOS or Linux host.
 The generated server is project-bound and read-only by default. Memory writes,
 canonical-repository ingestion, and thread ingestion require explicit startup
 capabilities: `--allow-memory-writes`, `--allow-repo-ingestion`, and
-`--allow-thread-ingestion`. Thread ingestion also requires one or more
+`--allow-thread-ingestion`. Starting or stopping the continuity worker is a
+separate process-control grant, `--allow-continuity-control`. Thread ingestion also requires one or more
 `--allow-thread-root` values; the selected file is consumed through the same
 descriptor-bound root check. Agent-authored memories are always stored as
 unverified `anumana` with confidence capped at `0.75`. Owner-only governance

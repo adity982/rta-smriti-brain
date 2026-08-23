@@ -13,15 +13,101 @@ from rta_brain.continuity_daemon import (
     continuity_paths,
     continuity_status,
     discover_codex_sessions,
+    public_continuity_status,
     start_continuity,
     stop_continuity,
     validate_codex_session_binding,
 )
+from rta_brain.runtime_control import process_identity
 
 
 class ContinuityDaemonTests(unittest.TestCase):
+    def test_public_status_removes_local_paths_process_metadata_and_raw_errors(self):
+        private = {
+            "status": "ok",
+            "state": "stale",
+            "project": "demo",
+            "db_path": r"C:\\Users\\owner\\brain.sqlite",
+            "root": r"C:\\private\\project",
+            "sessions_root": r"C:\\Users\\owner\\.codex\\sessions",
+            "pid": 42,
+            "token_hash": "secret-fingerprint",
+            "process_identity": "windows:42:123",
+            "last_error": r"failed to read C:\\private\\project\\secret.txt",
+            "consecutive_errors": 1,
+            "sessions_pending": 2,
+            "process_alive": True,
+            "process_identity_matches": False,
+            "binding_diagnostics": {
+                "recent_sessions": 9,
+                "matching_sessions": 1,
+                "foreign_sessions": 8,
+                "invalid_sessions": 0,
+                "hint": "Foreign sessions exist.",
+            },
+        }
+
+        public = public_continuity_status(private)
+
+        self.assertEqual(public["state"], "stale")
+        self.assertTrue(public["has_error"])
+        self.assertEqual(public["sessions_pending"], 2)
+        self.assertFalse(public["process_identity_matches"])
+        self.assertNotIn("binding_diagnostics", public)
+        rendered = json.dumps(public)
+        for secret in (
+            "db_path", "sessions_root", "token_hash", "process_identity\"",
+            r"C:\\Users", r"C:\\private", "secret-fingerprint", "secret.txt",
+        ):
+            self.assertNotIn(secret, rendered)
+
+    def test_status_rejects_reused_pid_with_mismatched_process_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            database = Path(tmp) / "brain.sqlite"
+            database.touch()
+            paths = continuity_paths(database, "demo")
+            paths["directory"].mkdir()
+            paths["state"].write_text(json.dumps({
+                "project": "demo", "pid": os.getpid(), "state": "running",
+                "process_identity": "windows:reused:identity",
+                "interval_seconds": 60,
+                "heartbeat_at": "2999-01-01T00:00:00+00:00",
+            }), encoding="utf-8")
+
+            with patch("rta_brain.continuity_daemon.process_identity", return_value="windows:actual:identity"):
+                status = continuity_status(database, "demo")
+
+        self.assertEqual(status["state"], "stale")
+        self.assertTrue(status["process_alive"])
+        self.assertFalse(status["process_identity_matches"])
+        self.assertEqual(status["process_identity_status"], "mismatched")
+
+    def test_live_process_with_unverifiable_identity_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            database = Path(tmp) / "brain.sqlite"
+            database.touch()
+            paths = continuity_paths(database, "demo")
+            paths["directory"].mkdir()
+            paths["state"].write_text(json.dumps({
+                "project": "demo", "pid": os.getpid(), "state": "running",
+                "process_identity": "windows:expected:identity",
+                "interval_seconds": 60,
+                "heartbeat_at": "2999-01-01T00:00:00+00:00",
+            }), encoding="utf-8")
+
+            with patch("rta_brain.continuity_daemon.process_identity", return_value=None):
+                status = continuity_status(database, "demo")
+
+        self.assertEqual(status["state"], "stale")
+        self.assertTrue(status["process_alive"])
+        self.assertFalse(status["process_identity_matches"])
+        self.assertEqual(status["process_identity_status"], "unverifiable")
+
     def test_stop_waits_for_a_stale_live_process_to_exit(self):
-        stale_live = {"state": "stale", "process_alive": True, "pid": 42}
+        stale_live = {
+            "state": "stale", "process_alive": True,
+            "process_identity_matches": True, "pid": 42,
+        }
         stopped = {"state": "stopped", "process_alive": False, "pid": 42}
         with patch("rta_brain.continuity_daemon.continuity_paths", return_value={
             "directory": Path("control"), "state": Path("control/state"),
@@ -34,7 +120,10 @@ class ContinuityDaemonTests(unittest.TestCase):
         self.assertFalse(result["process_alive"])
 
     def test_stop_polling_does_not_scan_session_bindings(self):
-        running = {"state": "running", "process_alive": True, "pid": 42}
+        running = {
+            "state": "running", "process_alive": True,
+            "process_identity_matches": True, "pid": 42,
+        }
         stopped = {"state": "stopped", "process_alive": False, "pid": 42}
         with patch("rta_brain.continuity_daemon.continuity_paths", return_value={
             "directory": Path("control"), "state": Path("control/state"),
@@ -68,6 +157,7 @@ class ContinuityDaemonTests(unittest.TestCase):
             paths["directory"].mkdir()
             paths["state"].write_text(json.dumps({
                 "project": "demo", "pid": os.getpid(), "state": "running",
+                "process_identity": process_identity(os.getpid()),
                 "interval_seconds": 1, "heartbeat_at": "2000-01-01T00:00:00+00:00",
             }), encoding="utf-8")
             self.assertEqual(continuity_status(database, "demo")["state"], "stale")
@@ -80,10 +170,46 @@ class ContinuityDaemonTests(unittest.TestCase):
             paths = continuity_paths(database, "demo"); paths["directory"].mkdir()
             paths["state"].write_text(json.dumps({
                 "project": "demo", "pid": os.getpid(), "state": "running",
+                "process_identity": process_identity(os.getpid()),
                 "interval_seconds": 1, "heartbeat_at": "2000-01-01T00:00:00+00:00",
             }), encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "alive but unresponsive"):
                 start_continuity(database, project, "demo", sessions)
+
+    def test_start_refuses_to_replace_a_live_process_when_identity_is_unverifiable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp); database = base / "brain.sqlite"; project = base / "project"; sessions = base / "sessions"
+            project.mkdir(); sessions.mkdir()
+            conn = db.connect(database); db.init_project(conn, "demo", str(project)); conn.close()
+            paths = continuity_paths(database, "demo"); paths["directory"].mkdir()
+            paths["state"].write_text(json.dumps({
+                "project": "demo", "pid": os.getpid(), "state": "running",
+                "process_identity": "windows:expected:identity",
+                "interval_seconds": 1, "heartbeat_at": "2000-01-01T00:00:00+00:00",
+            }), encoding="utf-8")
+            with patch("rta_brain.continuity_daemon.process_identity", return_value=None), self.assertRaisesRegex(
+                RuntimeError, "identity could not be verified"
+            ):
+                start_continuity(database, project, "demo", sessions)
+
+    def test_stop_refuses_to_clear_a_live_process_when_identity_is_unverifiable(self):
+        stale_live = {
+            "state": "stale", "process_alive": True,
+            "process_identity_matches": False,
+            "process_identity_status": "unverifiable", "pid": 42,
+        }
+        with patch("rta_brain.continuity_daemon.continuity_paths", return_value={
+            "directory": Path("control"), "state": Path("control/state"),
+            "stop": Path("control/stop"), "lock": Path("control/lock"), "log": Path("control/log"),
+        }), patch("rta_brain.continuity_daemon.continuity_status", return_value=stale_live), patch(
+            "rta_brain.continuity_daemon._clear_stale_control"
+        ) as clear, patch(
+            "rta_brain.continuity_daemon._write_stop_request"
+        ) as request_stop, self.assertRaisesRegex(RuntimeError, "identity could not be verified"):
+            stop_continuity(Path("brain.sqlite"), "demo", timeout=1)
+
+        clear.assert_not_called()
+        request_stop.assert_not_called()
 
     def test_discovery_only_returns_sessions_bound_to_canonical_project(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -12,8 +12,12 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 
-def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(command, cwd=cwd, text=True, capture_output=True)
+def run(
+    command: list[str], cwd: Path, *, stdin: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        command, cwd=cwd, input=stdin, text=True, capture_output=True,
+    )
     if result.returncode != 0:
         raise RuntimeError(
             f"command failed ({result.returncode}): {command}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -160,6 +164,79 @@ def main() -> int:
         )
         if not mcp_probe["ready"] or mcp_probe["tool_count"] < 1 or not mcp_probe["fresh_task_required"]:
             raise AssertionError(f"installed MCP probe failed: {mcp_probe}")
+
+        adapter_home = root / "adapter-home"
+        adapter_home.mkdir()
+        capture_policy = json.loads(run([
+            str(cli), "capture", "--db", str(db), "--json", "--project", "sample",
+            "--root", str(project), "policy", "create", "--id", "continuity",
+            "--version", "1", "--profile", "continuity",
+        ], root).stdout)
+        adapter_plan = json.loads(run([
+            str(cli), "capture", "--db", str(db), "--json", "--project", "sample",
+            "--root", str(project), "adapter", "plan", "--adapter", "claude-code",
+            "--scope", "project", "--home", str(adapter_home),
+            "--policy-digest", capture_policy["policy_digest"],
+        ], root).stdout)
+        adapter_install = json.loads(run([
+            str(cli), "capture", "--db", str(db), "--json", "--project", "sample",
+            "--root", str(project), "adapter", "install", "--adapter", "claude-code",
+            "--scope", "project", "--home", str(adapter_home),
+            "--policy-digest", capture_policy["policy_digest"], "--confirm",
+            "--confirmation-token", adapter_plan["confirmation_token"],
+        ], root).stdout)
+        capture_record = json.dumps({
+            "source_cursor": "1", "cursor_kind": "sequence",
+            "session_id": "installed-smoke-session",
+            "observed_at": "2026-08-23T00:00:01Z",
+            "occurred_at": "2026-08-23T00:00:00Z",
+            "vendor_event": "PostToolUse",
+            "payload": {
+                "hook_event_name": "PostToolUse", "tool_name": "Read",
+                "tool_status": "success", "duration_ms": 8,
+                "tool_response": "synthetic installed smoke response",
+            },
+        })
+        capture_emit = json.loads(run([
+            str(cli), "capture", "--db", str(db), "--json", "--project", "sample",
+            "--root", str(project), "emit", "--source-id", adapter_install["source_id"],
+        ], root, stdin=capture_record).stdout)
+        capture_service = json.loads(run([
+            str(cli), "capture", "--db", str(db), "--json", "--project", "sample",
+            "--root", str(project), "daemon", "start", "--interval", "0.1",
+            "--batch-size", "10",
+        ], root).stdout)
+        try:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                capture_replay = json.loads(run([
+                    str(cli), "capture", "--db", str(db), "--json",
+                    "--project", "sample", "--root", str(project), "replay",
+                    "--limit", "10",
+                ], root).stdout)
+                if capture_replay["events"]:
+                    break
+                time.sleep(0.1)
+            else:
+                raise AssertionError("installed capture daemon did not normalize the event")
+            capture_doctor = json.loads(run([
+                str(cli), "capture", "--db", str(db), "--json", "--project", "sample",
+                "--root", str(project), "doctor",
+            ], root).stdout)
+        finally:
+            capture_stopped = json.loads(run([
+                str(cli), "capture", "--db", str(db), "--json", "--project", "sample",
+                "--root", str(project), "daemon", "stop",
+            ], root).stdout)
+        if any((
+            adapter_install["status"] != "ok",
+            capture_emit["status"] != "stored",
+            capture_service["state"] != "running",
+            len(capture_replay["events"]) != 1,
+            not capture_doctor["journal"]["chain_valid"],
+            capture_stopped["state"] != "stopped",
+        )):
+            raise AssertionError("installed Universal Capture lifecycle failed")
 
         sessions = root / "sessions"
         sessions.mkdir()
@@ -403,7 +480,7 @@ def main() -> int:
                 dashboard.kill()
                 dashboard.wait(timeout=5)
 
-        print(json.dumps({"status": "ok", "checks": 27}, sort_keys=True))
+        print(json.dumps({"status": "ok", "checks": 28}, sort_keys=True))
     return 0
 
 

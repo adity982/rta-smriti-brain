@@ -117,7 +117,7 @@ class ContextSchemaMigrationTests(unittest.TestCase):
             conn = db.connect(database)
             try:
                 db.init_schema(conn)
-                self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 9)
+                self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], db.SCHEMA_VERSION)
                 self.assertTrue(CONTEXT_TABLES.issubset(self._table_names(conn)))
                 triggers = {
                     row["name"]
@@ -162,7 +162,7 @@ class ContextSchemaMigrationTests(unittest.TestCase):
                     )
                 }
                 self.assertEqual(first, second)
-                self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 9)
+                self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], db.SCHEMA_VERSION)
             finally:
                 conn.close()
 
@@ -436,7 +436,7 @@ class ContextSchemaMigrationTests(unittest.TestCase):
                 conn.rollback()
                 conn.close()
 
-    def test_locked_schema_reread_validates_a_concurrent_v9_claim(self):
+    def test_locked_schema_reread_validates_a_concurrent_current_schema_claim(self):
         with tempfile.TemporaryDirectory() as tmp:
             database = Path(tmp) / "brain.sqlite"
             self._v8_database(database)
@@ -455,7 +455,7 @@ class ContextSchemaMigrationTests(unittest.TestCase):
                         self.raced = True
                         other = sqlite3.connect(database)
                         try:
-                            other.execute("PRAGMA user_version = 9")
+                            other.execute(f"PRAGMA user_version = {db.SCHEMA_VERSION}")
                             other.commit()
                         finally:
                             other.close()
@@ -467,7 +467,10 @@ class ContextSchemaMigrationTests(unittest.TestCase):
             try:
                 with self.assertRaisesRegex(ValueError, "invalid schema v9 collision"):
                     db.init_schema(RacingConnection())
-                self.assertEqual(inner.execute("PRAGMA user_version").fetchone()[0], 9)
+                self.assertEqual(
+                    inner.execute("PRAGMA user_version").fetchone()[0],
+                    db.SCHEMA_VERSION,
+                )
             finally:
                 inner.close()
 

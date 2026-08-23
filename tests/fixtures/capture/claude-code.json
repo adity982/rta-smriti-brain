@@ -1,0 +1,17 @@
+{
+  "adapter": "claude-code",
+  "adapter_version": "hooks-v1",
+  "vendor_event": "PostToolUse",
+  "session_id": "session-claude-001",
+  "cursor": "hook-7",
+  "observed_at": "2026-08-22T12:00:01Z",
+  "payload": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Read",
+    "tool_status": "success",
+    "duration_ms": 8,
+    "tool_response": "synthetic response",
+    "api_key": "synthetic-secret"
+  },
+  "expected_event": "tool.completed.v1"
+}

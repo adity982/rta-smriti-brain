@@ -143,6 +143,35 @@ Generate one MCP gateway configuration for the whole brain directory:
 
 Register the emitted absolute command and arguments in Codex or another MCP host. Restart the host completely and create a new task before testing the tools. Use the single-database `mcp-config --project ...` form only when the host should access one project.
 
+## Universal Capture
+
+Universal Capture is opt-in. It does not install hooks or retain raw agent
+payloads merely because a project was bootstrapped. Begin with diagnostics and
+an immutable capture policy:
+
+```powershell
+& $RtaBrain --db "$BrainDir\project-name.sqlite" --json capture --project project-name --root C:\path\to\project doctor
+& $RtaBrain --db "$BrainDir\project-name.sqlite" --json capture --project project-name --root C:\path\to\project policy create --profile continuity
+```
+
+```bash
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" --json capture --project project-name --root /path/to/project doctor
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" --json capture --project project-name --root /path/to/project policy create --profile continuity
+```
+
+Use `capture adapter list` to inspect supported local adapters. Adapter
+installation and removal are preview-first: run `adapter plan`, inspect the
+bounded changes and confirmation token, then repeat with `adapter install
+--confirm --confirmation-token <token>` only when the plan is acceptable. Start
+the project-bound normalizer with `capture daemon start`; inspect it with
+`capture daemon status` and stop it before moving or deleting the brain.
+
+Captured material remains untrusted evidence. Use `capture events` or `capture
+replay` for bounded inspection. Export, retention, redaction, and deletion are
+policy-bound; destructive operations require a preview-derived confirmation
+token and create durable receipts. The default metadata-only and continuity
+profiles do not grant unrestricted raw-payload retention.
+
 ## Optional Local Capabilities
 
 Tree-sitter grammars and Ed25519 snapshot support are included in the standard
@@ -192,6 +221,7 @@ First stop the managed processes while the command is still installed:
 rta-brain console login-disable --brain-dir <brain-directory>
 rta-brain console stop --brain-dir <brain-directory>
 rta-brain --db <brain-database> watcher stop --project <project-name>
+rta-brain --db <brain-database> capture --project <project-name> --root <canonical-project-root> daemon stop
 ```
 
 Repeat the watcher command for each active project, then uninstall the package

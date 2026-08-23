@@ -1,6 +1,13 @@
 # Roadmap
 
-## Current v0.8.0-alpha Candidate
+## Current v0.9.0-alpha Candidate
+
+- Opt-in universal passive capture for supported coding-agent hooks and generic local producers
+- Private bounded spools, one normalizing daemon per brain, append-only hash-chained events, causal replay, and interruption diagnostics
+- Preview-first reversible adapter management with explicit policy binding and capability-separated CLI/MCP controls
+- Metadata-only, continuity, and encrypted forensic profiles with retention, redaction, deletion receipts, and local operator visibility
+
+## Included From v0.8.0-alpha
 
 - Agent-profile-aware context compilation with explicit token, privacy, and authority contracts
 - Immutable task contracts, candidate selection, context envelopes, receipts, explanations, and revocation
@@ -29,7 +36,7 @@
 - Metadata-only large-file isolation plus explicit strict blocking
 - Safe local language-server discovery and loopback-only Ollama continuity compaction
 
-## Next After v0.8.0-alpha
+## Next After v0.9.0-alpha
 
 - Expand the public benchmark with community-reviewed corpora and blinded human relevance judgments
 - Add approximate nearest-neighbor indexes for very large local embedding collections

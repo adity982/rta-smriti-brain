@@ -1,0 +1,14 @@
+{
+  "adapter": "gemini-cli",
+  "adapter_version": "hooks-v1",
+  "vendor_event": "PreCompress",
+  "session_id": "session-gemini-001",
+  "cursor": "compress-1",
+  "observed_at": "2026-08-22T12:00:04Z",
+  "payload": {
+    "hook_event_name": "PreCompress",
+    "summary": "Synthetic context compaction",
+    "token": "synthetic-secret"
+  },
+  "expected_event": "turn.compacted.v1"
+}

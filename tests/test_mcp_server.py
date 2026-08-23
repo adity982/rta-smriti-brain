@@ -8,12 +8,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import rta_brain.mcp_server as mcp_server
+from rta_brain import db as brain_db
+from rta_brain import mcp_server
 from rta_brain.db import connect, init_project
 from rta_brain.mcp_server import McpRequestScheduler, RtaBrainMcpServer
-
-from rta_brain import db as brain_db
-
 
 ROOT = Path(__file__).resolve().parents[1]
 MCP = ROOT / "rta-brain-mcp.py"
@@ -40,6 +38,7 @@ def run_mcp(messages, db_path, *extra_args):
         text=True,
         capture_output=True,
         cwd=ROOT,
+        check=False,
     )
 
 
@@ -51,11 +50,120 @@ def run_gateway(messages, brain_dir):
     body = "\n".join(json.dumps(message) for message in messages) + "\n"
     return subprocess.run(
         [sys.executable, str(MCP), "--brain-dir", str(brain_dir)],
-        input=body, text=True, capture_output=True, cwd=ROOT,
+        input=body, text=True, capture_output=True, cwd=ROOT, check=False,
     )
 
 
 class RtaBrainMcpTests(unittest.TestCase):
+    def test_continuity_reads_expose_only_path_free_public_lifecycle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            database = Path(tmp) / "brain.sqlite"
+            root = prepare_mcp_db(database)
+            conn = connect(database)
+            try:
+                brain_db.save_checkpoint(conn, "demo", "Continue safely")
+            finally:
+                conn.close()
+            lifecycle = {
+                "status": "ok",
+                "state": "running",
+                "project": "demo",
+                "db_path": str(database),
+                "root": str(root),
+                "sessions_root": str(Path(tmp) / ".codex" / "sessions"),
+                "pid": 42,
+                "token_hash": "private-token-hash",
+                "process_identity": "windows:42:123",
+                "last_error": str(root / "private-error.txt"),
+                "consecutive_errors": 1,
+                "sessions_pending": 0,
+                "process_alive": True,
+                "process_identity_matches": True,
+            }
+            server = RtaBrainMcpServer(database, "demo")
+
+            with patch("rta_brain.mcp_server.continuity_status", return_value=lifecycle):
+                status = server.call_tool("brain_continuity_status", {})["structuredContent"]
+                readiness = server.call_tool("brain_operational_readiness", {})["structuredContent"]
+
+        self.assertTrue(status["has_error"])
+        self.assertIn("continuity_capture_errors", readiness["reasons"])
+        for payload in (status, readiness["continuity"]):
+            rendered = json.dumps(payload)
+            for secret in (
+                str(database), str(root), "sessions_root", "db_path", "pid",
+                "token_hash", "process_identity\"", "private-token-hash",
+                "private-error.txt",
+            ):
+                self.assertNotIn(secret, rendered)
+
+    def test_memory_write_capability_does_not_grant_continuity_process_control(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            database = Path(tmp) / "brain.sqlite"
+            prepare_mcp_db(database)
+
+            memory_server = RtaBrainMcpServer(
+                database, "demo", allow_memory_writes=True,
+            )
+            control_server = RtaBrainMcpServer(
+                database, "demo", allow_continuity_control=True,
+            )
+
+        self.assertNotIn("brain_continuity_control", memory_server.enabled_tools)
+        self.assertIn("brain_continuity_control", control_server.enabled_tools)
+
+    def test_continuity_control_returns_only_path_free_public_lifecycle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            database = Path(tmp) / "brain.sqlite"
+            root = prepare_mcp_db(database)
+            server = RtaBrainMcpServer(
+                database, "demo", allow_continuity_control=True,
+            )
+            private = {
+                "status": "ok", "state": "stopped", "project": "demo",
+                "db_path": str(database), "root": str(root), "pid": 42,
+                "token_hash": "private-token", "process_identity": "windows:42:123",
+                "last_error": str(root / "private-error.txt"),
+                "consecutive_errors": 1,
+            }
+
+            with patch("rta_brain.mcp_server.stop_continuity", return_value=private):
+                payload = server.call_tool(
+                    "brain_continuity_control", {"action": "stop"},
+                )["structuredContent"]
+
+        self.assertTrue(payload["has_error"])
+        rendered = json.dumps(payload)
+        for secret in (
+            str(database), str(root), "db_path", "pid", "token_hash",
+            "process_identity", "private-token", "private-error.txt",
+        ):
+            self.assertNotIn(secret, rendered)
+
+    def test_continuity_control_requires_explicit_cli_capability(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            database = Path(tmp) / "brain.sqlite"
+            listed = responses(run_mcp(
+                [{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}],
+                database,
+                "--allow-continuity-control",
+            ).stdout)[0]
+            names = {tool["name"] for tool in listed["result"]["tools"]}
+            self.assertIn("brain_continuity_control", names)
+
+            gateway = subprocess.run(
+                [
+                    sys.executable, str(MCP), "--brain-dir", str(Path(tmp) / "brains"),
+                    "--allow-continuity-control",
+                ],
+                text=True,
+                capture_output=True,
+                cwd=ROOT,
+                check=False,
+            )
+            self.assertNotEqual(gateway.returncode, 0)
+            self.assertIn("capability flags are only valid", gateway.stderr)
+
     def test_thread_root_accepts_a_trusted_parent_alias(self):
         if os.name == "nt":
             self.skipTest("parent alias coverage uses POSIX symlink support")
@@ -106,6 +214,44 @@ class RtaBrainMcpTests(unittest.TestCase):
             text = responses(result.stdout)[0]["result"]["content"][0]["text"]
             self.assertIn("beta canonical memory", text)
             self.assertNotIn("alpha canonical memory", text)
+
+    def test_brain_directory_gateway_is_read_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            brain_dir = Path(tmp)
+            conn = brain_db.connect(brain_dir / "alpha.sqlite")
+            try:
+                brain_db.init_project(conn, "alpha", str(brain_dir / "alpha"))
+            finally:
+                conn.close()
+
+            server = RtaBrainMcpServer(None, None, brain_dir=brain_dir)
+            exposed = {tool["name"] for tool in server.agent_tools}
+            mutation_tools = {
+                *mcp_server.MEMORY_WRITE_TOOLS,
+                *mcp_server.REPO_INGESTION_TOOLS,
+                *mcp_server.THREAD_INGESTION_TOOLS,
+                *mcp_server.TEMPORAL_WRITE_TOOLS,
+                *mcp_server.TEMPORAL_VALIDATOR_RUN_TOOLS,
+                *mcp_server.CAPTURE_WRITE_TOOLS,
+                *mcp_server.CAPTURE_DESTRUCTIVE_TOOLS,
+                *mcp_server.OWNER_ONLY_GOVERNANCE_TOOLS,
+                "brain_ingest_codex_session",
+                "brain_session_event",
+                "brain_work_item",
+                "brain_continuity_control",
+                "brain_reconcile",
+            }
+            self.assertFalse(exposed.intersection(mutation_tools))
+            with self.assertRaisesRegex(ValueError, "not enabled"):
+                server.call_tool(
+                    "brain_remember",
+                    {"project": "alpha", "text": "must not be written"},
+                )
+            with self.assertRaisesRegex(ValueError, "read-only gateway"):
+                server.call_tool(
+                    "brain_stale_check",
+                    {"project": "alpha", "rehash": True},
+                )
 
     def test_initialize_and_list_tools(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -523,9 +669,10 @@ class RtaBrainMcpTests(unittest.TestCase):
         nested = (b"[" * 80) + (b"]" * 80)
         with self.assertRaisesRegex(ValueError, "nesting"):
             mcp_server.parse_request_frame(nested)
-        with patch("rta_brain.mcp_server.json.loads", side_effect=RecursionError("too deep")):
-            with self.assertRaisesRegex(ValueError, "nesting"):
-                mcp_server.parse_request_frame(b'{"jsonrpc":"2.0"}')
+        with patch(
+            "rta_brain.mcp_server.json.loads", side_effect=RecursionError("too deep")
+        ), self.assertRaisesRegex(ValueError, "nesting"):
+            mcp_server.parse_request_frame(b'{"jsonrpc":"2.0"}')
 
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "brain.sqlite"
@@ -536,6 +683,7 @@ class RtaBrainMcpTests(unittest.TestCase):
             result = subprocess.run(
                 [sys.executable, str(MCP), "--db", str(db), "--project", "demo"],
                 input=body, text=True, capture_output=True, cwd=ROOT,
+                check=False,
             )
             payloads = responses(result.stdout)
             self.assertEqual(payloads[0]["error"]["code"], -32700)

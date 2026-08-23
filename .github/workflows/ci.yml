@@ -76,7 +76,10 @@ jobs:
       - run: python rta-brain.py publish-readiness --json
       - name: Install standalone binary builder
         if: matrix.python == '3.11'
-        run: python -m pip install ".[binary]"
+        run: python -m pip install ".[binary]" "pip-audit==2.10.1"
+      - name: Audit dependencies and generate CycloneDX SBOM
+        if: matrix.python == '3.11'
+        run: pip-audit . --format cyclonedx-json --output release-sbom.cdx.json --progress-spinner off --strict
       - name: Build standalone binary
         if: matrix.python == '3.11'
         timeout-minutes: 15
@@ -87,10 +90,10 @@ jobs:
         run: python scripts/smoke_binary.py
       - name: Stage versioned binary and checksum
         if: matrix.python == '3.11' && matrix.os != 'ubuntu-latest'
-        run: python scripts/package_release_artifacts.py
+        run: python scripts/package_release_artifacts.py --sbom release-sbom.cdx.json
       - name: Stage versioned binary, wheel, and checksums
         if: matrix.python == '3.11' && matrix.os == 'ubuntu-latest'
-        run: python scripts/package_release_artifacts.py --include-wheel
+        run: python scripts/package_release_artifacts.py --include-wheel --sbom release-sbom.cdx.json
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.11'
         with:

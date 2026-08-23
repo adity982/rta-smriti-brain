@@ -53,6 +53,88 @@ def main() -> int:
         mcp_probe = json.loads(
             run(executable, "--db", str(db_path), "--json", "mcp-doctor", "--project", "smoke").stdout
         )
+        adapter_home = root / "adapter-home"
+        adapter_home.mkdir()
+        capture_policy = json.loads(
+            run(
+                executable, "capture", "--db", str(db_path), "--json",
+                "--project", "smoke", "--root", str(project), "policy", "create",
+                "--id", "continuity", "--version", "1", "--profile", "continuity",
+            ).stdout
+        )
+        adapter_plan = json.loads(
+            run(
+                executable, "capture", "--db", str(db_path), "--json",
+                "--project", "smoke", "--root", str(project), "adapter", "plan",
+                "--adapter", "claude-code", "--scope", "project",
+                "--home", str(adapter_home),
+                "--policy-digest", capture_policy["policy_digest"],
+            ).stdout
+        )
+        adapter_install = json.loads(
+            run(
+                executable, "capture", "--db", str(db_path), "--json",
+                "--project", "smoke", "--root", str(project), "adapter", "install",
+                "--adapter", "claude-code", "--scope", "project",
+                "--home", str(adapter_home),
+                "--policy-digest", capture_policy["policy_digest"], "--confirm",
+                "--confirmation-token", adapter_plan["confirmation_token"],
+            ).stdout
+        )
+        capture_record = json.dumps({
+            "source_cursor": "1", "cursor_kind": "sequence",
+            "session_id": "binary-smoke-session",
+            "observed_at": "2026-08-23T00:00:01Z",
+            "occurred_at": "2026-08-23T00:00:00Z",
+            "vendor_event": "PostToolUse",
+            "payload": {
+                "hook_event_name": "PostToolUse", "tool_name": "Read",
+                "tool_status": "success", "duration_ms": 8,
+                "tool_response": "synthetic binary smoke response",
+            },
+        })
+        capture_emit = json.loads(
+            run(
+                executable, "capture", "--db", str(db_path), "--json",
+                "--project", "smoke", "--root", str(project), "emit",
+                "--source-id", adapter_install["source_id"], stdin=capture_record,
+            ).stdout
+        )
+        capture_service = json.loads(
+            run(
+                executable, "capture", "--db", str(db_path), "--json",
+                "--project", "smoke", "--root", str(project), "daemon", "start",
+                "--interval", "0.1", "--batch-size", "10",
+            ).stdout
+        )
+        try:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                capture_replay = json.loads(
+                    run(
+                        executable, "capture", "--db", str(db_path), "--json",
+                        "--project", "smoke", "--root", str(project), "replay",
+                        "--limit", "10",
+                    ).stdout
+                )
+                if capture_replay["events"]:
+                    break
+                time.sleep(0.1)
+            else:
+                raise RuntimeError("standalone capture daemon did not normalize the event")
+            capture_doctor = json.loads(
+                run(
+                    executable, "capture", "--db", str(db_path), "--json",
+                    "--project", "smoke", "--root", str(project), "doctor",
+                ).stdout
+            )
+        finally:
+            capture_stopped = json.loads(
+                run(
+                    executable, "capture", "--db", str(db_path), "--json",
+                    "--project", "smoke", "--root", str(project), "daemon", "stop",
+                ).stdout
+            )
         passphrase = root / "snapshot.passphrase"
         encrypted = root / "brain.rtae"
         restored = root / "restored.sqlite"
@@ -136,7 +218,7 @@ def main() -> int:
                 run(executable, "console", "stop", "--brain-dir", str(brains), "--json").stdout
             )
     if (
-        "0.8.0a1" not in version
+        "0.9.0a1" not in version
         or health.get("status") != "ok"
         or not benchmark.get("corpus", {}).get("synthetic")
         or set(benchmark.get("modes", {})) != {"no_memory", "lexical", "hash_hybrid", "optional_semantic"}
@@ -144,6 +226,12 @@ def main() -> int:
         or response.get("result") != {}
         or parser_metadata.get("parser") != "auto:tree-sitter"
         or not mcp_probe.get("ready")
+        or adapter_install.get("status") != "ok"
+        or capture_emit.get("status") != "stored"
+        or capture_service.get("state") != "running"
+        or len(capture_replay.get("events", [])) != 1
+        or not capture_doctor.get("journal", {}).get("chain_valid")
+        or capture_stopped.get("state") != "stopped"
         or generated_passphrase.get("entropy_bits") != 256
         or encrypted_result.get("encryption") != "AES-256-GCM"
         or not encrypted_verify.get("valid")
@@ -163,7 +251,8 @@ def main() -> int:
         raise RuntimeError("standalone binary smoke contract failed")
     print(
         "Standalone binary smoke passed: CLI, SQLite/FTS, MCP dispatch, public benchmark, "
-        "bundled Tree-sitter, encrypted and Ed25519 snapshots, background sync, and managed console lifecycle."
+        "bundled Tree-sitter, Universal Capture, encrypted and Ed25519 snapshots, "
+        "background sync, and managed console lifecycle."
     )
     return 0
 

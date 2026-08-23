@@ -22,6 +22,7 @@ from .agent_profiles import (
     builtin_agent_profile,
     validate_agent_profile,
 )
+from .capture import _read_capture_replay_snapshot
 from .ingest import chunk_text, read_text, sha256_text
 from .privacy import find_sensitive_text
 
@@ -33,6 +34,8 @@ MAX_PRIVACY_SCAN_CHARS = 1_000_000
 PRIVACY_SCAN_CHUNK_CHARS = 100_000
 MAX_ADAPTER_ROWS = 200_000
 MAX_ADAPTER_BYTES = 256 * 1024 * 1024
+MAX_CAPTURE_CONTEXT_EVENTS = 64
+MAX_CAPTURE_CONTEXT_BYTES = 128 * 1024
 SIGNAL_NAMES = (
     "lexical", "semantic", "graph", "temporal", "risk", "outcome", "continuation",
 )
@@ -1173,7 +1176,8 @@ def _continuity_candidates(
     if table is None:
         return [], []
     rows = _bounded_rows(conn.execute(
-        "SELECT * FROM session_events WHERE project_id = ? ORDER BY id",
+        "SELECT * FROM session_events "
+        "WHERE project_id = ? AND payload_json <> 'null' ORDER BY id",
         (project_id,),
     ), label="continuity candidates", budget=budget)
     candidates, warnings = [], []
@@ -1270,6 +1274,242 @@ def _continuity_candidates(
     return candidates, warnings
 
 
+def _capture_interruption_snapshot(events: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize interruption state without crossing a privacy partition."""
+
+    selected = list(events)
+    sessions: dict[tuple[str, str], dict[str, bool]] = {}
+    incomplete_spans: set[tuple[str, str, str]] = set()
+    gap_events = 0
+    for event in selected:
+        key = (str(event["source_id"]), str(event["external_session_id"]))
+        state = sessions.setdefault(key, {"interrupted": False, "active": False})
+        name = str(event["event_name"])
+        if name in {"session.started.v1", "session.resumed.v1"}:
+            state["active"] = True
+        elif name == "session.ended.v1":
+            state["active"] = False
+            state["interrupted"] = False
+        elif name == "turn.interrupted.v1":
+            state["interrupted"] = True
+        elif name == "turn.completed.v1":
+            state["interrupted"] = False
+        if name == "capture.gap.v1" or event["gap_state"] == "detected":
+            gap_events += 1
+        span = event.get("span_id")
+        if span and name.endswith(".started.v1"):
+            incomplete_spans.add((*key, str(span)))
+        elif span and name.endswith((".completed.v1", ".failed.v1")):
+            incomplete_spans.discard((*key, str(span)))
+    interrupted = [state for state in sessions.values() if state["interrupted"]]
+    latest = selected[-1] if selected else None
+    return {
+        "status": "interrupted"
+        if interrupted or incomplete_spans or gap_events
+        else "clear",
+        "interrupted_sessions": len(interrupted),
+        "incomplete_spans": len(incomplete_spans),
+        "gap_events": gap_events,
+        "latest_sequence": None if latest is None else latest["project_sequence"],
+        "latest_event_hash": None if latest is None else latest["event_hash"],
+    }
+
+
+def _capture_candidates(
+    conn, project: str, project_id: int, budget: _AggregateBudget,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], dict[str, Any]]:
+    """Adapt only the latest bounded activity after the accepted checkpoint."""
+
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN "
+            "('capture_events', 'capture_tombstones')"
+        )
+    }
+    empty_coverage = {
+        "accepted_checkpoint_id": None,
+        "accepted_checkpoint_version": None,
+        "fence_sequence": 0,
+        "total_uncheckpointed_events": 0,
+        "selected_events": 0,
+        "truncated": False,
+        "replay_digest": None,
+        "gap_events": 0,
+        "incomplete_spans": 0,
+        "interrupted_sessions": 0,
+    }
+    if tables != {"capture_events", "capture_tombstones"}:
+        return [], [], empty_coverage
+    checkpoint = conn.execute(
+        """
+        SELECT c.id, c.version, c.updated_at, f.fence_sequence
+        FROM checkpoints c
+        LEFT JOIN checkpoint_capture_fences f ON f.checkpoint_id = c.id
+        WHERE c.project_id = ? AND c.source IN ('operator', 'system')
+        ORDER BY version DESC, updated_at DESC, id DESC LIMIT 1
+        """,
+        (project_id,),
+    ).fetchone()
+    if checkpoint is not None:
+        budget.consume(checkpoint, label="capture checkpoint fence")
+    fence_sequence = 0
+    if checkpoint is not None:
+        if checkpoint["fence_sequence"] is not None:
+            fence_sequence = int(checkpoint["fence_sequence"])
+        else:
+            fence_row = conn.execute(
+                """
+                SELECT COALESCE(MAX(project_sequence), 0) AS sequence
+                FROM capture_events
+                WHERE project_id = ? AND recorded_at < ?
+                """,
+                (project_id, checkpoint["updated_at"]),
+            ).fetchone()
+            budget.consume(fence_row, label="legacy capture checkpoint sequence")
+            fence_sequence = int(fence_row["sequence"])
+    count_row = conn.execute(
+        """
+        SELECT COUNT(*) AS event_count, COALESCE(MAX(project_sequence), 0) AS last_sequence
+        FROM capture_events WHERE project_id = ? AND project_sequence > ?
+        """,
+        (project_id, fence_sequence),
+    ).fetchone()
+    budget.consume(count_row, label="capture candidate coverage")
+    total_events = int(count_row["event_count"])
+    last_sequence = int(count_row["last_sequence"])
+    if total_events == 0:
+        return [], [], {
+            **empty_coverage,
+            "accepted_checkpoint_id": None if checkpoint is None else int(checkpoint["id"]),
+            "accepted_checkpoint_version": (
+                None if checkpoint is None else int(checkpoint["version"])
+            ),
+            "fence_sequence": fence_sequence,
+        }
+    selected_after = max(fence_sequence, last_sequence - MAX_CAPTURE_CONTEXT_EVENTS)
+    # Candidate adaptation already runs inside the compiler's read snapshot.
+    # Reuse that transaction so event content and tombstones cannot diverge.
+    replay = _read_capture_replay_snapshot(
+        conn,
+        project=project,
+        mode="chronological",
+        after_sequence=selected_after,
+        limit=MAX_CAPTURE_CONTEXT_EVENTS,
+        privacy_ceiling="restricted",
+        max_bytes=MAX_CAPTURE_CONTEXT_BYTES,
+    )
+    budget.consume(
+        [_canonical_json(replay)], label="capture replay candidate", count_row=False,
+    )
+    grouped: dict[str, list[dict[str, Any]]] = {
+        privacy: [] for privacy in PRIVACY_LEVELS
+    }
+    for event in replay["events"]:
+        grouped[str(event["privacy_class"])].append(event)
+    candidates = []
+    warnings = []
+    for privacy_class in PRIVACY_LEVELS:
+        events = grouped[privacy_class]
+        if not events:
+            continue
+        interruption_snapshot = _capture_interruption_snapshot(events)
+        observations = []
+        for event in reversed(events):
+            observations.append({
+                "sequence": event["project_sequence"],
+                "event": event["event_name"],
+                "occurred_at": event["occurred_at"],
+                "attributes": event["attributes"],
+                "content_state": event["content_state"],
+                "gap_state": event["gap_state"],
+                "repository_ref": event["repository_ref"],
+                "repository_commit": event["repository_commit"],
+            })
+        content = _canonical_json({
+            "kind": "uncheckpointed_capture_activity",
+            "order": "reverse-chronological",
+            "accepted_checkpoint": None if checkpoint is None else {
+                "id": int(checkpoint["id"]),
+                "version": int(checkpoint["version"]),
+            },
+            "events": observations,
+            "interruption_snapshot": interruption_snapshot,
+        })
+        source_version = _sha256(_canonical_json({
+            "fence_sequence": fence_sequence,
+            "privacy_class": privacy_class,
+            "event_hashes": [event["event_hash"] for event in events],
+        }))
+        source_id = _logical_source_id(
+            "capture", "uncheckpointed", privacy_class, source_version,
+        )
+        try:
+            candidates.append(normalize_candidate({
+                "project": project,
+                "source_type": "capture",
+                "source_id": source_id,
+                "source_version": source_version,
+                "source_location": f"capture://continuation/{source_version}",
+                "content": content,
+                "valid_from": events[0]["recorded_at"],
+                "authority_class": "capture_observation",
+                "epistemic_state": "observed",
+                "verification_status": "unverified",
+                "privacy_class": _effective_privacy(
+                    {"privacy_class": privacy_class}, content,
+                ),
+                "signals": {
+                    "continuation": 1.0,
+                    "temporal": 1.0,
+                    "risk": 1.0 if (
+                        interruption_snapshot["gap_events"]
+                        or interruption_snapshot["incomplete_spans"]
+                        or interruption_snapshot["interrupted_sessions"]
+                    ) else 0.4,
+                },
+                "dependency_group": "capture-continuation",
+                "provenance_chain": [{
+                    "replay_digest": replay["replay_digest"],
+                    "first_sequence": events[0]["project_sequence"],
+                    "last_sequence": events[-1]["project_sequence"],
+                    "event_count": len(events),
+                    "journal_metadata_verified": True,
+                    "observation_authority": "unverified",
+                }],
+                "validator_state": {
+                    "status": "observed",
+                    "executes_actions": False,
+                    "content_deleted_events": sum(
+                        event["content_state"] == "logically-deleted"
+                        for event in events
+                    ),
+                },
+            }))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            candidates.append(_invalid_candidate(
+                project=project, source_type="capture", source_id=source_id,
+                source_version=source_version, source_location=None,
+                reason="invalid_capture_candidate",
+            ))
+            warnings.append(_warning(source_id, "invalid_capture_candidate"))
+    coverage = {
+        "accepted_checkpoint_id": None if checkpoint is None else int(checkpoint["id"]),
+        "accepted_checkpoint_version": (
+            None if checkpoint is None else int(checkpoint["version"])
+        ),
+        "fence_sequence": fence_sequence,
+        "total_uncheckpointed_events": total_events,
+        "selected_events": len(replay["events"]),
+        "truncated": total_events > len(replay["events"]) or not replay["complete"],
+        "replay_digest": replay["replay_digest"],
+        "gap_events": int(replay["coverage"]["gap_events"]),
+        "incomplete_spans": int(replay["coverage"]["incomplete_spans"]),
+        "interrupted_sessions": int(replay["coverage"]["interrupted_sessions"]),
+    }
+    return candidates, warnings, coverage
+
+
 def adapt_context_candidates(
     conn,
     *,
@@ -1322,6 +1562,11 @@ def adapt_context_candidates(
     )
     candidates.extend(continuity)
     warnings.extend(continuity_warnings)
+    capture, capture_warnings, capture_coverage = _capture_candidates(
+        conn, selected_project, project_id, budget,
+    )
+    candidates.extend(capture)
+    warnings.extend(capture_warnings)
     candidates.sort(key=lambda item: (item["source_type"], item["source_id"], item["candidate_id"]))
     warnings.sort(key=lambda item: (item["source_ref"], item["reason"]))
     budget.consume(
@@ -1334,6 +1579,7 @@ def adapt_context_candidates(
         "project": selected_project,
         "candidates": candidates,
         "warnings": warnings,
+        "capture_coverage": capture_coverage,
     }
 
 

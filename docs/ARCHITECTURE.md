@@ -116,7 +116,7 @@ On POSIX systems, brain databases, WAL/SHM sidecars, daemon state, and logs are 
 
 ## Multi-Project MCP Gateway
 
-One stdio MCP process can receive a brain directory instead of one database. Each tool call must name a project. The gateway scans only unlinked SQLite files in that directory and opens the call against exactly one matching project database. Missing and duplicate project names fail closed, preventing accidental cross-project recall while avoiding six copies of the same MCP tool set.
+One stdio MCP process can receive a brain directory instead of one database. Each tool call must name a project. The gateway scans only unlinked SQLite files in that directory and opens the call against exactly one matching project database. Missing and duplicate project names fail closed, preventing accidental cross-project recall while avoiding six copies of the same MCP tool set. This gateway is strictly read-only: mutation capabilities are available only from an explicitly configured single-project MCP binding, and gateway freshness checks cannot refresh the hash cache.
 
 ## Distribution
 

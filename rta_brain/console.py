@@ -15,6 +15,25 @@ from pathlib import Path
 from socketserver import TCPServer
 from urllib.parse import parse_qs, urlparse
 
+from .capture import (
+    bind_session,
+    close_session_binding,
+    control_capture_retention,
+    delete_capture_content,
+    export_capture_events,
+    list_capture_policies,
+    list_capture_sources,
+    register_policy,
+    retire_capture_policy,
+    set_capture_source_state,
+)
+from .capture_control import (
+    capture_diagnostics,
+    capture_replay,
+    capture_status_report,
+)
+from .capture_daemon import start_capture, stop_capture
+from .capture_types import CapturePolicy
 from .context import build_context_pack, build_continuation_prompt
 from .context_host import (
     audit_context_for_operator,
@@ -131,6 +150,32 @@ class ConsoleConfig:
 MAX_REQUEST_BYTES = 1_048_576
 MAX_TREE_ITEMS = 500
 MAX_FILE_PREVIEW_CHARS = 20_000
+
+
+def _capture_policy_from_payload(payload: dict) -> CapturePolicy:
+    profile = str(payload.get("profile", "continuity")).strip().lower()
+    if profile == "metadata-only":
+        base = CapturePolicy.metadata_only()
+    elif profile == "continuity":
+        base = CapturePolicy.continuity()
+    elif profile == "forensic":
+        base = CapturePolicy(profile="forensic", retain_payloads=True)
+    else:
+        raise ValueError("capture policy profile must be metadata-only, continuity, or forensic")
+    retain_payloads = payload.get("retain_payloads", base.retain_payloads)
+    if type(retain_payloads) is not bool:
+        raise ValueError("retain_payloads must be a boolean")
+    return CapturePolicy(
+        profile=base.profile,
+        enabled_event_names=base.enabled_event_names,
+        field_allowlist=base.field_allowlist,
+        privacy_ceiling=str(payload.get("privacy_ceiling", base.privacy_ceiling)),
+        retain_payloads=retain_payloads,
+        retention_seconds=int(payload.get("retention_seconds", base.retention_seconds)),
+        max_event_bytes=int(payload.get("max_event_bytes", base.max_event_bytes)),
+        max_field_chars=int(payload.get("max_field_chars", base.max_field_chars)),
+        max_collection_items=int(payload.get("max_collection_items", base.max_collection_items)),
+    )
 
 
 def _trusted_git_candidates() -> list[Path]:
@@ -971,6 +1016,54 @@ def make_handler(config: ConsoleConfig):
                     finally:
                         conn.close()
                     return
+                if parsed.path == "/api/capture":
+                    q = _query(self)
+                    database = resolve_brain_db(config, q["db_path"])
+                    conn = _open_db(database)
+                    try:
+                        project = q["project"]
+                        mode = str(q.get("mode", "overview")).strip().lower()
+                        root = _project_root(conn, project)
+                        if mode == "overview":
+                            result = capture_status_report(
+                                conn, database=database, project=project,
+                            )
+                        elif mode == "sources":
+                            result = list_capture_sources(conn, project=project)
+                        elif mode == "policies":
+                            result = list_capture_policies(
+                                conn,
+                                project=project,
+                                include_retired=q.get("include_retired", "").lower()
+                                in {"1", "true", "yes"},
+                            )
+                        elif mode in {"timeline", "replay"}:
+                            replay_mode = (
+                                "chronological" if mode == "timeline"
+                                else str(q.get("replay_mode", "chronological"))
+                            )
+                            result = capture_replay(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                mode=replay_mode,
+                                after_sequence=int(q.get("after_sequence", "0")),
+                                limit=int(q.get("limit", "100")),
+                                privacy_ceiling=q.get("privacy_ceiling", "internal"),
+                            )
+                        elif mode == "diagnostics":
+                            result = capture_diagnostics(
+                                conn,
+                                database=database,
+                                project=project,
+                                active_root=root,
+                            )
+                        else:
+                            raise ValueError("capture mode must be overview, sources, policies, timeline, replay, or diagnostics")
+                        self._json(result)
+                    finally:
+                        conn.close()
+                    return
                 if parsed.path == "/api/publish-readiness":
                     self._json(publish_readiness(config.tool_root))
                     return
@@ -983,7 +1076,7 @@ def make_handler(config: ConsoleConfig):
                     self.send_error(404)
                     return
                 self._file(asset)
-            except (KeyError, ValueError, json.JSONDecodeError) as exc:
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 self._json({"status": "error", "error": {"type": exc.__class__.__name__, "message": str(exc)}}, status=400)
             except Exception as exc:
                 self._json({"status": "error", "error": {"type": exc.__class__.__name__, "message": "request could not be completed"}}, status=500)
@@ -1370,6 +1463,138 @@ def make_handler(config: ConsoleConfig):
                         )
                     )
                     return
+                if self.path == "/api/capture":
+                    database = resolve_brain_db(config, payload["db_path"])
+                    project = str(payload["project"])
+                    action = str(payload.get("action", "status")).strip().lower()
+                    if action == "daemon-start":
+                        conn = _open_db(database)
+                        try:
+                            _project_root(conn, project)
+                        finally:
+                            conn.close()
+                        self._json(start_capture(
+                            database,
+                            interval_seconds=float(payload.get("interval", 1.0)),
+                            batch_size=int(payload.get("batch_size", 100)),
+                        ))
+                        return
+                    if action == "daemon-stop":
+                        conn = _open_db(database)
+                        try:
+                            _project_root(conn, project)
+                        finally:
+                            conn.close()
+                        self._json(stop_capture(
+                            database, timeout=float(payload.get("timeout", 10.0)),
+                        ))
+                        return
+                    conn = _open_db(database)
+                    try:
+                        root = _project_root(conn, project)
+                        if action == "policy-preview":
+                            policy = _capture_policy_from_payload(payload)
+                            result = {
+                                "status": "ok",
+                                "policy": policy.as_dict(),
+                                "policy_digest": policy.digest,
+                                "writes_state": False,
+                            }
+                        elif action == "policy-register":
+                            policy = _capture_policy_from_payload(payload)
+                            result = register_policy(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                policy_id=payload.get("policy_id", policy.profile),
+                                policy_version=int(payload.get("policy_version", 1)),
+                                policy=policy,
+                            )
+                        elif action == "policy-retire":
+                            result = retire_capture_policy(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                policy_digest=payload["policy_digest"],
+                            )
+                        elif action == "source-state":
+                            result = set_capture_source_state(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                source_id=payload["source_id"],
+                                state=payload["state"],
+                            )
+                        elif action == "bind-session":
+                            result = bind_session(
+                                conn,
+                                database=database,
+                                project=project,
+                                active_root=root,
+                                source_id=payload["source_id"],
+                                external_session_id=payload["external_session_id"],
+                                cursor_kind=payload.get("cursor_kind", "sequence"),
+                                start_cursor=str(payload.get("start_cursor", "0")),
+                                operator_id="dashboard-operator",
+                            )
+                        elif action == "close-session":
+                            result = close_session_binding(
+                                conn,
+                                database=database,
+                                project=project,
+                                active_root=root,
+                                binding_id=payload["binding_id"],
+                                operator_id="dashboard-operator",
+                            )
+                        elif action in {"retention-preview", "retention-confirm"}:
+                            result = control_capture_retention(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                policy_digest=payload["policy_digest"],
+                                run_id=payload["run_id"],
+                                actor_id="dashboard-operator",
+                                batch_size=int(payload.get("batch_size", 100)),
+                                confirm=action == "retention-confirm",
+                                confirmation_token=payload.get("confirmation_token"),
+                            )
+                        elif action in {"redaction-preview", "export"}:
+                            result = export_capture_events(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                after_sequence=int(payload.get("after_sequence", 0)),
+                                limit=int(payload.get("limit", 100)),
+                                privacy_ceiling=payload.get("privacy_ceiling", "internal"),
+                                max_bytes=int(payload.get("max_bytes", 2_000_000)),
+                            )
+                            if action == "redaction-preview":
+                                result = {**result, "operation": "redaction-preview", "writes_state": False}
+                        elif action in {"deletion-preview", "deletion-confirm"}:
+                            result = delete_capture_content(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                scope=payload["scope"],
+                                scope_token=payload["scope_token"],
+                                reason_class=payload.get("reason_class", "operator-request"),
+                                actor_id="dashboard-operator",
+                                policy_digest=payload["policy_digest"],
+                                confirm=action == "deletion-confirm",
+                                confirmation_token=payload.get("confirmation_token"),
+                                secure_compact=payload.get("secure_compact", False),
+                            )
+                        else:
+                            raise ValueError(
+                                "capture action must be policy-preview, policy-register, policy-retire, "
+                                "source-state, bind-session, close-session, retention-preview, "
+                                "retention-confirm, redaction-preview, "
+                                "deletion-preview, deletion-confirm, export, daemon-start, or daemon-stop"
+                            )
+                        self._json(result)
+                    finally:
+                        conn.close()
+                    return
                 if self.path == "/api/preflight":
                     conn = _open_db(resolve_brain_db(config, payload["db_path"]))
                     try:
@@ -1581,7 +1806,7 @@ def make_handler(config: ConsoleConfig):
                     )
                     return
                 self._json({"status": "error", "error": {"type": "NotFound", "message": self.path}}, status=404)
-            except (KeyError, ValueError, json.JSONDecodeError) as exc:
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 self._json({"status": "error", "error": {"type": exc.__class__.__name__, "message": str(exc)}}, status=400)
             except Exception as exc:
                 self._json({"status": "error", "error": {"type": exc.__class__.__name__, "message": "request could not be completed"}}, status=500)

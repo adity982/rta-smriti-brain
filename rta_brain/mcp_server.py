@@ -14,6 +14,22 @@ from typing import Any
 
 from . import __version__
 from .binding_guard import McpBindingLease
+from .capture import (
+    bind_session as bind_capture_session,
+)
+from .capture import (
+    close_session_binding,
+    control_capture_retention,
+    delete_capture_content,
+    export_capture_events,
+    retire_capture_policy,
+    set_capture_source_state,
+)
+from .capture import (
+    register_policy as register_capture_policy,
+)
+from .capture_control import capture_diagnostics, capture_replay, capture_status_report
+from .capture_types import CapturePolicy
 from .context import build_context_pack, build_continuation_prompt
 from .context_host import compile_context_for_agent, explain_context_for_agent
 from .continuity import (
@@ -26,6 +42,7 @@ from .continuity import (
 )
 from .continuity_daemon import (
     continuity_status,
+    public_continuity_status,
     start_continuity,
     stop_continuity,
     validate_codex_session_binding,
@@ -251,11 +268,11 @@ TOOLS = [
         "Append an immutable, provenance-bearing operational event.",
         {
             "project": {"type": "string"},
-            "session_id": {"type": "string"},
-            "cursor": {"type": "string"},
-            "event_type": {"type": "string"},
+            "session_id": {"type": "string", "maxLength": 512},
+            "cursor": {"type": "string", "maxLength": 1024},
+            "event_type": {"type": "string", "maxLength": 128},
             "payload": {"type": "object"},
-            "source": {"type": "string", "default": "agent"},
+            "source": {"type": "string", "maxLength": 128, "default": "agent"},
             "verification_status": {"type": "string", "enum": ["unverified", "verified", "failed", "stale"]},
         },
         ["session_id", "cursor", "event_type", "payload"],
@@ -263,7 +280,7 @@ TOOLS = [
     tool_schema(
         "brain_session_events",
         "Read append-only operational events for a project or session.",
-        {"project": {"type": "string"}, "session_id": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 500}},
+        {"project": {"type": "string"}, "session_id": {"type": "string", "maxLength": 512}, "limit": {"type": "integer", "minimum": 1, "maximum": 500}},
     ),
     tool_schema(
         "brain_ingest_codex_session",
@@ -568,6 +585,122 @@ TOOLS = [
         ["validator_id", "idempotency_key", "expected_version"],
     ),
     tool_schema(
+        "brain_capture_status",
+        "Read bounded passive-capture daemon, source, policy, and queue status.",
+        {"project": {"type": "string"}},
+    ),
+    tool_schema(
+        "brain_capture_events",
+        "Read one redacted, payload-free page of capture observations.",
+        {
+            "project": {"type": "string"},
+            "after_sequence": {"type": "integer", "minimum": 0, "default": 0},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+            "privacy_ceiling": {
+                "type": "string", "enum": ["public", "internal"],
+                "default": "internal",
+            },
+        },
+    ),
+    tool_schema(
+        "brain_capture_replay",
+        "Reconstruct a bounded chronological or causal view without executing actions.",
+        {
+            "project": {"type": "string"},
+            "mode": {"type": "string", "enum": ["chronological", "causal"], "default": "chronological"},
+            "after_sequence": {"type": "integer", "minimum": 0, "default": 0},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+            "privacy_ceiling": {
+                "type": "string", "enum": ["public", "internal"],
+                "default": "internal",
+            },
+        },
+    ),
+    tool_schema(
+        "brain_capture_diagnostics",
+        "Verify the capture journal and return content-free lifecycle diagnostics.",
+        {"project": {"type": "string"}},
+    ),
+    tool_schema(
+        "brain_capture_policy_create",
+        "Register one immutable capture policy under an explicit capture-write grant.",
+        {
+            "project": {"type": "string"},
+            "policy_id": {"type": "string"},
+            "policy_version": {"type": "integer", "minimum": 1},
+            "profile": {"type": "string", "enum": ["metadata-only", "continuity", "forensic"]},
+        },
+        ["policy_id", "policy_version", "profile"],
+    ),
+    tool_schema(
+        "brain_capture_policy_retire",
+        "Retire one unused immutable capture policy under an explicit capture-write grant.",
+        {"project": {"type": "string"}, "policy_digest": {"type": "string"}},
+        ["policy_digest"],
+    ),
+    tool_schema(
+        "brain_capture_bind_session",
+        "Bind only future ordered events from one external session to this canonical project.",
+        {
+            "project": {"type": "string"}, "source_id": {"type": "string"},
+            "external_session_id": {"type": "string"},
+            "cursor_kind": {"type": "string", "enum": ["byte-offset", "sequence"]},
+            "start_cursor": {"type": "string"},
+        },
+        ["source_id", "external_session_id", "cursor_kind", "start_cursor"],
+    ),
+    tool_schema(
+        "brain_capture_close_binding",
+        "Close one explicit capture session binding receipt.",
+        {"project": {"type": "string"}, "binding_id": {"type": "string"}},
+        ["binding_id"],
+    ),
+    tool_schema(
+        "brain_capture_source_state",
+        "Pause or resume one registered capture source.",
+        {
+            "project": {"type": "string"}, "source_id": {"type": "string"},
+            "state": {"type": "string", "enum": ["active", "paused"]},
+        },
+        ["source_id", "state"],
+    ),
+    tool_schema(
+        "brain_capture_retain",
+        "Preview or confirm one bounded, resumable payload-retention batch.",
+        {
+            "project": {"type": "string"}, "policy_digest": {"type": "string"},
+            "run_id": {"type": "string"},
+            "batch_size": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100},
+            "confirm": {"type": "boolean", "default": False},
+            "confirmation_token": {"type": "string"},
+        },
+        ["policy_digest", "run_id"],
+    ),
+    tool_schema(
+        "brain_capture_redact",
+        "Preview or confirm logical redaction of capture content while preserving integrity metadata.",
+        {
+            "project": {"type": "string"},
+            "scope": {"type": "string", "enum": ["event-content", "session-content", "source-content", "project-content"]},
+            "scope_token": {"type": "string"}, "reason_class": {"type": "string"},
+            "policy_digest": {"type": "string"}, "confirm": {"type": "boolean", "default": False},
+            "confirmation_token": {"type": "string"},
+        },
+        ["scope", "scope_token", "reason_class", "policy_digest"],
+    ),
+    tool_schema(
+        "brain_capture_delete",
+        "Preview or confirm logical capture-content deletion; journal integrity metadata remains.",
+        {
+            "project": {"type": "string"},
+            "scope": {"type": "string", "enum": ["event-content", "session-content", "source-content", "project-content"]},
+            "scope_token": {"type": "string"}, "reason_class": {"type": "string"},
+            "policy_digest": {"type": "string"}, "confirm": {"type": "boolean", "default": False},
+            "confirmation_token": {"type": "string"},
+        },
+        ["scope", "scope_token", "reason_class", "policy_digest"],
+    ),
+    tool_schema(
         "brain_doctor",
         "Return Rta-Smriti brain health and count information.",
         {"project": {"type": "string", "description": "Also evaluate task continuation readiness."}},
@@ -576,6 +709,7 @@ TOOLS = [
 
 OWNER_ONLY_GOVERNANCE_TOOLS = {"brain_policy_add", "brain_policy_retire"}
 MEMORY_WRITE_TOOLS = {"brain_remember", "brain_remember_batch", "brain_checkpoint", "brain_reflect"}
+CONTINUITY_CONTROL_TOOLS = {"brain_continuity_control"}
 REPO_INGESTION_TOOLS = {"brain_ingest_repo"}
 THREAD_INGESTION_TOOLS = {"brain_ingest_thread"}
 TEMPORAL_READ_TOOLS = {
@@ -591,6 +725,18 @@ TEMPORAL_WRITE_TOOLS = {
     "brain_truth_validator_define",
 }
 TEMPORAL_VALIDATOR_RUN_TOOLS = {"brain_truth_validator_run"}
+CAPTURE_READ_TOOLS = {
+    "brain_capture_status", "brain_capture_events",
+    "brain_capture_replay", "brain_capture_diagnostics",
+}
+CAPTURE_WRITE_TOOLS = {
+    "brain_capture_policy_create", "brain_capture_policy_retire",
+    "brain_capture_bind_session", "brain_capture_close_binding",
+    "brain_capture_source_state",
+}
+CAPTURE_DESTRUCTIVE_TOOLS = {
+    "brain_capture_retain", "brain_capture_redact", "brain_capture_delete"
+}
 CONTEXT_DELEGATED_TOOLS = {"brain_context_compile", "brain_context_explain"}
 PROJECT_BOUND_READ_TOOLS = {
     "brain_search",
@@ -606,6 +752,7 @@ PROJECT_BOUND_READ_TOOLS = {
     "brain_policy_list",
     "brain_preflight",
     "brain_governance_receipts",
+    *CAPTURE_READ_TOOLS,
     *TEMPORAL_READ_TOOLS,
 }
 TOOL_BY_NAME = {tool["name"]: tool for tool in TOOLS}
@@ -715,7 +862,7 @@ def _agent_memory_provenance(value: Any) -> dict[str, Any]:
 
 def _agent_memory_item(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ValueError("each memory batch item must be an object")
+        raise TypeError("each memory batch item must be an object")
     item = dict(value)
     item["pramana"] = "anumana"
     item["confidence"] = min(0.75, float(item.get("confidence", 0.75)))
@@ -767,6 +914,15 @@ def json_text(payload: Any) -> str:
     return json.dumps(payload, indent=2, sort_keys=True)
 
 
+def _capture_read_privacy_ceiling(args: dict[str, Any]) -> str:
+    ceiling = str(args.get("privacy_ceiling", "internal")).strip().lower()
+    if ceiling not in {"public", "internal"}:
+        raise PermissionError(
+            "MCP capture reads are limited to public or internal observations"
+        )
+    return ceiling
+
+
 class RtaBrainMcpServer:
     def __init__(
         self,
@@ -776,10 +932,13 @@ class RtaBrainMcpServer:
         brain_dir: Path | None = None,
         expected_root: Path | None = None,
         allow_memory_writes: bool = False,
+        allow_continuity_control: bool = False,
         allow_repo_ingestion: bool = False,
         allow_thread_ingestion: bool = False,
         allow_truth_writes: bool = False,
         allow_validator_run: bool = False,
+        allow_capture_writes: bool = False,
+        allow_capture_destructive: bool = False,
         allowed_thread_roots: tuple[Path, ...] = (),
         context_contract_delegations: dict[int, str] | None = None,
     ):
@@ -832,7 +991,7 @@ class RtaBrainMcpServer:
         if allow_thread_ingestion and not self.allowed_thread_roots:
             raise ValueError("thread ingestion requires at least one configured thread root")
         if self.brain_dir is not None:
-            enabled = set(TOOL_BY_NAME) - TEMPORAL_WRITE_TOOLS - TEMPORAL_VALIDATOR_RUN_TOOLS
+            enabled = set(PROJECT_BOUND_READ_TOOLS) - CONTEXT_DELEGATED_TOOLS
         else:
             enabled = set(PROJECT_BOUND_READ_TOOLS)
             enabled.update({"brain_session_events", "brain_reconcile", "brain_operational_readiness", "brain_continuity_status"})
@@ -840,7 +999,11 @@ class RtaBrainMcpServer:
                 enabled.difference_update(CONTEXT_DELEGATED_TOOLS)
         if allow_memory_writes:
             enabled.update(MEMORY_WRITE_TOOLS)
-            enabled.update({"brain_session_event", "brain_work_item", "brain_continuity_control"})
+            enabled.update({"brain_session_event", "brain_work_item"})
+        if allow_continuity_control:
+            if self.db_path is None:
+                raise ValueError("continuity control requires a single-project MCP binding")
+            enabled.update(CONTINUITY_CONTROL_TOOLS)
         if allow_repo_ingestion:
             enabled.update(REPO_INGESTION_TOOLS)
         if allow_thread_ingestion:
@@ -852,6 +1015,14 @@ class RtaBrainMcpServer:
             if not allow_truth_writes:
                 raise ValueError("validator execution requires truth writes to be enabled")
             enabled.update(TEMPORAL_VALIDATOR_RUN_TOOLS)
+        if allow_capture_writes:
+            if self.db_path is None:
+                raise ValueError("capture writes require a single-project MCP binding")
+            enabled.update(CAPTURE_WRITE_TOOLS)
+        if allow_capture_destructive:
+            if self.db_path is None:
+                raise ValueError("destructive capture controls require a single-project MCP binding")
+            enabled.update(CAPTURE_DESTRUCTIVE_TOOLS)
         self.enabled_tools = frozenset(enabled)
         self.agent_tools = [
             (copy.deepcopy(TOOL_BY_NAME[name]) if self.brain_dir is not None else _agent_tool_schema(TOOL_BY_NAME[name]))
@@ -1114,6 +1285,10 @@ class RtaBrainMcpServer:
             payload = workspace_health(conn, str(args["workspace"]))
             return text_result(json_text(payload), payload)
         if name == "brain_stale_check":
+            if self.brain_dir is not None and bool(args.get("rehash", False)):
+                raise ValueError(
+                    "hash-cache mutation is disabled in the read-only gateway"
+                )
             payload = stale_check(
                 conn,
                 project=project,
@@ -1182,13 +1357,14 @@ class RtaBrainMcpServer:
             payload = reconcile_work_items(conn, project)
             return text_result(json_text(payload), payload)
         if name == "brain_operational_readiness":
+            lifecycle = public_continuity_status(continuity_status(db_path, project))
             payload = operational_readiness(
-                conn, project, lifecycle=continuity_status(db_path, project),
+                conn, project, lifecycle=lifecycle,
                 active_root=self.expected_root,
             )
             return text_result(json_text(payload), payload)
         if name == "brain_continuity_status":
-            payload = continuity_status(db_path, project)
+            payload = public_continuity_status(continuity_status(db_path, project))
             return text_result(json_text(payload), payload)
         if name == "brain_continuity_control":
             action = str(args["action"])
@@ -1208,6 +1384,7 @@ class RtaBrainMcpServer:
                 )
             else:
                 raise ValueError("continuity action must be start or stop")
+            payload = public_continuity_status(payload)
             return text_result(json_text(payload), payload)
         if name == "brain_reflect":
             payload = reflect(conn, project=project)
@@ -1255,6 +1432,104 @@ class RtaBrainMcpServer:
         if name == "brain_governance_receipts":
             payload = list_receipts(conn, project=project, limit=int(args.get("limit", 100)))
             return text_result(json_text(payload), payload)
+        if name in CAPTURE_READ_TOOLS | CAPTURE_WRITE_TOOLS | CAPTURE_DESTRUCTIVE_TOOLS:
+            active_root = self._bound_repository_root(conn, {}, project)
+        if name == "brain_capture_status":
+            payload = capture_status_report(
+                conn, database=db_path, project=project,
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_events":
+            payload = export_capture_events(
+                conn, project=project, active_root=active_root,
+                after_sequence=int(args.get("after_sequence", 0)),
+                limit=int(args.get("limit", 100)),
+                privacy_ceiling=_capture_read_privacy_ceiling(args),
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_replay":
+            payload = capture_replay(
+                conn, project=project, active_root=active_root,
+                mode=str(args.get("mode", "chronological")),
+                after_sequence=int(args.get("after_sequence", 0)),
+                limit=int(args.get("limit", 100)),
+                privacy_ceiling=_capture_read_privacy_ceiling(args),
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_diagnostics":
+            payload = capture_diagnostics(
+                conn, database=db_path, project=project, active_root=active_root,
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_policy_create":
+            profile = str(args["profile"])
+            policy = (
+                CapturePolicy.metadata_only()
+                if profile == "metadata-only"
+                else CapturePolicy.continuity()
+                if profile == "continuity"
+                else CapturePolicy(profile="forensic")
+            )
+            payload = register_capture_policy(
+                conn, project=project, active_root=active_root,
+                policy_id=str(args["policy_id"]),
+                policy_version=int(args["policy_version"]), policy=policy,
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_policy_retire":
+            payload = retire_capture_policy(
+                conn, project=project, active_root=active_root,
+                policy_digest=str(args["policy_digest"]),
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_bind_session":
+            payload = bind_capture_session(
+                conn, database=db_path, project=project, active_root=active_root,
+                source_id=str(args["source_id"]),
+                external_session_id=str(args["external_session_id"]),
+                cursor_kind=str(args["cursor_kind"]),
+                start_cursor=str(args["start_cursor"]),
+                operator_id="mcp-delegated-operator",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_close_binding":
+            payload = close_session_binding(
+                conn, database=db_path, project=project, active_root=active_root,
+                binding_id=str(args["binding_id"]),
+                operator_id="mcp-delegated-operator",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_source_state":
+            selected_state = str(args["state"]).lower()
+            if selected_state not in {"active", "paused"}:
+                raise ValueError("MCP capture sources can only be active or paused")
+            payload = set_capture_source_state(
+                conn, project=project, active_root=active_root,
+                source_id=str(args["source_id"]), state=selected_state,
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_retain":
+            payload = control_capture_retention(
+                conn, project=project, active_root=active_root,
+                policy_digest=str(args["policy_digest"]), run_id=str(args["run_id"]),
+                batch_size=int(args.get("batch_size", 100)),
+                actor_id="mcp-delegated-operator",
+                confirm=bool(args.get("confirm", False)),
+                confirmation_token=args.get("confirmation_token"),
+            )
+            return text_result(json_text(payload), payload)
+        if name in {"brain_capture_redact", "brain_capture_delete"}:
+            payload = delete_capture_content(
+                conn, project=project, active_root=active_root,
+                scope=str(args["scope"]), scope_token=str(args["scope_token"]),
+                reason_class=str(args["reason_class"]),
+                actor_id="mcp-delegated-operator",
+                policy_digest=str(args["policy_digest"]),
+                confirm=bool(args.get("confirm", False)),
+                confirmation_token=args.get("confirmation_token"),
+                secure_compact=False,
+            )
+            return text_result(json_text(payload), payload)
         if name == "brain_truth_current":
             payload = redact_truth_for_operator(truth_current(
                 conn,
@@ -1298,9 +1573,11 @@ class RtaBrainMcpServer:
                 valid_at=args.get("valid_at"),
             ))
             return text_result(json_text(payload), payload)
-        if name in TEMPORAL_WRITE_TOOLS | TEMPORAL_VALIDATOR_RUN_TOOLS:
-            if self.expected_root is None:
-                raise ValueError("temporal writes require a single-project canonical root binding")
+        if (
+            name in TEMPORAL_WRITE_TOOLS | TEMPORAL_VALIDATOR_RUN_TOOLS
+            and self.expected_root is None
+        ):
+            raise ValueError("temporal writes require a single-project canonical root binding")
         if name == "brain_truth_assert":
             selected_state = str(args.get("epistemic_state", "observed")).strip().lower()
             if selected_state not in {"hypothesis", "observed"}:
@@ -1457,8 +1734,9 @@ class RtaBrainMcpServer:
         if name == "brain_doctor":
             payload = doctor(conn)
             if project:
+                lifecycle = public_continuity_status(continuity_status(db_path, project))
                 payload["operational"] = operational_readiness(
-                    conn, project, lifecycle=continuity_status(db_path, project),
+                    conn, project, lifecycle=lifecycle,
                     active_root=self.expected_root,
                 )
             return text_result(json_text(payload), payload)
@@ -1509,7 +1787,7 @@ class RtaBrainMcpServer:
             return respond(self.error(request_id, -32601, f"method not found: {method}"))
         except KeyError as exc:
             return respond(self.error(request_id, -32601, str(exc).strip("'")))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - JSON-RPC boundary serializes tool failures
             return respond(self.error(request_id, -32000, str(exc), {"type": exc.__class__.__name__}))
 
     async def handle_async(self, request: dict[str, Any]) -> dict[str, Any] | None:
@@ -1539,6 +1817,8 @@ MUTATING_TOOLS = {
     "brain_reflect",
     "brain_context_compile",
     "brain_context_explain",
+    *CAPTURE_WRITE_TOOLS,
+    *CAPTURE_DESTRUCTIVE_TOOLS,
     *TEMPORAL_WRITE_TOOLS,
     *TEMPORAL_VALIDATOR_RUN_TOOLS,
 }
@@ -1632,10 +1912,13 @@ async def serve_stdio_async(
     brain_dir: Path | None = None,
     expected_root: Path | None = None,
     allow_memory_writes: bool = False,
+    allow_continuity_control: bool = False,
     allow_repo_ingestion: bool = False,
     allow_thread_ingestion: bool = False,
     allow_truth_writes: bool = False,
     allow_validator_run: bool = False,
+    allow_capture_writes: bool = False,
+    allow_capture_destructive: bool = False,
     allowed_thread_roots: tuple[Path, ...] = (),
     context_contract_delegations: dict[int, str] | None = None,
 ) -> int:
@@ -1645,10 +1928,13 @@ async def serve_stdio_async(
         brain_dir=brain_dir,
         expected_root=expected_root,
         allow_memory_writes=allow_memory_writes,
+        allow_continuity_control=allow_continuity_control,
         allow_repo_ingestion=allow_repo_ingestion,
         allow_thread_ingestion=allow_thread_ingestion,
         allow_truth_writes=allow_truth_writes,
         allow_validator_run=allow_validator_run,
+        allow_capture_writes=allow_capture_writes,
+        allow_capture_destructive=allow_capture_destructive,
         allowed_thread_roots=allowed_thread_roots,
         context_contract_delegations=context_contract_delegations,
     )
@@ -1696,10 +1982,13 @@ def serve_stdio(
     brain_dir: Path | None = None,
     expected_root: Path | None = None,
     allow_memory_writes: bool = False,
+    allow_continuity_control: bool = False,
     allow_repo_ingestion: bool = False,
     allow_thread_ingestion: bool = False,
     allow_truth_writes: bool = False,
     allow_validator_run: bool = False,
+    allow_capture_writes: bool = False,
+    allow_capture_destructive: bool = False,
     allowed_thread_roots: tuple[Path, ...] = (),
     context_contract_delegations: dict[int, str] | None = None,
 ) -> int:
@@ -1709,10 +1998,13 @@ def serve_stdio(
         brain_dir=brain_dir,
         expected_root=expected_root,
         allow_memory_writes=allow_memory_writes,
+        allow_continuity_control=allow_continuity_control,
         allow_repo_ingestion=allow_repo_ingestion,
         allow_thread_ingestion=allow_thread_ingestion,
         allow_truth_writes=allow_truth_writes,
         allow_validator_run=allow_validator_run,
+        allow_capture_writes=allow_capture_writes,
+        allow_capture_destructive=allow_capture_destructive,
         allowed_thread_roots=allowed_thread_roots,
         context_contract_delegations=context_contract_delegations,
     ))
@@ -1728,6 +2020,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--allow-memory-writes", action="store_true",
         help="Allow agent-authored memories, checkpoints, and reflection (disabled by default)",
+    )
+    parser.add_argument(
+        "--allow-continuity-control", action="store_true",
+        help="Allow starting and stopping the project continuity worker (disabled by default)",
     )
     parser.add_argument(
         "--allow-repo-ingestion", action="store_true",
@@ -1750,6 +2046,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow deterministic non-command truth validators; requires --allow-truth-writes",
     )
     parser.add_argument(
+        "--allow-capture-writes", action="store_true",
+        help="Allow delegated capture policy, binding, lifecycle, and retention controls",
+    )
+    parser.add_argument(
+        "--allow-capture-destructive", action="store_true",
+        help="Allow preview-bound capture retention, redaction, and deletion controls",
+    )
+    parser.add_argument(
         "--context-contract", action="append", default=[], metavar="ID:DIGEST",
         help="Delegate one operator-authorized context contract to this MCP process; may be repeated",
     )
@@ -1760,9 +2064,11 @@ def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.brain_dir and (
-        args.root or args.allow_memory_writes or args.allow_repo_ingestion
+        args.root or args.allow_memory_writes or args.allow_continuity_control
+        or args.allow_repo_ingestion
         or args.allow_thread_ingestion or args.allow_thread_root
         or args.allow_truth_writes or args.allow_validator_run or args.context_contract
+        or args.allow_capture_writes or args.allow_capture_destructive
     ):
         parser.error("root and capability flags are only valid with --db single-project mode")
     if args.allow_thread_ingestion and not args.allow_thread_root:
@@ -1784,10 +2090,13 @@ def main(argv=None) -> int:
         brain_dir=Path(args.brain_dir) if args.brain_dir else None,
         expected_root=Path(args.root) if args.root else None,
         allow_memory_writes=args.allow_memory_writes,
+        allow_continuity_control=args.allow_continuity_control,
         allow_repo_ingestion=args.allow_repo_ingestion,
         allow_thread_ingestion=args.allow_thread_ingestion,
         allow_truth_writes=args.allow_truth_writes,
         allow_validator_run=args.allow_validator_run,
+        allow_capture_writes=args.allow_capture_writes,
+        allow_capture_destructive=args.allow_capture_destructive,
         allowed_thread_roots=tuple(Path(root) for root in args.allow_thread_root),
         context_contract_delegations=context_contract_delegations,
     )

@@ -244,7 +244,8 @@ OS-specific executable path by hand:
 Add the returned `mcpServers` entry to the agent host. It is bound to one project
 and read-only by default. To grant an advanced capability, append only the
 required server argument to the generated `args`: `--allow-memory-writes`,
-`--allow-repo-ingestion`, or `--allow-thread-ingestion` together with one or
+`--allow-repo-ingestion`, `--allow-continuity-control`, or
+`--allow-thread-ingestion` together with one or
 more `--allow-thread-root <absolute-path>` pairs. Repository ingestion still
 uses the brain's registered canonical root. Thread files are confined to the
 declared roots. Agent-authored memory remains unverified `anumana` with
@@ -524,7 +525,7 @@ For one native MCP registration across every brain, generate the gateway configu
 & $RtaBrain mcp-config --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains" --name rta-smriti
 ```
 
-Add the emitted configuration to the MCP host and start a new agent task. Existing tasks cannot dynamically acquire newly registered MCP tools. In multi-project mode every tool call must name a project, and duplicate project names fail closed.
+Add the emitted configuration to the MCP host and start a new agent task. Existing tasks cannot dynamically acquire newly registered MCP tools. In multi-project mode every tool call must name a project, duplicate project names fail closed, and only project-scoped read tools are exposed. Memories, checkpoints, ingestion, governance, continuity, temporal truth, capture mutation, and hash-cache refresh require a separately configured single-project MCP binding with explicit capabilities.
 
 ## Attach Claim Provenance
 

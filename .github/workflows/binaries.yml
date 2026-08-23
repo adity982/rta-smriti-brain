@@ -35,17 +35,19 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install binary build dependencies
-        run: python -m pip install ".[binary]"
+        run: python -m pip install ".[binary]" "pip-audit==2.10.1"
+      - name: Audit dependencies and generate CycloneDX SBOM
+        run: pip-audit . --format cyclonedx-json --output release-sbom.cdx.json --progress-spinner off --strict
       - name: Build executable
         run: python scripts/build_binary.py
       - name: Smoke test executable
         run: python scripts/smoke_binary.py
       - name: Stage versioned binary and SHA256SUMS.txt
         if: matrix.os != 'ubuntu-latest'
-        run: python scripts/package_release_artifacts.py
+        run: python scripts/package_release_artifacts.py --sbom release-sbom.cdx.json
       - name: Stage versioned binary, wheel, and SHA256SUMS.txt
         if: matrix.os == 'ubuntu-latest'
-        run: python scripts/package_release_artifacts.py --include-wheel
+        run: python scripts/package_release_artifacts.py --include-wheel --sbom release-sbom.cdx.json
       - name: Privacy-scan staged release bundle
         run: python scripts/privacy_scan.py --root release-artifacts
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

@@ -17,7 +17,7 @@ class TemporalTruthSchemaTests(unittest.TestCase):
             try:
                 db.init_schema(conn)
 
-                self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 9)
+                self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], db.SCHEMA_VERSION)
                 tables = {
                     row["name"]
                     for row in conn.execute(

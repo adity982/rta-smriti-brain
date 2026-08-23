@@ -62,6 +62,38 @@ class DatabaseSecurityTests(unittest.TestCase):
             finally:
                 conn.close()
 
+    @unittest.skipIf(os.name == "nt", "POSIX directory ownership is not the Windows ACL model")
+    def test_connect_rejects_a_peer_writable_existing_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            brain_dir = Path(tmp) / "shared-brains"
+            brain_dir.mkdir(mode=0o777)
+            brain_dir.chmod(0o777)
+            database = brain_dir / "brain.sqlite"
+
+            with self.assertRaisesRegex(PermissionError, "owner-controlled"):
+                connect(database)
+
+            self.assertFalse(database.exists())
+
+    @unittest.skipIf(os.name == "nt", "POSIX sidecar links are covered here")
+    def test_connect_rejects_a_linked_wal_before_sqlite_opens_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            database = root / "brain.sqlite"
+            sqlite3.connect(database).close()
+            victim = root / "victim"
+            victim.write_bytes(b"must remain unchanged")
+            wal = Path(f"{database}-wal")
+            try:
+                wal.symlink_to(victim)
+            except OSError as exc:
+                self.skipTest(f"symbolic links unavailable: {exc}")
+
+            with self.assertRaisesRegex(PermissionError, "sidecar"):
+                connect(database)
+
+            self.assertEqual(victim.read_bytes(), b"must remain unchanged")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,12 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .capture_adapters import (
+    _capture_ancestor_guard,
+    _stable_adapter_parent,
+    _validate_ancestor_guard,
+    normalize_capture_event,
+)
 from .db import ensure_project, integrity_diagnostics, latest_checkpoint, now_iso
 from .repository import RepositoryInspection
 from .temporal import temporal_readiness
@@ -36,6 +42,19 @@ MAX_EVENT_STRING_CHARS = 16_000
 MAX_EVENT_LIST_ITEMS = 100
 MAX_CODEX_LINE_BYTES = 1_000_000
 MAX_SESSION_META_BYTES = 256_000
+MAX_SESSION_ID_CHARS = 512
+MAX_CURSOR_CHARS = 1_024
+MAX_EVENT_TYPE_CHARS = 128
+MAX_EVENT_SOURCE_CHARS = 128
+
+
+def _bounded_identifier(name: str, value: Any, maximum: int) -> str:
+    selected = str(value).strip()
+    if not selected:
+        raise ValueError(f"{name} is required")
+    if len(selected) > maximum:
+        raise ValueError(f"{name} must be at most {maximum} characters")
+    return selected
 
 
 def init_continuity_schema(conn) -> None:
@@ -156,12 +175,15 @@ def append_event(
     if _commit:
         init_continuity_schema(conn)
     project_id = int(_project_id) if _project_id is not None else ensure_project(conn, project)
-    session_id = str(session_id).strip()
-    cursor = str(cursor).strip()
-    event_type = str(event_type).strip().lower().replace(" ", "_")
+    session_id = _bounded_identifier(
+        "session_id", session_id, MAX_SESSION_ID_CHARS
+    )
+    cursor = _bounded_identifier("cursor", cursor, MAX_CURSOR_CHARS)
+    event_type = _bounded_identifier(
+        "event_type", event_type, MAX_EVENT_TYPE_CHARS
+    ).lower().replace(" ", "_")
+    source = _bounded_identifier("source", source, MAX_EVENT_SOURCE_CHARS)
     verification_status = str(verification_status).strip().lower()
-    if not session_id or not cursor or not event_type:
-        raise ValueError("session_id, cursor, and event_type are required")
     if verification_status not in VALID_VERIFICATION:
         raise ValueError(f"invalid verification status: {verification_status}")
     payload_text = _json_text(_bound_event_value(_redact_event_value(payload)))
@@ -175,7 +197,7 @@ def append_event(
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            project_id, session_id, cursor, event_type, payload_text, str(source),
+            project_id, session_id, cursor, event_type, payload_text, source,
             source_hash, verification_status, timestamp, recorded_at,
         ),
     )
@@ -194,10 +216,12 @@ def list_events(conn, project: str, session_id: str | None = None, limit: int = 
     project_id = ensure_project(conn, project)
     limit = max(1, min(500, int(limit)))
     params: list[Any] = [project_id]
-    where = "project_id = ?"
+    where = "project_id = ? AND payload_json <> 'null'"
     if session_id:
         where += " AND session_id = ?"
-        params.append(session_id)
+        params.append(
+            _bounded_identifier("session_id", session_id, MAX_SESSION_ID_CHARS)
+        )
     params.append(limit)
     rows = conn.execute(
         f"SELECT * FROM session_events WHERE {where} ORDER BY id DESC LIMIT ?", params
@@ -213,21 +237,62 @@ def list_events(conn, project: str, session_id: str | None = None, limit: int = 
 def _codex_event(payload: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     kind = str(payload.get("type") or "event")
     body = payload.get("payload") if isinstance(payload.get("payload"), dict) else payload
+    normalized = normalize_capture_event(
+        "codex-jsonl",
+        payload,
+        source_cursor="legacy",
+        observed_at=str(payload.get("timestamp") or "1970-01-01T00:00:00Z"),
+        session_id=str(body.get("id") or "legacy-codex-session"),
+    )
+    if normalized is None:
+        return None
+    attributes = dict(normalized.attributes)
     if kind == "session_meta":
-        return "session_started", {"session": body.get("id"), "cwd": body.get("cwd")}
+        return "session_started", attributes
     if kind == "turn_context":
-        return "turn_context", {key: body.get(key) for key in ("cwd", "model", "approval_policy") if body.get(key) is not None}
+        return "turn_context", attributes
     if kind == "response_item":
         role = body.get("role")
         item_type = body.get("type")
         if role in {"user", "assistant"}:
-            content = body.get("content")
-            return "message", {"role": role, "content": content}
+            if "text" in attributes and "content" not in attributes:
+                attributes["content"] = attributes.pop("text")
+            return "message", attributes
         if item_type in {"function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output"}:
-            return "tool_event", {key: body.get(key) for key in ("type", "name", "call_id", "output", "status") if body.get(key) is not None}
+            return "tool_event", attributes
     if kind == "event_msg":
-        return "agent_event", {key: body.get(key) for key in ("type", "message", "phase", "status") if body.get(key) is not None}
+        event_kind = attributes.pop("event_kind", normalized.event_name)
+        return "agent_event", {"type": event_kind, **attributes}
     return None
+
+
+def _open_stable_codex_session(
+    path: Path,
+    expected_sessions_root: Path | None,
+):
+    if expected_sessions_root is None:
+        return path.open("rb")
+    root = expected_sessions_root.expanduser().resolve()
+    guard = _capture_ancestor_guard(path, root)
+    with _stable_adapter_parent(path, root, guard):
+        _validate_ancestor_guard(path, root, guard)
+        handle = path.open("rb")
+        try:
+            opened = os.fstat(handle.fileno())
+            current = path.stat()
+            if (
+                opened.st_dev != current.st_dev
+                or opened.st_ino != current.st_ino
+                or opened.st_nlink > 1
+            ):
+                raise ValueError(
+                    "Codex session changed identity while it was being opened"
+                )
+            _validate_ancestor_guard(path, root, guard)
+        except BaseException:
+            handle.close()
+            raise
+    return handle
 
 
 def ingest_codex_session(
@@ -245,20 +310,35 @@ def ingest_codex_session(
     path = candidate.resolve()
     if not path.is_file() or path.suffix.lower() != ".jsonl":
         raise ValueError("Codex session must be an existing JSONL file")
-    max_events = max(1, min(MAX_CODEX_EVENTS_PER_RUN, int(max_events)))
-    project_id = ensure_project(conn, project)
-    stream_id = session_id or path.stem
-    prior = conn.execute(
-        "SELECT cursor FROM adapter_cursors WHERE project_id = ? AND adapter = 'codex-jsonl' AND stream_id = ?",
-        (project_id, stream_id),
-    ).fetchone()
-    start = int(prior["cursor"]) if prior else 0
-    file_size = path.stat().st_size
+    session_handle = _open_stable_codex_session(path, expected_sessions_root)
+    try:
+        max_events = max(1, min(MAX_CODEX_EVENTS_PER_RUN, int(max_events)))
+        project_id = ensure_project(conn, project)
+        if expected_project_root is None:
+            project_row = conn.execute(
+                "SELECT root_path FROM projects WHERE id = ?",
+                (project_id,),
+            ).fetchone()
+            if project_row is None or not project_row["root_path"]:
+                raise ValueError(
+                    "Codex session ingestion requires a canonical project root"
+                )
+            expected_project_root = Path(str(project_row["root_path"]))
+        stream_id = session_id or path.stem
+        prior = conn.execute(
+            "SELECT cursor FROM adapter_cursors WHERE project_id = ? AND adapter = 'codex-jsonl' AND stream_id = ?",
+            (project_id, stream_id),
+        ).fetchone()
+        start = int(prior["cursor"]) if prior else 0
+        file_size = path.stat().st_size
+    except BaseException:
+        session_handle.close()
+        raise
     inserted = 0
     ignored = 0
     processed = 0
     conn.execute("SAVEPOINT codex_jsonl_ingest")
-    with path.open("rb") as handle:
+    with session_handle as handle:
         try:
             opened = os.fstat(handle.fileno())
             current = path.stat()
@@ -272,7 +352,7 @@ def ingest_codex_session(
                     path.relative_to(expected_sessions_root.expanduser().resolve())
                 except ValueError as exc:
                     raise ValueError("Codex session is outside the configured session directory") from exc
-            bound_to_project = expected_project_root is None
+            bound_to_project = False
             if expected_project_root is not None:
                 declared_session = None
                 declared_cwd = None
@@ -543,7 +623,11 @@ def operational_readiness(
             reasons.append("continuity_not_running")
         if int(lifecycle.get("sessions_pending") or 0) > 0:
             reasons.append("continuity_capture_backlog")
-        if lifecycle.get("last_error") or int(lifecycle.get("consecutive_errors") or 0) > 0:
+        if (
+            lifecycle.get("has_error")
+            or lifecycle.get("last_error")
+            or int(lifecycle.get("consecutive_errors") or 0) > 0
+        ):
             reasons.append("continuity_capture_errors")
     continuation_ready = not reasons
     return {

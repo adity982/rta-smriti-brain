@@ -6,8 +6,8 @@ from pathlib import Path
 from rta_brain import __version__
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_PYTHON_VERSION = "0.8.0a1"
-EXPECTED_DISPLAY_VERSION = "0.8.0-alpha"
+EXPECTED_PYTHON_VERSION = "0.9.0a1"
+EXPECTED_DISPLAY_VERSION = "0.9.0-alpha"
 
 
 class ReleaseMetadataTests(unittest.TestCase):
@@ -23,6 +23,9 @@ class ReleaseMetadataTests(unittest.TestCase):
         fact_sheet = (ROOT / "launch-assets" / "press" / "PRODUCT_FACT_SHEET.md").read_text(encoding="utf-8")
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         usage = (ROOT / "docs" / "USAGE_GUIDE.md").read_text(encoding="utf-8")
+        release_notes = (ROOT / "docs" / "RELEASE_NOTES_v0.9.0-alpha.md").read_text(
+            encoding="utf-8"
+        )
 
         self.assertEqual(__version__, EXPECTED_PYTHON_VERSION)
         self.assertEqual(pyproject["project"]["version"], EXPECTED_PYTHON_VERSION)
@@ -30,11 +33,19 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(package_lock["version"], EXPECTED_DISPLAY_VERSION)
         self.assertEqual(package_lock["packages"][""]["version"], EXPECTED_DISPLAY_VERSION)
         self.assertIn(f'"{EXPECTED_PYTHON_VERSION}" not in version', binary_smoke)
-        self.assertIn("v0.8 Development Operator Console", dashboard)
-        self.assertIn("version: 0.8.0-alpha", citation)
-        self.assertIn("## Current v0.8.0-alpha Candidate", roadmap)
-        self.assertIn("## [0.8.0-alpha] - Unreleased", changelog)
-        self.assertIn("**Current candidate:** `v0.8.0-alpha`", fact_sheet)
+        self.assertIn("v0.9 Development Operator Console", dashboard)
+        self.assertIn("version: 0.9.0-alpha", citation)
+        self.assertIn("## Current v0.9.0-alpha Candidate", roadmap)
+        self.assertIn("## [0.9.0-alpha] - Unreleased", changelog)
+        self.assertIn("**Current candidate:** `v0.9.0-alpha`", fact_sheet)
+        self.assertIn("uncommitted `v0.9.0-alpha` universal-capture candidate", readme)
+        self.assertNotIn("uncommitted `v0.8.0-alpha`", readme)
+        self.assertIn("capture           Operate the governed universal capture journal", readme)
+        self.assertIn("uncommitted local candidate", release_notes)
+        self.assertIn("fresh scan", release_notes)
+        self.assertIn("zero findings", release_notes)
+        self.assertIn("hosted Windows/macOS/Linux CI", release_notes)
+        self.assertNotIn("post-fix candidate is required", release_notes)
         self.assertNotIn("zero Python runtime dependencies", fact_sheet)
         self.assertIn("truth             Query the bitemporal truth ledger", readme)
         self.assertIn("context           Govern and compile agent-specific context", readme)
@@ -50,11 +61,18 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("--include-wheel", workflow)
         self.assertIn("release-artifacts/", workflow)
         self.assertIn("SHA256SUMS.txt", workflow)
+        self.assertIn("pip-audit==2.10.1", workflow)
+        self.assertIn("--format cyclonedx-json", workflow)
+        self.assertIn("--sbom release-sbom.cdx.json", workflow)
 
     def test_installed_upgrade_smoke_uses_the_previous_release(self):
         smoke = (ROOT / "scripts" / "build_installed_smoke.py").read_text(encoding="utf-8")
 
-        self.assertIn('BASELINE_REF = "v0.6.0-alpha"', smoke)
+        self.assertIn(
+            'BASELINE_REF = "f8736ebaab50dba75f86e22aa246066611d2c75e"',
+            smoke,
+        )
+        self.assertIn("v0.8 baseline and v0.9 candidate", smoke)
         self.assertIn("baseline_version == expected_version", smoke)
         self.assertNotIn('"--force-reinstall", str(wheel)', smoke)
 

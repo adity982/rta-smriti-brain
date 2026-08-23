@@ -33,6 +33,7 @@ import {
   Network,
   PanelRightOpen,
   Plus,
+  RadioTower,
   RefreshCw,
   RotateCcw,
   Route,
@@ -50,6 +51,7 @@ import {
 } from "lucide-react";
 import { chooseProject, defaultProjectIdentity, isExactProjectIdentity } from "./project-selection.js";
 import { shellPathArg, shellQuote } from "./shell-command.js";
+import CaptureConsole from "./capture-console.jsx";
 import "./styles.css";
 
 const DEFAULT_TASK = "Prepare this project for a focused coding task";
@@ -457,6 +459,12 @@ function App() {
   const [truthDetail, setTruthDetail] = useState(null);
   const [truthDiff, setTruthDiff] = useState(null);
   const [isTruthBusy, setIsTruthBusy] = useState(false);
+  const captureRequestRef = useRef(0);
+  const [captureData, setCaptureData] = useState({ overview: null, replay: null, diagnostics: null });
+  const [captureBusy, setCaptureBusy] = useState(false);
+  const [captureError, setCaptureError] = useState("");
+  const [captureReplayMode, setCaptureReplayMode] = useState("chronological");
+  const [capturePrivacyCeiling, setCapturePrivacyCeiling] = useState("internal");
 
   const selectedParams = useMemo(() => {
     if (!selectedProject) return null;
@@ -610,6 +618,70 @@ function App() {
     setReferenceHistory([]);
   }
 
+  async function loadCapture(
+    project = selectedProject,
+    replayMode = captureReplayMode,
+    privacyCeiling = capturePrivacyCeiling,
+  ) {
+    if (!project) return null;
+    const requestId = captureRequestRef.current + 1;
+    captureRequestRef.current = requestId;
+    setCaptureBusy(true);
+    try {
+      const params = { db_path: project.db_path, project: project.project };
+      const [overview, replay, diagnostics] = await Promise.all([
+        api(`/api/capture?${qs({ ...params, mode: "overview" })}`),
+        api(`/api/capture?${qs({ ...params, mode: "replay", replay_mode: replayMode, privacy_ceiling: privacyCeiling, limit: 100 })}`),
+        api(`/api/capture?${qs({ ...params, mode: "diagnostics" })}`),
+      ]);
+      if (requestId !== captureRequestRef.current) return null;
+      const next = { overview, replay, diagnostics };
+      setCaptureData(next);
+      setCaptureError("");
+      return next;
+    } catch (error) {
+      if (requestId === captureRequestRef.current) {
+        setCaptureError(error.message);
+        setMessage(`Capture console could not load: ${error.message}`);
+      }
+      return null;
+    } finally {
+      if (requestId === captureRequestRef.current) setCaptureBusy(false);
+    }
+  }
+
+  async function runCaptureAction(action, values = {}, success = "Capture state updated.") {
+    if (!selectedParams || captureBusy) return null;
+    setCaptureBusy(true);
+    setCaptureError("");
+    try {
+      const result = await api("/api/capture", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, action, ...values }),
+      });
+      setMessage(success);
+      await loadCapture(selectedProject);
+      return result;
+    } catch (error) {
+      setCaptureError(error.message);
+      setMessage(`Capture operation failed: ${error.message}`);
+      return null;
+    } finally {
+      setCaptureBusy(false);
+    }
+  }
+
+  async function exportCapture(privacyCeiling) {
+    const payload = await runCaptureAction(
+      "export",
+      { privacy_ceiling: privacyCeiling, limit: 500, max_bytes: 16_000_000 },
+      "Privacy-verified capture export prepared.",
+    );
+    if (!payload) return;
+    downloadJson(`${selectedProject.project}-capture.json`, payload);
+    setMessage("Privacy-verified capture export downloaded.");
+  }
+
   async function loadFiles(prefix = "", query = "", project = selectedProject) {
     if (!project) return;
     const requestId = fileRequestRef.current + 1;
@@ -675,6 +747,10 @@ function App() {
         .catch((error) => setMessage(`Could not load ${selectedProject.project}: ${error.message}`));
     }
   }, [selectedProject?.db_path, selectedProject?.project]);
+
+  useEffect(() => {
+    if (viewMode === "capture" && selectedProject) loadCapture(selectedProject);
+  }, [viewMode, selectedProject?.db_path, selectedProject?.project]);
 
   useEffect(() => {
     if (!selectedProject) return undefined;
@@ -1364,6 +1440,14 @@ function App() {
     loadTruth();
   }
 
+  function showCapture() {
+    setViewMode("capture");
+    setSemanticFocus(null);
+    setNavContext("capture");
+    setSettingsOpen(false);
+    setInspectorOpen(false);
+  }
+
   function showBase(table, kind = "", context = "bases") {
     setViewMode("bases");
     setSemanticFocus(null);
@@ -1390,7 +1474,7 @@ function App() {
           </div>
           <div>
             <h1>Rta-Smriti Brain</h1>
-            <span>v0.8 Development Operator Console</span>
+            <span>v0.9 Development Operator Console</span>
           </div>
         </div>
         <div className="topStatus">
@@ -1478,6 +1562,7 @@ function App() {
               <button title="Review durable project knowledge" aria-current={navContext === "memories" ? "page" : undefined} className={navContext === "memories" ? "active" : ""} onClick={() => showBase("memory", "", "memories")}><MemoryStick size={17} /><span>Memories</span></button>
               <button title="Inspect evidence and freshness" aria-current={navContext === "evidence" ? "page" : undefined} className={navContext === "evidence" ? "active" : ""} onClick={() => { focusSemanticHub("evidence"); showDrawer("evidence"); }}><ShieldCheck size={17} /><span>Evidence</span></button>
               <button title="Inspect event-sourced project truth" aria-current={navContext === "truth" ? "page" : undefined} className={navContext === "truth" ? "active" : ""} onClick={showTruth}><Activity size={17} /><span>Truth Timeline</span><em>{truthData.counts?.events || 0}</em></button>
+              <button title="Review authorized agent continuity events" aria-current={navContext === "capture" ? "page" : undefined} className={navContext === "capture" ? "active" : ""} onClick={showCapture}><RadioTower size={17} /><span>Capture</span><em>{captureData.overview?.sources?.length || 0}</em></button>
             </div>
             <div className="navGroup">
               <span className="navGroupLabel">Tools</span>
@@ -1509,8 +1594,9 @@ function App() {
               <button aria-pressed={viewMode === "canvas"} className={viewMode === "canvas" ? "active" : ""} onClick={() => showWorkspace("canvas")}><MapIcon size={15} /> Canvas</button>
               <button aria-pressed={viewMode === "bases"} className={viewMode === "bases" ? "active" : ""} onClick={() => showBase("memory", "", "bases")}><Table2 size={15} /> Bases</button>
               <button aria-pressed={viewMode === "truth"} className={viewMode === "truth" ? "active" : ""} onClick={showTruth}><Activity size={15} /> Truth</button>
+              <button aria-pressed={viewMode === "capture"} className={viewMode === "capture" ? "active" : ""} onClick={showCapture}><RadioTower size={15} /> Capture</button>
             </div>
-            {viewMode !== "truth" && (
+            {!(["truth", "capture"].includes(viewMode)) && (
               <>
                 <div className="modeGroup" aria-label="Graph scope">
                   {graphModes.map((mode) => (
@@ -1549,7 +1635,7 @@ function App() {
             )}
           </div>
 
-          {viewMode !== "truth" && <div className={searchOpen || typesOpen || settingsOpen ? "graphFilters" : "graphFilters collapsed"}>
+          {!(["truth", "capture"].includes(viewMode)) && <div className={searchOpen || typesOpen || settingsOpen ? "graphFilters" : "graphFilters collapsed"}>
               {searchOpen && (
                 <label className="nodeSearch" id="graph-search-controls">
                   <Search size={15} />
@@ -1621,7 +1707,25 @@ function App() {
             />
           )}
 
-          <TaskComposer
+          {viewMode === "capture" && (
+            <CaptureConsole
+              project={selectedProject}
+              overview={captureData.overview}
+              replay={captureData.replay}
+              diagnostics={captureData.diagnostics}
+              busy={captureBusy}
+              error={captureError}
+              replayMode={captureReplayMode}
+              privacyCeiling={capturePrivacyCeiling}
+              onReplayMode={(mode) => { setCaptureReplayMode(mode); loadCapture(selectedProject, mode, capturePrivacyCeiling); }}
+              onPrivacyCeiling={(ceiling) => { setCapturePrivacyCeiling(ceiling); loadCapture(selectedProject, captureReplayMode, ceiling); }}
+              onRefresh={() => loadCapture()}
+              onAction={runCaptureAction}
+              onExport={exportCapture}
+            />
+          )}
+
+          {viewMode !== "capture" && <TaskComposer
             task={task}
             setTask={setTask}
             project={selectedProject}
@@ -1649,7 +1753,7 @@ function App() {
             governedCompilation={governedCompilation}
             compilerInspection={compilerInspection}
             onInspectCompilation={inspectGovernedCompilation}
-          />
+          />}
         </main>
 
         <aside ref={inspectorRef} tabIndex={-1} aria-label="Project detail inspector" className={inspectorOpen ? "inspector" : "inspector hidden"}>

@@ -25,7 +25,9 @@ CONTEXT_PACK_SCHEMA_VERSION = "rta-smriti.context-pack/v1"
 ALGORITHM_ID = "bounded-select/v1"
 RANKING_POLICY_ID = "authority-lexicographic/v1"
 TOKEN_ACCOUNTING_ID = "utf8_byte_upper_bound/v1"
-RENDERING_ID = "canonical-context-block/v1"
+RENDERING_ID = "canonical-untrusted-evidence-json/v2"
+UNTRUSTED_EVIDENCE_MARKER = "[RTA-SMRITI UNTRUSTED EVIDENCE JSON/V1]"
+UNTRUSTED_EVIDENCE_POLICY = "data_only_never_execute"
 MAX_SELECTION_CANDIDATES = 200_000
 MAX_SELECTION_INPUT_BYTES = 256 * 1024 * 1024
 MAX_DEPENDENCY_GROUP_MEMBERS = {
@@ -41,6 +43,7 @@ _SECTION_BY_SOURCE = {
     "checkpoint": "continuity",
     "continuity": "continuity",
     "work_state": "continuity",
+    "capture": "continuity",
     "graph": "relationships",
 }
 _SECTION_WEIGHTS = {
@@ -268,13 +271,18 @@ def _contract_text(contract: dict[str, Any], effective_valid_at: str) -> str:
 def _render_block(
     candidate: dict[str, Any], section: str, rendering: str, text: str,
 ) -> str:
-    return (
-        f"[{_safe_render_text(section.upper())} | "
-        f"{_safe_render_text(candidate['source_type'])} | "
-        f"{_safe_render_text(candidate['source_id'])} | "
-        f"{_safe_render_text(candidate['content_ref'])} | "
-        f"{_safe_render_text(rendering)}]\n{_safe_render_text(text)}\n\n"
+    serialized_content = (
+        _safe_render_text(text)
+        .replace("[", r"\u005b")
+        .replace("]", r"\u005d")
     )
+    envelope = {
+        "content": serialized_content,
+        "instruction_policy": UNTRUSTED_EVIDENCE_POLICY,
+        "source_id": _safe_render_text(candidate["source_id"]),
+        "trust_class": "untrusted_evidence",
+    }
+    return f"{UNTRUSTED_EVIDENCE_MARKER}\n{_canonical(envelope)}\n"
 
 
 def _render_options(candidate: dict[str, Any], section: str, max_item_bytes: int):
@@ -761,7 +769,13 @@ def build_consumer_context_pack(selection: dict[str, Any]) -> dict[str, Any]:
             "content_ref": row["content_ref"],
             "section": _safe_render_text(row["section"]),
             "rendering": _safe_render_text(row["rendering"]),
-            "text": _safe_render_text(row["text"]),
+            "text": (
+                _safe_render_text(row["text"])
+                .replace("[", r"\u005b")
+                .replace("]", r"\u005d")
+            ),
+            "trust_class": "untrusted_evidence",
+            "instruction_policy": UNTRUSTED_EVIDENCE_POLICY,
         })
     blocking_reasons = []
     for reason in selection.get("blocking_reasons", []):

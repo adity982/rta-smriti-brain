@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__, db
+from .capture import _verify_event as _verify_capture_event
+from .capture import _verify_tombstone as _verify_capture_tombstone
 from .context_schema import validate_context_schema_v9
 from .repository import (
     canonical_root,
@@ -91,6 +93,19 @@ _OPTIONAL_SOURCE_COLUMNS = {
     "work_items": {
         "id", "project_id", "item_type", "external_id", "local_path", "qa_state",
         "decision", "attempt_count", "fallback", "next_action", "metadata_json", "updated_at",
+    },
+    "capture_events": {
+        "id", "project_id", "project_sequence", "event_id", "event_name",
+        "external_session_id", "source_id", "recorded_at", "span_id",
+        "gap_state", "attributes_json", "event_hash", "previous_event_hash",
+    },
+    "capture_event_content": {
+        "event_row_id", "project_id", "content_json", "content_sha256",
+        "content_bytes", "expires_at", "deleted_at", "deletion_reason",
+    },
+    "capture_tombstones": {
+        "id", "project_id", "tombstone_id", "scope", "scope_token",
+        "verification_json", "created_at",
     },
 }
 
@@ -207,7 +222,7 @@ def _snapshot_shape_is_valid(snapshot: dict[str, Any]) -> bool:
             return False
         if not exact(fences, {
             "checkpoint", "policy", "truth", "sources", "chunks", "memories",
-            "graph", "continuity", "work_state", "authorization",
+            "graph", "continuity", "work_state", "capture", "authorization",
         }):
             return False
         checkpoint = fences["checkpoint"]
@@ -228,6 +243,23 @@ def _snapshot_shape_is_valid(snapshot: dict[str, Any]) -> bool:
             "policy", "sources", "chunks", "memories", "continuity", "work_state",
             "authorization",
         )):
+            return False
+        capture = fences["capture"]
+        if not exact(capture, {"events", "content", "tombstones", "coverage"}):
+            return False
+        if not all(row_digest(capture[name]) for name in ("events", "content", "tombstones")):
+            return False
+        capture_coverage = capture["coverage"]
+        if not exact(capture_coverage, {
+            "total_events", "latest_sequence", "accepted_checkpoint_sequence",
+            "uncheckpointed_events", "gap_events", "incomplete_spans",
+            "interrupted_sessions", "logically_deleted_scopes",
+        }):
+            return False
+        if not all(
+            type(capture_coverage[name]) is int and capture_coverage[name] >= 0
+            for name in capture_coverage
+        ):
             return False
         if not exact(fences["graph"], {"entities", "edges"}) or not all(
             row_digest(fences["graph"][name]) for name in ("entities", "edges")
@@ -503,9 +535,12 @@ def _capture_fences(
 ) -> dict[str, Any]:
     checkpoint = conn.execute(
         """
-        SELECT id, version, updated_at, objective, verified_evidence,
-               remaining_gaps, next_action, prohibited_repetition, source, trigger
-        FROM checkpoints WHERE project_id = ?
+        SELECT c.id, c.version, c.updated_at, c.objective, c.verified_evidence,
+               c.remaining_gaps, c.next_action, c.prohibited_repetition,
+               c.source, c.trigger, f.fence_sequence
+        FROM checkpoints c
+        LEFT JOIN checkpoint_capture_fences f ON f.checkpoint_id = c.id
+        WHERE c.project_id = ?
         ORDER BY version DESC, updated_at DESC, id DESC LIMIT 1
         """,
         (project_id,),
@@ -635,6 +670,94 @@ def _capture_fences(
             """,
             (project_id,),
         ), label="work-state fence", budget=budget)
+    capture_events = []
+    capture_event_content = []
+    capture_tombstones = []
+    if _table_exists(conn, "capture_events"):
+        capture_events = _bounded_rows(conn.execute(
+            """
+            SELECT * FROM capture_events
+            WHERE project_id = ? ORDER BY project_sequence
+            """,
+            (project_id,),
+        ), label="capture-event fence", budget=budget)
+        if _table_exists(conn, "capture_event_content"):
+            capture_event_content = _bounded_rows(conn.execute(
+                """
+                SELECT event_row_id, project_id, content_json, content_sha256,
+                       content_bytes, expires_at, deleted_at, deletion_reason
+                FROM capture_event_content
+                WHERE project_id = ? ORDER BY event_row_id
+                """,
+                (project_id,),
+            ), label="capture-content fence", budget=budget)
+        content_by_event = {
+            int(row["event_row_id"]): row for row in capture_event_content
+        }
+        previous_capture_hash = None
+        for sequence, event in enumerate(capture_events, start=1):
+            content = content_by_event.get(int(event["id"]))
+            integrity_row = dict(event)
+            integrity_row.update({
+                "content_json": None if content is None else content["content_json"],
+                "content_sha256": None if content is None else content["content_sha256"],
+                "content_deleted_at": None if content is None else content["deleted_at"],
+            })
+            _verify_capture_event(
+                integrity_row,
+                sequence=sequence,
+                previous_hash=previous_capture_hash,
+            )
+            previous_capture_hash = str(event["event_hash"])
+    if _table_exists(conn, "capture_tombstones"):
+        capture_tombstones = _bounded_rows(conn.execute(
+            """
+            SELECT * FROM capture_tombstones
+            WHERE project_id = ? ORDER BY id
+            """,
+            (project_id,),
+        ), label="capture-tombstone fence", budget=budget)
+        for tombstone in capture_tombstones:
+            _verify_capture_tombstone(tombstone)
+
+    accepted_checkpoint_sequence = 0
+    if checkpoint is not None:
+        if checkpoint["fence_sequence"] is not None:
+            accepted_checkpoint_sequence = int(checkpoint["fence_sequence"])
+        else:
+            accepted_checkpoint_sequence = max(
+                [
+                    0,
+                    *(
+                        int(event["project_sequence"])
+                        for event in capture_events
+                        if str(event["recorded_at"]) < str(checkpoint["updated_at"])
+                    ),
+                ]
+            )
+    capture_window = [
+        event for event in capture_events
+        if int(event["project_sequence"]) > accepted_checkpoint_sequence
+    ]
+    session_state: dict[tuple[str, str], bool] = {}
+    incomplete_spans: set[tuple[str, str, str]] = set()
+    gap_events = 0
+    for event in capture_window:
+        key = (str(event["source_id"]), str(event["external_session_id"]))
+        name = str(event["event_name"])
+        interrupted = session_state.get(key, False)
+        if name == "turn.interrupted.v1":
+            interrupted = True
+        elif name in {"turn.completed.v1", "session.ended.v1"}:
+            interrupted = False
+        session_state[key] = interrupted
+        if name == "capture.gap.v1" or event["gap_state"] == "detected":
+            gap_events += 1
+        span = event["span_id"]
+        if span and name.endswith(".started.v1"):
+            incomplete_spans.add((*key, str(span)))
+        elif span and name.endswith((".completed.v1", ".failed.v1")):
+            incomplete_spans.discard((*key, str(span)))
     authorization = _bounded_rows(conn.execute(
         """
         SELECT 'profile' AS record_type, p.id AS record_id, p.profile_id AS key,
@@ -702,6 +825,34 @@ def _capture_fences(
         "work_state": _rows_digest(
             work_state, tuple(work_state[0].keys()) if work_state else ("id",),
         ),
+        "capture": {
+            "events": _rows_digest(
+                capture_events,
+                tuple(capture_events[0].keys()) if capture_events else ("id",),
+            ),
+            "content": _rows_digest(
+                capture_event_content,
+                tuple(capture_event_content[0].keys())
+                if capture_event_content else ("event_row_id",),
+            ),
+            "tombstones": _rows_digest(
+                capture_tombstones,
+                tuple(capture_tombstones[0].keys()) if capture_tombstones else ("id",),
+            ),
+            "coverage": {
+                "total_events": len(capture_events),
+                "latest_sequence": (
+                    int(capture_events[-1]["project_sequence"])
+                    if capture_events else 0
+                ),
+                "accepted_checkpoint_sequence": accepted_checkpoint_sequence,
+                "uncheckpointed_events": len(capture_window),
+                "gap_events": gap_events,
+                "incomplete_spans": len(incomplete_spans),
+                "interrupted_sessions": sum(session_state.values()),
+                "logically_deleted_scopes": len(capture_tombstones),
+            },
+        },
         "authorization": _rows_digest(
             authorization,
             tuple(authorization[0].keys()) if authorization else ("record_type",),

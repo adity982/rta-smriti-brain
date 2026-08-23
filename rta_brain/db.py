@@ -33,7 +33,7 @@ from .repository import (
 )
 
 VALID_PRAMANA = {"pratyaksha", "sabda", "anumana", "smriti", "kalpana"}
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 MAX_THREAD_BYTES = 10 * 1024 * 1024
 MAX_THREAD_PROMOTIONS = 100
 MAX_SEARCH_LIMIT = 50
@@ -87,6 +87,79 @@ def _is_reparse_point(path: Path) -> bool:
     return bool(attributes & 0x400)
 
 
+def _ensure_windows_private(path: Path) -> None:
+    if os.name != "nt":
+        return
+    from .capture_spool import (
+        SpoolError,
+        ensure_windows_path_private,
+        windows_path_is_private,
+    )
+
+    try:
+        ensure_windows_path_private(path)
+        if not windows_path_is_private(path):
+            raise PermissionError(f"brain database path ACL is not private: {path}")
+    except SpoolError as exc:
+        raise PermissionError(f"cannot enforce private brain database ACL: {path}") from exc
+
+
+def _validate_windows_private(path: Path) -> None:
+    if os.name != "nt":
+        return
+    from .capture_spool import SpoolError, windows_path_is_private
+
+    try:
+        if not windows_path_is_private(path):
+            raise PermissionError(f"brain database path ACL is not private: {path}")
+    except SpoolError as exc:
+        raise PermissionError(f"cannot validate private brain database ACL: {path}") from exc
+
+
+def _database_parent_is_dedicated(parent: Path, database: Path) -> bool:
+    """Return true when an existing directory contains only this SQLite store."""
+
+    allowed = {
+        database.name,
+        f"{database.name}-journal",
+        f"{database.name}-shm",
+        f"{database.name}-wal",
+    }
+    with os.scandir(parent) as entries:
+        return all(entry.name in allowed for entry in entries)
+
+
+def _database_identity(path: Path) -> tuple[int, int, int]:
+    info = path.lstat()
+    return int(info.st_dev), int(info.st_ino), int(info.st_nlink)
+
+
+def _validate_database_sidecars(database: Path, *, harden: bool) -> None:
+    for sidecar in (Path(f"{database}-wal"), Path(f"{database}-shm")):
+        try:
+            info = sidecar.lstat()
+        except FileNotFoundError:
+            continue
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or sidecar.is_symlink()
+            or _is_reparse_point(sidecar)
+            or info.st_nlink != 1
+        ):
+            raise PermissionError(
+                f"brain database sidecar is not a safe regular file: {sidecar}"
+            )
+        if os.name != "nt":
+            if info.st_uid != os.getuid():
+                raise PermissionError(
+                    f"brain database sidecar is owned by another user: {sidecar}"
+                )
+            if harden:
+                sidecar.chmod(0o600)
+        elif harden:
+            _ensure_windows_private(sidecar)
+
+
 def _prepare_database_path(db_path: Path) -> Path:
     requested = Path(db_path).expanduser()
     if requested.is_symlink():
@@ -97,8 +170,29 @@ def _prepare_database_path(db_path: Path) -> Path:
     parent.mkdir(parents=True, exist_ok=True)
     if parent.is_symlink() or _is_reparse_point(parent) or not parent.is_dir():
         raise ValueError(f"brain database directory is not a safe directory: {parent}")
-    if os.name != "nt" and not parent_existed:
-        parent.chmod(0o700)
+    if os.name == "nt":
+        if parent_existed:
+            try:
+                _validate_windows_private(parent)
+            except PermissionError:
+                if not _database_parent_is_dedicated(parent, resolved):
+                    raise PermissionError(
+                        "brain database directory is shared and its ACL is not private; "
+                        "choose a dedicated brain directory"
+                    )
+                _ensure_windows_private(parent)
+        else:
+            _ensure_windows_private(parent)
+    else:
+        parent_info = parent.stat()
+        if parent_info.st_uid != os.getuid() or stat.S_IMODE(parent_info.st_mode) & 0o022:
+            raise PermissionError(
+                "brain database directory must be owner-controlled and not peer-writable"
+            )
+        if not parent_existed:
+            parent.chmod(0o700)
+
+    _validate_database_sidecars(resolved, harden=False)
 
     if not resolved.exists():
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
@@ -111,25 +205,31 @@ def _prepare_database_path(db_path: Path) -> Path:
         else:
             os.close(descriptor)
     try:
-        stat = resolved.lstat()
+        database_info = resolved.lstat()
     except OSError as exc:
         raise ValueError(f"brain database is not accessible: {resolved}") from exc
     if (
         not resolved.is_file()
         or resolved.is_symlink()
         or _is_reparse_point(resolved)
-        or stat.st_nlink != 1
+        or database_info.st_nlink != 1
     ):
         raise ValueError(f"brain database must be an existing unlinked regular file: {resolved}")
     if os.name != "nt":
         resolved.chmod(0o600)
+    else:
+        _ensure_windows_private(resolved)
     return resolved
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
     database = _prepare_database_path(db_path)
+    identity_before_open = _database_identity(database)
+    _validate_database_sidecars(database, harden=False)
     conn = sqlite3.connect(str(database))
     try:
+        if _database_identity(database) != identity_before_open:
+            raise ValueError("brain database changed identity while it was being opened")
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA foreign_keys = ON")
@@ -140,26 +240,36 @@ def connect(db_path: Path) -> sqlite3.Connection:
                 "brain database uses newer schema version "
                 f"{schema_version}; this runtime supports up to {SCHEMA_VERSION}"
             )
-        for attempt in range(50):
-            try:
-                conn.execute("PRAGMA journal_mode = WAL")
-                break
-            except sqlite3.OperationalError as exc:
-                if "locked" not in str(exc).lower() or attempt == 49:
-                    raise
-                time.sleep(0.02)
+        journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        if journal_mode != "wal":
+            for attempt in range(50):
+                try:
+                    conn.execute("PRAGMA journal_mode = WAL")
+                    break
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc).lower() or attempt == 49:
+                        raise
+                    time.sleep(0.02)
         conn.execute("PRAGMA synchronous = NORMAL")
         conn.execute("PRAGMA trusted_schema = OFF")
+        if _database_identity(database) != identity_before_open:
+            raise ValueError("brain database changed identity during initialization")
     except Exception:
         conn.close()
         raise
-    if os.name != "nt":
+    if os.name == "nt":
+        try:
+            _ensure_windows_private(database)
+            _validate_database_sidecars(database, harden=True)
+        except Exception:
+            conn.close()
+            raise
+    else:
         if database.stat().st_uid != os.getuid():
             conn.close()
             raise PermissionError(f"brain database is owned by another user: {database}")
-        for sidecar in (database, Path(f"{database}-wal"), Path(f"{database}-shm")):
-            if sidecar.exists() and sidecar.is_file() and not sidecar.is_symlink() and sidecar.stat().st_uid == os.getuid():
-                os.chmod(sidecar, 0o600)
+        database.chmod(0o600)
+        _validate_database_sidecars(database, harden=True)
     return conn
 
 
@@ -190,9 +300,35 @@ def init_schema(conn: sqlite3.Connection) -> None:
             f"{observed_schema_version}; this runtime supports up to {SCHEMA_VERSION}"
         )
     if observed_schema_version == SCHEMA_VERSION:
+        from .capture_schema import (
+            capture_schema_v10_patch_required,
+            upgrade_capture_schema_v10_patch,
+            validate_capture_schema_v10,
+        )
         from .context_schema import validate_context_schema_v9
 
         validate_context_schema_v9(conn)
+        if capture_schema_v10_patch_required(conn):
+            owns_transaction = not conn.in_transaction
+            migration_savepoint = "rta_capture_v10_patch"
+            try:
+                if owns_transaction:
+                    conn.execute("BEGIN IMMEDIATE")
+                else:
+                    conn.execute(f"SAVEPOINT {migration_savepoint}")
+                upgrade_capture_schema_v10_patch(conn)
+                if owns_transaction:
+                    conn.commit()
+                else:
+                    conn.execute(f"RELEASE SAVEPOINT {migration_savepoint}")
+            except BaseException:
+                if owns_transaction:
+                    conn.rollback()
+                else:
+                    conn.execute(f"ROLLBACK TO SAVEPOINT {migration_savepoint}")
+                    conn.execute(f"RELEASE SAVEPOINT {migration_savepoint}")
+                raise
+        validate_capture_schema_v10(conn)
         return
     owns_transaction = not conn.in_transaction
     migration_savepoint = "rta_schema_migration"
@@ -208,9 +344,11 @@ def init_schema(conn: sqlite3.Connection) -> None:
                 f"{starting_schema_version}; this runtime supports up to {SCHEMA_VERSION}"
             )
         if starting_schema_version == SCHEMA_VERSION:
+            from .capture_schema import validate_capture_schema_v10
             from .context_schema import validate_context_schema_v9
 
             validate_context_schema_v9(conn)
+            validate_capture_schema_v10(conn)
             if owns_transaction:
                 conn.commit()
             else:
@@ -479,6 +617,25 @@ def init_schema(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS checkpoint_capture_fences (
+            checkpoint_id INTEGER PRIMARY KEY REFERENCES checkpoints(id) ON DELETE CASCADE,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            fence_sequence INTEGER NOT NULL CHECK(fence_sequence >= 0),
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TRIGGER IF NOT EXISTS checkpoint_capture_fences_no_update
+        BEFORE UPDATE ON checkpoint_capture_fences
+        BEGIN
+            SELECT RAISE(ABORT, 'checkpoint capture fences are immutable');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS checkpoint_capture_fences_no_delete
+        BEFORE DELETE ON checkpoint_capture_fences
+        BEGIN
+            SELECT RAISE(ABORT, 'checkpoint capture fences are immutable');
+        END;
+
         CREATE TABLE IF NOT EXISTS governance_policies (
             id INTEGER PRIMARY KEY,
             project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -729,6 +886,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
             from .context_schema import migrate_context_schema_v9
 
             migrate_context_schema_v9(conn)
+        if starting_schema_version < 10:
+            from .capture_schema import migrate_capture_schema_v10
+
+            migrate_capture_schema_v10(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         if owns_transaction:
             conn.commit()
@@ -1354,6 +1515,17 @@ def save_checkpoint(
             )
         version = current_version + 1
         timestamp = now_iso()
+        capture_fence = 0
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'capture_events'"
+        ).fetchone() is not None:
+            capture_fence = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(project_sequence), 0) FROM capture_events "
+                    "WHERE project_id = ?",
+                    (project_id,),
+                ).fetchone()[0]
+            )
         cursor = conn.execute(
             """
             INSERT INTO checkpoints(
@@ -1366,6 +1538,12 @@ def save_checkpoint(
                 values["next_action"], values["prohibited_repetition"], source, trigger, session_id,
                 version, timestamp, timestamp,
             ),
+        )
+        conn.execute(
+            "INSERT INTO checkpoint_capture_fences("
+            "checkpoint_id, project_id, fence_sequence, created_at"
+            ") VALUES (?, ?, ?, ?)",
+            (int(cursor.lastrowid), project_id, capture_fence, timestamp),
         )
         if owns_transaction and _commit:
             conn.commit()

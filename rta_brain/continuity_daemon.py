@@ -2,23 +2,23 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
-import re
+import secrets
 import signal
 import subprocess
 import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .continuity import append_event, ingest_codex_session, init_continuity_schema
-from .db import ensure_project, get_project_settings, now_iso, save_checkpoint
-from .db import connect
 from .compaction import compact_session_events
+from .continuity import append_event, ingest_codex_session, init_continuity_schema
+from .db import connect, ensure_project, get_project_settings, now_iso, save_checkpoint
+from .runtime_control import process_identity
 from .watch_daemon import (
     _SPAWNED_PROCESSES,
     _clear_stale_control,
@@ -32,16 +32,75 @@ from .watch_daemon import (
     _write_stop_request,
 )
 
-
 MAX_SESSION_META_BYTES = 256_000
 MAX_SESSION_REBIND_SCAN_BYTES = 16 * 1024 * 1024
 MAX_SESSION_LINE_BYTES = 1_000_000
 DEFAULT_BACKLOG_TAIL_BYTES = 2_000_000
 
+_PUBLIC_CONTINUITY_FIELDS = frozenset({
+    "status",
+    "state",
+    "project",
+    "backend",
+    "interval_seconds",
+    "inactivity_seconds",
+    "lookback_days",
+    "backlog_tail_bytes",
+    "started_at",
+    "heartbeat_at",
+    "last_cycle_at",
+    "last_capture_at",
+    "last_checkpoint_at",
+    "cycles",
+    "sessions_discovered",
+    "sessions_pending",
+    "events_inserted",
+    "checkpoints_created",
+    "errors",
+    "consecutive_errors",
+    "process_alive",
+    "process_identity_matches",
+    "process_identity_status",
+})
+
+
+def public_continuity_status(payload: dict) -> dict:
+    """Return the bounded, path-free lifecycle view safe for agent reads."""
+
+    public = {
+        key: value
+        for key, value in payload.items()
+        if key in _PUBLIC_CONTINUITY_FIELDS
+    }
+    public.setdefault("status", "ok")
+    public.setdefault("state", "unknown")
+    public["has_error"] = bool(
+        payload.get("last_error") or int(payload.get("consecutive_errors") or 0)
+    )
+    return public
+
+
+def _continuity_process_matches(payload: dict) -> bool:
+    return bool(
+        payload.get("process_alive")
+        and _continuity_identity_status(payload) == "matched"
+    )
+
+
+def _continuity_identity_status(payload: dict) -> str:
+    status = str(payload.get("process_identity_status") or "")
+    if status in {"matched", "mismatched", "unverifiable", "not-running"}:
+        return status
+    if not payload.get("process_alive"):
+        return "not-running"
+    if payload.get("process_identity_matches"):
+        return "matched"
+    return "unverifiable"
+
 
 def continuity_paths(db_path: Path, project: str) -> dict[str, Path]:
     database = db_path.expanduser().resolve()
-    key = hashlib.sha256(f"continuity\0{database}\0{project}".encode("utf-8")).hexdigest()[:12]
+    key = hashlib.sha256(f"continuity\0{database}\0{project}".encode()).hexdigest()[:12]
     directory = database.parent / ".rta-smriti-daemons"
     stem = f"{database.stem}-continuity-{key}"
     return {
@@ -68,14 +127,27 @@ def continuity_status(
         try:
             heartbeat = datetime.fromisoformat(str(payload.get("heartbeat_at")))
             if heartbeat.tzinfo is None:
-                heartbeat = heartbeat.replace(tzinfo=timezone.utc)
-            age = (datetime.now(timezone.utc) - heartbeat.astimezone(timezone.utc)).total_seconds()
+                heartbeat = heartbeat.replace(tzinfo=UTC)
+            age = (datetime.now(UTC) - heartbeat.astimezone(UTC)).total_seconds()
             heartbeat_fresh = age <= max(15.0, float(payload.get("interval_seconds", 2.0)) * 4)
         except (TypeError, ValueError):
             heartbeat_fresh = False
         process_alive = _process_alive(payload.get("pid"))
         payload["process_alive"] = process_alive
-        if not process_alive or not heartbeat_fresh:
+        expected_identity = str(payload.get("process_identity") or "")
+        actual_identity = process_identity(payload.get("pid")) if process_alive else None
+        if not process_alive:
+            identity_status = "not-running"
+        elif not expected_identity or not actual_identity:
+            identity_status = "unverifiable"
+        elif secrets.compare_digest(expected_identity, str(actual_identity)):
+            identity_status = "matched"
+        else:
+            identity_status = "mismatched"
+        identity_matches = identity_status == "matched"
+        payload["process_identity_matches"] = identity_matches
+        payload["process_identity_status"] = identity_status
+        if not process_alive or not identity_matches or not heartbeat_fresh:
             state = "stale"
     if include_binding_diagnostics and payload.get("root") and payload.get("sessions_root"):
         payload["binding_diagnostics"] = continuity_binding_diagnostics(
@@ -148,7 +220,14 @@ def start_continuity(
     if current["state"] in {"starting", "running", "stopping"}:
         return current
     if current["state"] == "stale" and current.get("process_alive"):
-        raise RuntimeError("existing continuity process is alive but unresponsive; stop it before restarting")
+        identity_status = _continuity_identity_status(current)
+        if identity_status == "matched":
+            raise RuntimeError("existing continuity process is alive but unresponsive; stop it before restarting")
+        if identity_status == "unverifiable":
+            raise RuntimeError(
+                "existing continuity process is alive but its identity could not be verified; "
+                "refusing to start a duplicate worker"
+            )
     _clear_stale_control(paths)
     token = uuid.uuid4().hex
     token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
@@ -194,15 +273,37 @@ def start_continuity(
 def stop_continuity(db_path: Path, project: str, timeout: float = 10.0) -> dict:
     paths = continuity_paths(db_path, project)
     state = continuity_status(db_path, project, include_binding_diagnostics=False)
-    if state["state"] in {"stopped", "error"} or (state["state"] == "stale" and not state.get("process_alive")):
+    if (
+        state["state"] == "stale"
+        and state.get("process_alive")
+        and _continuity_identity_status(state) == "unverifiable"
+    ):
+        raise RuntimeError(
+            "continuity process is alive but its identity could not be verified; "
+            "refusing to clear or signal an unverified process"
+        )
+    if state["state"] in {"stopped", "error"} or (
+        state["state"] == "stale"
+        and _continuity_identity_status(state) in {"mismatched", "not-running"}
+    ):
         _clear_stale_control(paths)
         return {**state, "state": "stopped"}
     _write_stop_request(paths["stop"])
     deadline = time.monotonic() + max(0.1, float(timeout))
     while time.monotonic() < deadline:
         state = continuity_status(db_path, project, include_binding_diagnostics=False)
+        if (
+            state["state"] == "stale"
+            and state.get("process_alive")
+            and _continuity_identity_status(state) == "unverifiable"
+        ):
+            raise RuntimeError(
+                "continuity process is alive but its identity could not be verified; "
+                "refusing to clear an unverified process"
+            )
         if state["state"] == "stopped" or (
-            state["state"] in {"stale", "error"} and not state.get("process_alive")
+            state["state"] in {"stale", "error"}
+            and _continuity_identity_status(state) in {"mismatched", "not-running"}
         ):
             process = _SPAWNED_PROCESSES.pop(str(paths["state"]), None)
             if process is not None:
@@ -336,7 +437,7 @@ def _recent_session_candidates(
         candidates = sessions.rglob("*.jsonl")
     else:
         candidate_set = set(sessions.glob("*.jsonl"))
-        current_day = datetime.fromtimestamp(current_time, timezone.utc).date()
+        current_day = datetime.fromtimestamp(current_time, UTC).date()
         for offset in range(int(float(lookback_days)) + 2):
             day = current_day - timedelta(days=offset)
             candidate_set.update((sessions / f"{day.year:04d}" / f"{day.month:02d}" / f"{day.day:02d}").rglob("*.jsonl"))
@@ -446,7 +547,10 @@ def _text_content(value) -> str:
 
 def _is_codex_control_message(text: str) -> bool:
     normalized = text.strip()
-    return bool(re.fullmatch(r"<turn_aborted>.*?</turn_aborted>", normalized, flags=re.DOTALL))
+    # Transcript privacy redaction may replace the closing XML-like marker.
+    # The reserved leading marker is sufficient to keep control data out of
+    # the user-authored checkpoint objective.
+    return normalized.startswith("<turn_aborted>")
 
 
 def _checkpoint_for_session(
@@ -535,7 +639,7 @@ def _checkpoint_for_session(
                 _project_id=project_id,
             )
             gap += f" Local-model summary (unverified): {compaction['summary'][:4_000]}"
-        except Exception:
+        except Exception:  # noqa: BLE001 - optional compaction must not erase deterministic state
             gap += " Local-model compaction was unavailable; the deterministic checkpoint was preserved."
     try:
         result = save_checkpoint(
@@ -622,7 +726,7 @@ def capture_cycle(
                         trigger_override=checkpoint_trigger,
                     ) is not None
                 )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - isolate one malformed session from the batch
             conn.rollback()
             errors.append({"session_id": item["session_id"], "type": exc.__class__.__name__, "message": str(exc)})
     return {
@@ -655,6 +759,9 @@ def run_continuity_worker(
     token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
     if not lock_file.is_file() or lock_file.read_text(encoding="ascii", errors="ignore").strip() != token_hash:
         raise RuntimeError("continuity launch lock does not match")
+    worker_identity = process_identity(os.getpid())
+    if not worker_identity:
+        raise RuntimeError("continuity worker process identity is unavailable")
     stop_event = threading.Event()
     counters = {"cycles": 0, "sessions_discovered": 0, "sessions_pending": 0, "events_inserted": 0, "checkpoints_created": 0, "errors": 0, "consecutive_errors": 0}
     state = {
@@ -663,6 +770,7 @@ def run_continuity_worker(
         "root": str(project_root.expanduser().resolve()),
         "sessions_root": str(sessions_root.expanduser().resolve()),
         "pid": os.getpid(),
+        "process_identity": worker_identity,
         "token_hash": token_hash,
         "state": "starting",
         "backend": "polling",
@@ -727,7 +835,7 @@ def run_continuity_worker(
                 if result["checkpoints_created"]:
                     state["last_checkpoint_at"] = state["last_cycle_at"]
                 state["last_error"] = result["errors"][-1]["message"] if result["errors"] else None
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - daemon records and survives cycle failures
                 counters["errors"] += 1
                 counters["consecutive_errors"] += 1
                 state["last_error"] = f"{exc.__class__.__name__}: {exc}"
@@ -754,14 +862,14 @@ def run_continuity_worker(
             if final_result["checkpoints_created"]:
                 state["last_checkpoint_at"] = now_iso()
             state.update(counters)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - final checkpoint failure is persisted in state
             counters["errors"] += 1
             state["last_error"] = f"{exc.__class__.__name__}: {exc}"
             state.update(counters)
         state["state"] = "stopping"
         persist_state()
         return 0
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - worker boundary must persist terminal errors
         heartbeat_stop.set()
         state["state"] = "error"
         state["last_error"] = f"{exc.__class__.__name__}: {exc}"

@@ -14,9 +14,12 @@ import tomllib
 import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
+from rta_brain.temporal_validators import stable_file_bytes
+
 
 
 ROOT = Path(__file__).resolve().parents[1]
+MAX_SBOM_BYTES = 10 * 1024 * 1024
 
 
 class _StaticAssetParser(HTMLParser):
@@ -93,7 +96,25 @@ def assert_wheel_static_assets(wheel: Path) -> None:
         raise RuntimeError(f"wheel dashboard assets do not match index.html; missing={missing}, stale={stale}")
 
 
-def stage_artifacts(output: Path, include_wheel: bool) -> dict:
+def stage_sbom(sbom: Path, output: Path, *, version: str) -> Path:
+    source = sbom.expanduser()
+    data = stable_file_bytes(source, maximum_bytes=MAX_SBOM_BYTES)
+    if not data:
+        raise ValueError("SBOM must not be empty")
+    try:
+        payload = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("SBOM must be valid UTF-8 JSON") from exc
+    if not isinstance(payload, dict) or payload.get("bomFormat") != "CycloneDX":
+        raise ValueError("SBOM must be a CycloneDX JSON object")
+    target = output / (
+        f"rta-smriti-brain-{version}-{platform_label()}-{architecture_label()}.cdx.json"
+    )
+    target.write_bytes(data)
+    return target
+
+
+def stage_artifacts(output: Path, include_wheel: bool, sbom: Path | None = None) -> dict:
     output = output.resolve()
     if output.exists():
         raise FileExistsError(f"artifact output already exists: {output}")
@@ -123,6 +144,9 @@ def stage_artifacts(output: Path, include_wheel: bool) -> dict:
             raise RuntimeError(f"expected exactly one wheel, found {len(wheels)}")
         assert_wheel_static_assets(wheels[0])
 
+    if sbom is not None:
+        stage_sbom(sbom, output, version=version)
+
     artifacts = sorted(path for path in output.iterdir() if path.is_file())
     manifest = output / "SHA256SUMS.txt"
     checksums = {path.name: file_sha256(path) for path in artifacts}
@@ -148,8 +172,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "release-artifacts")
     parser.add_argument("--include-wheel", action="store_true")
+    parser.add_argument("--sbom", type=Path, help="Validated CycloneDX JSON SBOM to include and checksum")
     args = parser.parse_args()
-    print(json.dumps(stage_artifacts(args.output, args.include_wheel), indent=2, sort_keys=True))
+    print(json.dumps(stage_artifacts(args.output, args.include_wheel, args.sbom), indent=2, sort_keys=True))
     return 0
 
 

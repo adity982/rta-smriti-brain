@@ -292,6 +292,143 @@ class ContextCandidateTests(unittest.TestCase):
             {key: value for key, value in third_ids.items() if key != changed_source},
         )
 
+    def test_capture_candidate_is_checkpoint_fenced_bounded_and_deterministic(self):
+        from rta_brain.capture import append_event as append_capture_event
+        from rta_brain.capture import register_policy, register_source
+        from rta_brain.capture_types import (
+            CapturePolicy,
+            CaptureSource,
+            NormalizedEvent,
+        )
+        from rta_brain.context_candidates import adapt_context_candidates
+
+        with tempfile.TemporaryDirectory() as tmp:
+            conn, _project_id, _source_id = self._fixture(tmp)
+            root = Path(tmp) / "repo"
+            policy = CapturePolicy.continuity()
+            register_policy(
+                conn, project="demo", active_root=root, policy_id="continuity",
+                policy_version=1, policy=policy,
+            )
+            source = CaptureSource(
+                source_id="codex-local", adapter="codex-jsonl", adapter_version="1",
+                installation_scope="transcript",
+                config_fingerprint=hashlib.sha256(b"context-capture").hexdigest(),
+            )
+            register_source(
+                conn, project="demo", active_root=root, source=source,
+                policy_digest=policy.digest,
+            )
+
+            def append(cursor, text):
+                return append_capture_event(
+                    conn, project="demo", active_root=root, source_id=source.source_id,
+                    event=NormalizedEvent(
+                        event_name="agent.message.v1", session_id="session-a",
+                        source_cursor=str(cursor), observed_at=db.now_iso(),
+                        occurred_at=db.now_iso(), attributes={"text": text},
+                        actor_type="agent", actor_id="agent-local",
+                    ),
+                    idempotency_key=f"capture:{cursor}", cursor_kind="sequence",
+                    original_bytes=len(text.encode("utf-8")),
+                )
+
+            before_checkpoint = append(1, "before accepted checkpoint")
+            db.save_checkpoint(
+                conn, "demo", objective="Resume after the accepted fence.",
+                verified_evidence="The earlier event is already summarized.",
+                remaining_gaps="Inspect subsequent capture.", next_action="Continue.",
+                prohibited_repetition="Do not replay completed work.",
+                source="operator", trigger="manual", expected_version=3,
+            )
+            append_capture_event(
+                conn, project="demo", active_root=root, source_id=source.source_id,
+                event=NormalizedEvent(
+                    event_name="checkpoint.created.v1", session_id="session-a",
+                    source_cursor="2", observed_at=db.now_iso(), occurred_at=db.now_iso(),
+                    attributes={}, actor_type="system", actor_id="rta-smriti",
+                ),
+                idempotency_key="capture:checkpoint", cursor_kind="sequence",
+                original_bytes=0,
+            )
+            for cursor in range(3, 76):
+                append(cursor, f"after checkpoint event {cursor}")
+            append_capture_event(
+                conn, project="demo", active_root=root, source_id=source.source_id,
+                event=NormalizedEvent(
+                    event_name="checkpoint.created.v1", session_id="session-a",
+                    source_cursor="76", observed_at=db.now_iso(), occurred_at=db.now_iso(),
+                    attributes={}, actor_type="agent", actor_id="untrusted-adapter",
+                ),
+                idempotency_key="capture:forged-checkpoint", cursor_kind="sequence",
+                original_bytes=0,
+            )
+
+            with (
+                patch(
+                    "rta_brain.capture_adapters.plan_adapter_installation",
+                    side_effect=AssertionError("compiler invoked an adapter"),
+                ),
+                patch("subprocess.run", side_effect=AssertionError("compiler invoked a tool")),
+            ):
+                first = adapt_context_candidates(conn, project="demo")
+                second = adapt_context_candidates(conn, project="demo")
+            conn.close()
+
+        capture_rows = [
+            row for row in first["candidates"] if row["source_type"] == "capture"
+        ]
+        self.assertTrue(capture_rows)
+        rendered = "\n".join(row["minimum_excerpt"] or "" for row in capture_rows)
+        self.assertNotIn("before accepted checkpoint", rendered)
+        self.assertIn("after checkpoint event 75", rendered)
+        self.assertEqual(
+            first["capture_coverage"]["fence_sequence"],
+            before_checkpoint["project_sequence"],
+        )
+        self.assertEqual(first["capture_coverage"], second["capture_coverage"])
+        self.assertLessEqual(first["capture_coverage"]["selected_events"], 64)
+        self.assertTrue(first["capture_coverage"]["truncated"])
+        self.assertEqual(
+            [row["candidate_id"] for row in capture_rows],
+            [
+                row["candidate_id"] for row in second["candidates"]
+                if row["source_type"] == "capture"
+            ],
+        )
+
+    def test_capture_interruption_snapshot_is_scoped_to_its_privacy_group(self):
+        from rta_brain.context_candidates import _capture_interruption_snapshot
+
+        public_event = {
+            "source_id": "public-source",
+            "external_session_id": "public-session",
+            "event_name": "turn.completed.v1",
+            "gap_state": "none",
+            "span_id": None,
+            "project_sequence": 4,
+            "event_hash": "a" * 64,
+        }
+        restricted_event = {
+            "source_id": "restricted-source",
+            "external_session_id": "restricted-session",
+            "event_name": "turn.interrupted.v1",
+            "gap_state": "detected",
+            "span_id": None,
+            "project_sequence": 5,
+            "event_hash": "b" * 64,
+        }
+
+        snapshot = _capture_interruption_snapshot([public_event])
+
+        self.assertEqual(snapshot["status"], "clear")
+        self.assertEqual(snapshot["latest_sequence"], 4)
+        self.assertEqual(snapshot["latest_event_hash"], "a" * 64)
+        self.assertNotEqual(
+            snapshot,
+            _capture_interruption_snapshot([public_event, restricted_event]),
+        )
+
     def test_repository_candidate_is_excluded_when_live_content_drifted_with_same_stat(self):
         from rta_brain.context_candidates import adapt_context_candidates
 

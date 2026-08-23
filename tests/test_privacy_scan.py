@@ -36,21 +36,55 @@ class PrivacyScanTests(unittest.TestCase):
                 [sys.executable, str(Path(__file__).parents[1] / "scripts" / "privacy_scan.py"), "--root", str(root)],
                 capture_output=True,
                 text=True,
+                check=False,
             )
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_shared_detector_covers_release_secret_and_generic_path_patterns(self):
         values = {
             "aws-access-key": "AK" + "IA" + "Q" * 16,
+            "google-api-key": "AI" + "za" + "Q" * 35,
+            "stripe-secret-key": "sk_" + "live_" + "Q" * 24,
             "private-key": "-----BEGIN " + "OPENSSH PRIVATE KEY-----\nfixture",
             "jwt": ".".join(("eyJ" + "a" * 12, "b" * 12, "c" * 12)),
             "unc-path": "\\\\server\\share\\private\\file.txt",
             "windows-absolute-path": "D:" + "\\private\\workspace\\file.txt",
-            "posix-absolute-path": "/" + "/".join(("srv", "private", "workspace", "file.txt")),
+            # Keep this split so the repository privacy scan does not mistake
+            # its own synthetic absolute-path fixture for private operator data.
+            "posix-absolute-path": "/" + "/".join(  # noqa: FLY002
+                ("srv", "private", "workspace", "file.txt")
+            ),
         }
         findings = find_sensitive_text("\n".join(values.values()))
         labels = {finding.label for finding in findings}
         self.assertTrue(set(values).issubset(labels))
+
+    def test_shared_detector_covers_root_level_absolute_paths(self):
+        values = {
+            "windows-absolute-path": "C:" + "\\PrivateRoot",
+            "posix-absolute-path": "/secret.txt",
+        }
+        findings = find_sensitive_text("\n".join(values.values()))
+        labels = {finding.label for finding in findings}
+        self.assertTrue(set(values).issubset(labels))
+        for value in values.values():
+            redacted, count = redact_sensitive_text(value)
+            self.assertGreaterEqual(count, 1)
+            self.assertNotIn(value, redacted)
+
+    def test_free_text_provider_credentials_are_redacted_without_sensitive_field_names(self):
+        credentials = (
+            "AI" + "za" + "A" * 35,
+            "sk_" + "live_" + "B" * 24,
+        )
+
+        for credential in credentials:
+            value = f"Use the provider credential {credential} for the local request."
+            findings = find_sensitive_text(value)
+            redacted, count = redact_sensitive_text(value)
+            self.assertTrue(findings)
+            self.assertGreaterEqual(count, 1)
+            self.assertNotIn(credential, redacted)
 
     def test_detects_user_path_in_command_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -246,6 +280,24 @@ class PrivacyScanTests(unittest.TestCase):
         self.assertEqual(redacted, "prefix [REDACTED]")
         self.assertNotIn("R&D", redacted)
         self.assertNotIn("private", redacted)
+
+    def test_plain_text_bypasses_expensive_sensitive_regexes(self):
+        class UnexpectedPattern:
+            def finditer(self, _value):
+                raise AssertionError("plain text should not reach sensitive regexes")
+
+            def subn(self, _replacement, _value):
+                raise AssertionError("plain text should not reach sensitive regexes")
+
+        with patch(
+            "rta_brain.privacy.SENSITIVE_TEXT_PATTERNS",
+            {"unexpected": UnexpectedPattern()},
+        ):
+            self.assertEqual(find_sensitive_text("ordinary event summary"), [])
+            self.assertEqual(
+                redact_sensitive_text("ordinary event summary"),
+                ("ordinary event summary", 0),
+            )
 
     def test_scan_wide_file_budget_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:

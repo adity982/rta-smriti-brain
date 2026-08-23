@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import socket
 import subprocess
@@ -23,6 +24,8 @@ from rta_brain.console_daemon import (
     stop_console,
 )
 from rta_brain.db import connect, ingest_repo, init_project, remember
+from rta_brain.capture import append_event, register_policy, register_source
+from rta_brain.capture_types import CapturePolicy, CaptureSource, NormalizedEvent
 from rta_brain.runtime_control import (
     SpawnedWorker,
     detach_current_worker_session,
@@ -31,6 +34,7 @@ from rta_brain.runtime_control import (
     process_alive,
     read_json,
     spawn_detached_worker,
+    terminate_worker,
     write_json,
 )
 
@@ -38,6 +42,34 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RuntimeControlTests(unittest.TestCase):
+    def test_startup_timeout_terminates_kills_and_reaps_a_stuck_worker(self):
+        process = MagicMock()
+        process.wait.side_effect = [
+            subprocess.TimeoutExpired(["worker"], 0.1),
+            subprocess.TimeoutExpired(["worker"], 0.1),
+            1,
+        ]
+
+        terminate_worker(process, timeout=0.1)
+
+        process.terminate.assert_called_once_with()
+        process.kill.assert_called_once_with()
+        self.assertEqual(process.wait.call_count, 3)
+
+    def test_startup_timeout_reaps_a_worker_that_exits_before_termination(self):
+        process = MagicMock()
+        process.wait.side_effect = [
+            subprocess.TimeoutExpired(["worker"], 0.1),
+            0,
+        ]
+        process.terminate.side_effect = ProcessLookupError()
+
+        terminate_worker(process, timeout=0.1)
+
+        process.terminate.assert_called_once_with()
+        process.kill.assert_not_called()
+        self.assertEqual(process.wait.call_count, 2)
+
     def test_source_console_worker_uses_the_minimal_entry_point(self):
         command = _worker_command(
             ROOT,
@@ -131,6 +163,32 @@ class RuntimeControlTests(unittest.TestCase):
         )
         close.assert_called_once_with(71)
 
+    def test_frozen_worker_uses_an_independent_pyinstaller_environment(self):
+        log_stream = MagicMock()
+        with (
+            patch("rta_brain.runtime_control.sys.platform", "win32"),
+            patch("rta_brain.runtime_control.sys.frozen", True, create=True),
+            patch(
+                "rta_brain.runtime_control.sys.executable",
+                str(Path("release") / "rta-brain.exe"),
+            ),
+            patch("rta_brain.runtime_control.subprocess.Popen") as popen,
+        ):
+            spawn_detached_worker(
+                ["rta-brain.exe", "_capture-worker"],
+                log_stream,
+                {"SAFE": "1"},
+                Path("worker-root"),
+            )
+
+        child_env = popen.call_args.kwargs["env"]
+        self.assertEqual(child_env["SAFE"], "1")
+        self.assertEqual(child_env["PYINSTALLER_RESET_ENVIRONMENT"], "1")
+        self.assertEqual(
+            popen.call_args.kwargs["cwd"],
+            (Path.cwd() / "release").resolve(),
+        )
+
     def test_spawned_worker_reports_exit_and_forwards_signals(self):
         process = SpawnedWorker(1234)
         with (
@@ -168,6 +226,32 @@ class ManagedConsoleTests(unittest.TestCase):
         self.assertEqual(status["state"], "stopped")
         self.assertNotIn("token", json.dumps(status).lower())
         self.assertNotIn("#token=", json.dumps(status))
+
+    def test_stop_waits_for_the_identified_worker_after_stopped_is_persisted(self):
+        paths = console_paths(self.brain_dir)
+        write_json(
+            paths["state"],
+            {
+                "state": "stopped",
+                "pid": 4242,
+                "process_identity": "worker-birth-identity",
+            },
+        )
+        with (
+            patch(
+                "rta_brain.console_daemon.process_alive",
+                side_effect=(True, False),
+            ) as alive,
+            patch(
+                "rta_brain.console_daemon.process_identity",
+                return_value="worker-birth-identity",
+            ) as identity,
+        ):
+            stopped = stop_console(self.brain_dir, timeout=1.0)
+
+        self.assertEqual(stopped["state"], "stopped")
+        self.assertEqual(alive.call_count, 2)
+        identity.assert_called_once_with(4242)
 
     def test_temporal_truth_operator_api_supports_overview_history_and_mutation(self):
         root = Path(self.tempdir.name) / "repo"
@@ -421,6 +505,202 @@ class ManagedConsoleTests(unittest.TestCase):
             "reason": "Release policy replaced.",
         })
         self.assertEqual(retired["policy"]["status"], "retired")
+
+    def test_capture_operator_api_covers_lifecycle_replay_privacy_and_deletion(self):
+        root = Path(self.tempdir.name) / "capture-repo"
+        root.mkdir()
+        database = self.brain_dir / "capture.sqlite"
+        conn = connect(database)
+        policy = CapturePolicy.continuity()
+        source = CaptureSource(
+            source_id="codex-local",
+            adapter="codex-jsonl",
+            adapter_version="1",
+            installation_scope="transcript",
+            config_fingerprint=hashlib.sha256(b"operator-capture-source").hexdigest(),
+        )
+        try:
+            init_project(conn, "capture-demo", str(root))
+            register_policy(
+                conn,
+                project="capture-demo",
+                active_root=root,
+                policy_id="continuity",
+                policy_version=1,
+                policy=policy,
+            )
+            register_source(
+                conn,
+                project="capture-demo",
+                active_root=root,
+                source=source,
+                policy_digest=policy.digest,
+            )
+            event = append_event(
+                conn,
+                project="capture-demo",
+                active_root=root,
+                source_id=source.source_id,
+                event=NormalizedEvent(
+                    event_name="turn.interrupted.v1",
+                    session_id="session-a",
+                    source_cursor="1",
+                    observed_at="2026-08-22T09:00:01+00:00",
+                    occurred_at="2026-08-22T09:00:00+00:00",
+                    attributes={"reason": "restart", "summary": "Resume the verified task."},
+                    actor_type="agent",
+                    actor_id="operator-fixture",
+                ),
+                idempotency_key="operator:event:1",
+                cursor_kind="sequence",
+                original_bytes=100,
+                redaction_count=0,
+                truncation_count=0,
+            )
+        finally:
+            conn.close()
+
+        started = start_console(
+            ROOT, self.brain_dir, port=0, open_browser=False, startup_timeout=10.0
+        )
+        token = started["url"].split("#token=", 1)[1]
+        base_url = f"http://127.0.0.1:{started['port']}"
+        headers = {"X-Rta-Smriti-Token": token, "Content-Type": "application/json"}
+        project_ref = {"db_path": str(database), "project": "capture-demo"}
+
+        def get(mode, **params):
+            query = urllib.parse.urlencode({**project_ref, "mode": mode, **params})
+            request = urllib.request.Request(
+                f"{base_url}/api/capture?{query}",
+                headers={"X-Rta-Smriti-Token": token},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        def post(action, **payload):
+            request = urllib.request.Request(
+                f"{base_url}/api/capture",
+                data=json.dumps({**project_ref, "action": action, **payload}).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        overview = get("overview")
+        self.assertEqual(overview["sources"][0]["source_id"], "codex-local")
+        self.assertEqual(overview["policies"][0]["profile"], "continuity")
+        self.assertNotIn(str(root), json.dumps(overview))
+        self.assertEqual(get("sources")["sources"][0]["state"], "active")
+        self.assertEqual(get("policies")["policies"][0]["policy_digest"], policy.digest)
+        timeline = get("timeline", limit=20)
+        self.assertEqual(timeline["mode"], "chronological")
+        self.assertEqual(timeline["interruption_snapshot"]["status"], "interrupted")
+        replay = get("replay", replay_mode="causal", limit=20)
+        self.assertEqual(replay["mode"], "causal")
+        self.assertFalse(replay["executes_actions"])
+        diagnostics = get("diagnostics")
+        self.assertEqual(diagnostics["events"]["count"], 1)
+        self.assertTrue(diagnostics["canonical_root_verified"])
+
+        preview = post(
+            "policy-preview",
+            profile="metadata-only",
+            privacy_ceiling="public",
+            retention_seconds=3600,
+        )
+        self.assertEqual(preview["policy"]["profile"], "metadata-only")
+        self.assertEqual(len(preview["policy_digest"]), 64)
+        self.assertFalse(preview["writes_state"])
+
+        paused = post("source-state", source_id="codex-local", state="paused")
+        self.assertEqual(paused["state"], "paused")
+        resumed = post("source-state", source_id="codex-local", state="active")
+        self.assertEqual(resumed["state"], "active")
+        bound = post(
+            "bind-session",
+            source_id="codex-local",
+            external_session_id="session-b",
+            cursor_kind="sequence",
+            start_cursor="1",
+        )
+        self.assertEqual(bound["status"], "active")
+        closed = post("close-session", binding_id=bound["binding_id"])
+        self.assertEqual(closed["status"], "closed")
+
+        retention_preview = post(
+            "retention-preview",
+            policy_digest=policy.digest,
+            run_id="dashboard-retention-1",
+            batch_size=100,
+        )
+        self.assertEqual(retention_preview["operation"], "preview")
+        retained = post(
+            "retention-confirm",
+            policy_digest=policy.digest,
+            run_id="dashboard-retention-1",
+            batch_size=100,
+            confirmation_token=retention_preview["confirmation_token"],
+        )
+        self.assertEqual(retained["state"], "complete")
+        redaction = post("redaction-preview", privacy_ceiling="public", limit=20)
+        self.assertTrue(redaction["redaction_verified"])
+        self.assertFalse(redaction["payloads_included"])
+        deletion_preview = post(
+            "deletion-preview",
+            scope="event-content",
+            scope_token=event["event_id"],
+            reason_class="operator-request",
+            policy_digest=policy.digest,
+        )
+        self.assertEqual(deletion_preview["operation"], "preview")
+        invalid_compaction = urllib.request.Request(
+            f"{base_url}/api/capture",
+            data=json.dumps({
+                **project_ref,
+                "action": "deletion-confirm",
+                "scope": "event-content",
+                "scope_token": event["event_id"],
+                "reason_class": "operator-request",
+                "policy_digest": policy.digest,
+                "confirmation_token": deletion_preview["confirmation_token"],
+                "secure_compact": "false",
+            }).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with self.assertRaises(urllib.error.HTTPError) as rejected:
+            urllib.request.urlopen(invalid_compaction, timeout=5)
+        self.assertEqual(rejected.exception.code, 400)
+        self.assertEqual(
+            json.loads(rejected.exception.read().decode("utf-8"))["error"]["type"],
+            "TypeError",
+        )
+        rejected.exception.close()
+        deleted = post(
+            "deletion-confirm",
+            scope="event-content",
+            scope_token=event["event_id"],
+            reason_class="operator-request",
+            policy_digest=policy.digest,
+            confirmation_token=deletion_preview["confirmation_token"],
+        )
+        self.assertEqual(deleted["operation"], "logical-delete")
+        exported = post("export", privacy_ceiling="internal", limit=20)
+        self.assertTrue(exported["redaction_verified"])
+        self.assertEqual(exported["events"][0]["content_state"], "logically-deleted")
+
+        running = post("daemon-start", interval=0.1, batch_size=20)
+        self.assertEqual(running["state"], "running")
+        try:
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                parallel = list(executor.map(get, ("overview", "replay", "diagnostics")))
+            self.assertEqual(parallel[0]["status"], "ok")
+            self.assertFalse(parallel[1]["executes_actions"])
+            self.assertEqual(parallel[2]["status"], "ok")
+        finally:
+            stopped = post("daemon-stop")
+            self.assertEqual(stopped["state"], "stopped")
 
     def test_context_compiler_api_keeps_authority_material_off_the_wire(self):
         root = Path(self.tempdir.name) / "context-repo"

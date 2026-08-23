@@ -24,6 +24,7 @@ from .runtime_control import (
     open_log,
     prepare_control_dir,
     process_alive,
+    process_identity,
     read_json,
     read_secret,
     spawn_detached_worker,
@@ -91,6 +92,15 @@ def _runtime_identity_matches(paths: dict[str, Path], state: dict) -> bool:
         return response.status == 200 and payload.get("instance_id") == instance_id
     except (OSError, ValueError, json.JSONDecodeError, urllib.error.URLError):
         return False
+
+
+def _worker_process_matches(state: dict) -> bool:
+    pid = state.get("pid")
+    expected = str(state.get("process_identity") or "")
+    if not pid or not expected or not process_alive(pid):
+        return False
+    actual = process_identity(pid)
+    return bool(actual and secrets.compare_digest(str(actual), expected))
 
 
 def _worker_command(
@@ -286,15 +296,24 @@ def open_console(brain_dir: Path, *, launch_browser: bool = True) -> dict:
 def stop_console(brain_dir: Path, timeout: float = 10.0) -> dict:
     paths = console_paths(brain_dir)
     state = console_status(brain_dir)
+    deadline = time.monotonic() + max(0.1, float(timeout))
     if state["state"] in {"stopped", "stale", "error"}:
+        while _worker_process_matches(state):
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"console process did not exit within {timeout:g} seconds"
+                )
+            time.sleep(0.05)
         clear_control_files(paths, ("state", "stop", "lock", "token"))
         return {**state, "state": "stopped"}
     prepare_control_dir(paths["directory"], label="console")
     write_stop_request(paths["stop"], label="console")
-    deadline = time.monotonic() + max(0.1, float(timeout))
     while time.monotonic() < deadline:
         state = console_status(brain_dir)
         if state["state"] in {"stopped", "stale", "error"}:
+            if _worker_process_matches(state):
+                time.sleep(0.05)
+                continue
             process = _SPAWNED_PROCESSES.pop(str(paths["state"]), None)
             if process is not None:
                 try:
@@ -330,6 +349,9 @@ def run_console_worker(
     instance_id = os.environ.get("RTA_SMIRTI_CONSOLE_INSTANCE_ID", "")
     if not launch_secret or not capability or not instance_id:
         raise RuntimeError("console launch credentials are missing")
+    worker_identity = process_identity(os.getpid())
+    if not worker_identity:
+        raise RuntimeError("console worker process identity is unavailable")
     fingerprint = hashlib.sha256(launch_secret.encode("ascii")).hexdigest()
     if not is_safe_regular_file(lock_file):
         raise RuntimeError("console launch lock is missing or linked")
@@ -339,6 +361,7 @@ def run_console_worker(
     state = {
         "brain_dir": str(brain_dir.expanduser().resolve()),
         "pid": os.getpid(),
+        "process_identity": worker_identity,
         "instance_id": instance_id,
         "launch_fingerprint": fingerprint,
         "state": "starting",

@@ -6,8 +6,8 @@ import hashlib
 import os
 import sys
 import tempfile
+from html import escape
 from pathlib import Path
-from xml.sax.saxutils import escape
 
 from .runtime_control import is_safe_regular_file
 
@@ -54,7 +54,7 @@ def _entry_path(
 
 
 def _launch_parts(tool_root: Path, brain_dir: Path) -> list[str]:
-    suffix = ["console", "start", "--brain-dir", str(brain_dir.expanduser().resolve()), "--no-open"]
+    suffix = ["supervisor", "start", "--brain-dir", str(brain_dir.expanduser().resolve()), "--no-open"]
     if getattr(sys, "frozen", False):
         return [str(Path(sys.executable).resolve()), *suffix]
     source_cli = tool_root.resolve() / "rta-brain.py"

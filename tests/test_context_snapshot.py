@@ -27,6 +27,9 @@ CONTRACT_DIGEST = "b" * 64
 
 
 class ContextSnapshotTests(unittest.TestCase):
+    def setUp(self):
+        self._issued_at = int(time.time() * 1_000) // 60_000 * 60_000
+
     def _profile(self, *, privacy="internal"):
         return validate_agent_profile({
             "schema_version": "rta-smriti.agent-profile/v1",
@@ -114,7 +117,6 @@ class ContextSnapshotTests(unittest.TestCase):
             actor_id="owner",
         )
         authority_secret = b"snapshot-authority-secret-32bytes!"
-        issued_at = int(time.time() * 1_000) // 60_000 * 60_000
         capability = issue_task_contract_capability(
             connection,
             project=kwargs["project"],
@@ -127,7 +129,7 @@ class ContextSnapshotTests(unittest.TestCase):
             scopes=["compile:context"],
             ttl_seconds=3_600,
             issued_by_id="owner",
-            now_epoch_ms=issued_at,
+            now_epoch_ms=self._issued_at,
         )
         return run_under_compilation_snapshot(
             connection,
@@ -325,6 +327,135 @@ class ContextSnapshotTests(unittest.TestCase):
         self.assertIn("dirty_digest", snapshot["git"])
         self.assertIn("truth", snapshot["fences"])
 
+    def test_capture_digest_and_coverage_are_stable_and_bind_new_activity(self):
+        from rta_brain.capture import append_event as append_capture_event
+        from rta_brain.capture import register_policy, register_source
+        from rta_brain.capture_types import (
+            CapturePolicy,
+            CaptureSource,
+            NormalizedEvent,
+        )
+        from rta_brain.context_snapshot import capture_compilation_snapshot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            conn, _database, root, _project_id = self._fixture(tmp)
+            policy = CapturePolicy.continuity()
+            register_policy(
+                conn, project="demo", active_root=root, policy_id="continuity",
+                policy_version=1, policy=policy,
+            )
+            source = CaptureSource(
+                source_id="codex-local", adapter="codex-jsonl", adapter_version="1",
+                installation_scope="transcript",
+                config_fingerprint="c" * 64,
+            )
+            register_source(
+                conn, project="demo", active_root=root, source=source,
+                policy_digest=policy.digest,
+            )
+            first = capture_compilation_snapshot(
+                conn, project="demo", active_root=root,
+                profile_digest=PROFILE_DIGEST, contract_digest=CONTRACT_DIGEST,
+            )
+            repeated = capture_compilation_snapshot(
+                conn, project="demo", active_root=root,
+                profile_digest=PROFILE_DIGEST, contract_digest=CONTRACT_DIGEST,
+            )
+            append_capture_event(
+                conn, project="demo", active_root=root, source_id=source.source_id,
+                event=NormalizedEvent(
+                    event_name="turn.interrupted.v1", session_id="session-a",
+                    source_cursor="1", observed_at=db.now_iso(), occurred_at=db.now_iso(),
+                    attributes={"reason": "restart", "summary": "resume Task 9"},
+                    actor_type="agent", actor_id="agent-local",
+                ),
+                idempotency_key="capture:snapshot", cursor_kind="sequence",
+                original_bytes=32,
+            )
+            append_capture_event(
+                conn, project="demo", active_root=root, source_id=source.source_id,
+                event=NormalizedEvent(
+                    event_name="checkpoint.created.v1", session_id="session-a",
+                    source_cursor="2", observed_at=db.now_iso(), occurred_at=db.now_iso(),
+                    attributes={},
+                    actor_type="agent", actor_id="agent-local",
+                ),
+                idempotency_key="capture:forged-checkpoint", cursor_kind="sequence",
+                original_bytes=32,
+            )
+            changed = capture_compilation_snapshot(
+                conn, project="demo", active_root=root,
+                profile_digest=PROFILE_DIGEST, contract_digest=CONTRACT_DIGEST,
+            )
+            conn.close()
+
+        self.assertEqual(first, repeated)
+        self.assertNotEqual(first["snapshot_digest"], changed["snapshot_digest"])
+        self.assertEqual(changed["fences"]["capture"]["coverage"]["total_events"], 2)
+        self.assertEqual(
+            changed["fences"]["capture"]["coverage"]["accepted_checkpoint_sequence"],
+            0,
+        )
+        self.assertEqual(
+            changed["fences"]["capture"]["coverage"]["interrupted_sessions"], 1,
+        )
+        self.assertRegex(changed["fences"]["capture"]["events"]["digest"], r"^[0-9a-f]{64}$")
+        self.assertRegex(changed["fences"]["capture"]["content"]["digest"], r"^[0-9a-f]{64}$")
+
+    def test_capture_content_retention_mutation_invalidates_compilation(self):
+        from rta_brain.capture import append_event as append_capture_event
+        from rta_brain.capture import register_policy, register_source
+        from rta_brain.capture_types import CapturePolicy, CaptureSource, NormalizedEvent
+
+        with tempfile.TemporaryDirectory() as tmp:
+            conn, database, root, project_id = self._fixture(tmp)
+            policy = CapturePolicy.continuity()
+            register_policy(
+                conn, project="demo", active_root=root, policy_id="continuity",
+                policy_version=1, policy=policy,
+            )
+            source = CaptureSource(
+                source_id="codex-local", adapter="codex-jsonl", adapter_version="1",
+                installation_scope="transcript", config_fingerprint="c" * 64,
+            )
+            register_source(
+                conn, project="demo", active_root=root, source=source,
+                policy_digest=policy.digest,
+            )
+            append_capture_event(
+                conn, project="demo", active_root=root, source_id=source.source_id,
+                event=NormalizedEvent(
+                    event_name="agent.message.v1", session_id="session-a",
+                    source_cursor="1", observed_at=db.now_iso(),
+                    occurred_at=db.now_iso(), attributes={"text": "private state"},
+                    actor_type="agent", actor_id="agent-local",
+                ),
+                idempotency_key="capture:retention-race", cursor_kind="sequence",
+                original_bytes=32,
+            )
+            writer = db.connect(database)
+
+            def build(_reader, _snapshot):
+                writer.execute(
+                    "UPDATE capture_event_content SET content_json = NULL, "
+                    "deleted_at = '2026-08-23T00:00:00+00:00', "
+                    "deletion_reason = 'retention-expired' WHERE project_id = ?",
+                    (project_id,),
+                )
+                writer.commit()
+                return {"must_not_emit": True}
+
+            result = self._run_authorized(
+                conn, project="demo", active_root=root, builder=build,
+                profile_digest=PROFILE_DIGEST, contract_digest=CONTRACT_DIGEST,
+            )
+            writer.close()
+            conn.close()
+
+        self.assertEqual(result["status"], "state_changed_retry")
+        self.assertIn("capture", result["changed"])
+        self.assertNotIn("result", result)
+
     def test_concurrent_mutations_return_state_changed_retry_and_emit_no_result(self):
 
         mutators = {
@@ -434,12 +565,17 @@ class ContextSnapshotTests(unittest.TestCase):
             conn.close()
 
         self.assertEqual(result["status"], "stable")
+        truth_content = next(
+            row["text"]
+            for row in observed["selected"]
+            if row["section"] == "truth"
+        )
         self.assertIn(
             '"ready"',
-            observed["context_text"],
+            truth_content,
             msg=json.dumps(result["operator_audit"], sort_keys=True),
         )
-        self.assertNotIn('"blocked"', observed["context_text"])
+        self.assertNotIn('"blocked"', truth_content)
 
     def test_public_capture_and_verify_reject_caller_owned_transactions(self):
         from rta_brain.context_snapshot import (

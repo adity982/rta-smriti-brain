@@ -349,6 +349,106 @@ class ContinuityTests(unittest.TestCase):
             finally:
                 conn.close()
 
+    def test_codex_jsonl_adapter_rejects_a_foreign_declared_project_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            project_root = base / "selected-project"
+            foreign_root = base / "foreign-project"
+            project_root.mkdir()
+            foreign_root.mkdir()
+            session = base / "session.jsonl"
+            session.write_text(
+                json.dumps({
+                    "type": "session_meta",
+                    "payload": {"id": "thread-foreign", "cwd": str(foreign_root)},
+                }) + "\n",
+                encoding="utf-8",
+            )
+            conn = db.connect(base / "brain.sqlite")
+            try:
+                db.init_project(conn, "demo", str(project_root))
+                with self.assertRaisesRegex(ValueError, "canonical project root"):
+                    ingest_codex_session(
+                        conn,
+                        session,
+                        "demo",
+                        session_id="thread-foreign",
+                    )
+                self.assertEqual(list_events(conn, "demo")["events"], [])
+            finally:
+                conn.close()
+
+    @unittest.skipUnless(os.name == "nt", "Windows ancestor handle contract")
+    def test_codex_jsonl_adapter_blocks_temporary_ancestor_swap_and_restore(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            session = sessions / "session.jsonl"
+            rows = [
+                {"type": "session_meta", "payload": {"id": "thread-1", "cwd": tmp}},
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Original objective",
+                    },
+                },
+            ]
+            session.write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+            replacement_sessions = root / "replacement-sessions"
+            replacement_sessions.mkdir()
+            (replacement_sessions / "session.jsonl").write_text(
+                "\n".join(
+                    json.dumps(row)
+                    for row in (
+                        {
+                            "type": "session_meta",
+                            "payload": {"id": "thread-1", "cwd": tmp},
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Replacement objective",
+                            },
+                        },
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            conn = db.connect(root / "brain.sqlite")
+            parked = root / "parked-sessions"
+            original_ensure_project = continuity_module.ensure_project
+
+            def swap_before_open(*args, **kwargs):
+                os.replace(sessions, parked)
+                os.replace(replacement_sessions, sessions)
+                return original_ensure_project(*args, **kwargs)
+
+            try:
+                db.init_project(conn, "demo", tmp)
+                with patch(
+                    "rta_brain.continuity.ensure_project", side_effect=swap_before_open
+                ):
+                    with self.assertRaises(OSError):
+                        ingest_codex_session(
+                            conn,
+                            session,
+                            "demo",
+                            session_id="thread-1",
+                            expected_sessions_root=sessions,
+                        )
+                self.assertEqual(list_events(conn, "demo")["events"], [])
+            finally:
+                conn.close()
+
     def test_checkpoint_write_rolls_back_on_keyboard_interrupt(self):
         with tempfile.TemporaryDirectory() as tmp:
             conn = db.connect(Path(tmp) / "brain.sqlite")

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.9.0-alpha] - Unreleased
+
+- Added opt-in universal passive capture with versioned vendor adapters, bounded private spools, deterministic normalization, and one managed daemon per brain.
+- Added append-only hash-chained capture events, causal replay, interruption diagnostics, policy-bound retention, deletion receipts, and encrypted forensic payload grants.
+- Hardened interactive retention with preview-bound confirmation, made the multi-project MCP gateway strictly read-only, and closed expired-content, transcript-routing, checkpoint-authority, database-sidecar, adapter final-component, replay/deletion race, source-removal authorization, root-path redaction, provider-credential redaction, diagnostic resource-bound, cross-project status-isolation, stale-enrollment, MCP lifecycle-metadata exposure, daemon PID-reuse, privacy-filtered replay-chain, export-integrity, and paginated-anchor gaps.
+- Split continuity process control from ordinary MCP memory-write permission, made lifecycle control responses path-free, and fail closed when a live worker's process identity cannot be verified.
+- Added preview-first reversible adapter management, capability-separated CLI/MCP surfaces, and a local capture operator console.
+- Added fail-closed source binding, queue backpressure, crash recovery, integrity verification, redaction, and explicit untrusted-evidence boundaries for agent-facing context.
+
 ## [0.8.0-alpha] - Unreleased
 
 - Added governed context compilation for named agent profiles, immutable task contracts, bounded candidate selection, and privacy-scoped envelopes.

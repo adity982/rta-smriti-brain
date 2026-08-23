@@ -19,8 +19,8 @@ from package_release_artifacts import (
 )
 from rta_brain.repository import run_git_inspection
 
-BASELINE_REF = "v0.6.0-alpha"
-BASELINE_COMMIT = "6c086f5e421f8ec5506e7ee6e6cb0296ca43fed3"
+BASELINE_REF = "f8736ebaab50dba75f86e22aa246066611d2c75e"
+BASELINE_COMMIT = "f8736ebaab50dba75f86e22aa246066611d2c75e"
 MAX_BASELINE_ARCHIVE_ENTRIES = 20_000
 MAX_BASELINE_ARCHIVE_BYTES = 256 * 1024 * 1024
 MAX_BASELINE_ENTRY_BYTES = 32 * 1024 * 1024
@@ -143,7 +143,7 @@ def main() -> int:
         ], cwd=smoke_root).stdout.strip()
         expected_version = project_version()
         if baseline_version == expected_version:
-            raise AssertionError("upgrade smoke baseline and candidate versions are identical")
+            raise AssertionError("v0.8 baseline and v0.9 candidate versions are identical")
 
         run([str(python), "-m", "pip", "install", "--upgrade", str(wheel)])
         upgraded_version = run([

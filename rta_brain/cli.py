@@ -1,6 +1,11 @@
 import argparse
+import base64
+import hashlib
+import hmac
 import json
+import os
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from . import __version__
@@ -12,6 +17,50 @@ from .benchmark import (
     run_public_benchmark,
     write_benchmark_report,
 )
+from .capture import (
+    bind_session as bind_capture_session,
+)
+from .capture import (
+    close_session_binding,
+    control_capture_retention,
+    delete_capture_content,
+    export_capture_events,
+    list_capture_policies,
+    list_capture_sources,
+    retire_capture_policy,
+    set_capture_source_state,
+)
+from .capture import (
+    register_policy as register_capture_policy,
+)
+from .capture import (
+    register_source as register_capture_source,
+)
+from .capture_adapters import (
+    adapter_catalog,
+    install_adapter,
+    plan_adapter_installation,
+    remove_adapter,
+)
+from .capture_control import (
+    capture_diagnostics,
+    capture_replay,
+    public_capture_daemon_status,
+)
+from .capture_daemon import (
+    CAPTURE_INGRESS_FIELDS,
+    prepare_capture_spool_record,
+    run_capture_worker,
+    start_capture,
+    stop_capture,
+)
+from .capture_spool import (
+    CaptureSpool,
+    capture_control_root_path,
+    ensure_windows_path_private,
+    windows_path_is_private,
+)
+from .capture_types import CapturePolicy, CaptureSource, canonical_json
 from .console import publish_readiness, run_dashboard
 from .console_daemon import (
     console_status,
@@ -30,6 +79,7 @@ from .context_host import (
     ensure_context_agent_profile,
     explain_context_for_agent,
     load_bounded_context_json,
+    load_context_authority_secret,
     record_context_outcome_for_operator,
     revoke_context_compilation_grant,
 )
@@ -77,7 +127,7 @@ from .governance import (
 )
 from .hooks import install_git_hooks, uninstall_git_hooks
 from .lifecycle import apply_memory_feedback, run_conservative_decay
-from .onboarding import SUPPORTED_TARGET_AGENTS, onboard_project
+from .onboarding import SUPPORTED_TARGET_AGENTS, onboard_project, supervise_brain
 from .portability import (
     export_bundle,
     import_bundle,
@@ -99,6 +149,7 @@ from .project import (
     projects_list,
     self_check,
 )
+from .runtime_control import detached_worker_bootstrap, is_safe_regular_file, read_json
 from .temporal import (
     append_claim,
     attach_evidence,
@@ -137,6 +188,10 @@ from .workspaces import (
     workspace_health,
 )
 
+_ADAPTER_CONFIRMATION_SCHEMA = "rta-smriti.adapter-confirmation/v1"
+_ADAPTER_CONFIRMATION_TTL_SECONDS = 300
+_MAX_ADAPTER_CONFIRMATION_TOKEN_BYTES = 4096
+
 
 def default_db_path() -> Path:
     return Path.cwd() / ".rta-smriti" / "brain.sqlite"
@@ -160,6 +215,604 @@ def parse_json_argument(name: str, value: str):
         return json.loads(value)
     except json.JSONDecodeError as exc:
         raise ValueError(f"{name} must contain valid JSON") from exc
+
+
+def _required_cli(name: str, value: str | None) -> str:
+    selected = str(value or "").strip()
+    if not selected:
+        raise ValueError(f"{name} is required")
+    return selected
+
+
+def _capture_policy_from_args(args) -> CapturePolicy:
+    base = (
+        CapturePolicy.metadata_only()
+        if args.profile == "metadata-only"
+        else CapturePolicy.continuity()
+        if args.profile == "continuity"
+        else CapturePolicy(profile="forensic")
+    )
+    values = base.as_dict()
+    values.pop("schema_version", None)
+    if args.retention_seconds is not None:
+        values["retention_seconds"] = args.retention_seconds
+    if args.privacy_ceiling is not None:
+        values["privacy_ceiling"] = args.privacy_ceiling
+    values["enabled_event_names"] = tuple(values["enabled_event_names"])
+    values["field_allowlist"] = {
+        key: tuple(items) for key, items in values["field_allowlist"].items()
+    }
+    return CapturePolicy(**values)
+
+
+def _capture_adapter_command(args, source_id: str) -> tuple[str, ...]:
+    suffix = (
+        "--db", str(Path(args.db).expanduser().resolve()),
+        "capture", "--project", args.project,
+        "--root", str(Path(args.root).expanduser().resolve()),
+        "emit", "--source-id", source_id,
+    )
+    executable = str(Path(sys.executable).resolve())
+    if getattr(sys, "frozen", False):
+        return (executable, *suffix)
+    return (
+        executable,
+        "-I",
+        "-c",
+        detached_worker_bootstrap(
+            "rta_brain.cli", Path(__file__).resolve().parents[1]
+        ),
+        *suffix,
+    )
+
+
+def _adapter_confirmation_key(database: Path) -> bytes:
+    return hmac.new(
+        load_context_authority_secret(database),
+        b"rta-smriti.adapter-confirmation/v1",
+        hashlib.sha256,
+    ).digest()
+
+
+def _adapter_b64encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _adapter_b64decode(value: str) -> bytes:
+    try:
+        decoded = base64.b64decode(
+            value.encode("ascii") + b"=" * (-len(value) % 4),
+            altchars=b"-_",
+            validate=True,
+        )
+    except (UnicodeEncodeError, ValueError) as exc:
+        raise PermissionError("adapter confirmation token is malformed") from exc
+    if _adapter_b64encode(decoded) != value:
+        raise PermissionError("adapter confirmation token is malformed")
+    return decoded
+
+
+def _issue_adapter_confirmation(
+    database: Path, claims: dict,
+) -> tuple[str, str]:
+    issued_at = datetime.now(UTC).replace(microsecond=0)
+    expires_at = issued_at + timedelta(seconds=_ADAPTER_CONFIRMATION_TTL_SECONDS)
+    signed_claims = {
+        **claims,
+        "schema_version": _ADAPTER_CONFIRMATION_SCHEMA,
+        "issued_at": issued_at.isoformat(),
+        "expires_at": expires_at.isoformat(),
+    }
+    payload = canonical_json(signed_claims).encode("ascii")
+    signature = hmac.new(
+        _adapter_confirmation_key(database), payload, hashlib.sha256,
+    ).digest()
+    return f"{_adapter_b64encode(payload)}.{_adapter_b64encode(signature)}", expires_at.isoformat()
+
+
+def _adapter_timestamp(label: str, value) -> datetime:
+    if not isinstance(value, str):
+        raise PermissionError(f"adapter confirmation token {label} is invalid")
+    try:
+        selected = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise PermissionError(
+            f"adapter confirmation token {label} is invalid"
+        ) from exc
+    if selected.tzinfo is None:
+        raise PermissionError(f"adapter confirmation token {label} is invalid")
+    return selected.astimezone(UTC)
+
+
+def _verify_adapter_confirmation(
+    database: Path, token: str | None, expected_claims: dict,
+) -> None:
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token.encode("utf-8", errors="ignore")) > _MAX_ADAPTER_CONFIRMATION_TOKEN_BYTES
+    ):
+        raise PermissionError(
+            "adapter mutation requires its preview confirmation token"
+        )
+    try:
+        payload_text, signature_text = token.split(".", 1)
+    except ValueError as exc:
+        raise PermissionError("adapter confirmation token is malformed") from exc
+    payload = _adapter_b64decode(payload_text)
+    signature = _adapter_b64decode(signature_text)
+    if len(signature) != hashlib.sha256().digest_size:
+        raise PermissionError("adapter confirmation token is invalid")
+    expected_signature = hmac.new(
+        _adapter_confirmation_key(database), payload, hashlib.sha256,
+    ).digest()
+    if not hmac.compare_digest(signature, expected_signature):
+        raise PermissionError("adapter confirmation token is invalid")
+    try:
+        claims = json.loads(payload.decode("ascii"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PermissionError("adapter confirmation token is malformed") from exc
+    if not isinstance(claims, dict) or canonical_json(claims).encode("ascii") != payload:
+        raise PermissionError("adapter confirmation token is non-canonical")
+    if claims.get("schema_version") != _ADAPTER_CONFIRMATION_SCHEMA:
+        raise PermissionError("adapter confirmation token schema is invalid")
+    issued_at = _adapter_timestamp("issued_at", claims.get("issued_at"))
+    expires_at = _adapter_timestamp("expires_at", claims.get("expires_at"))
+    now = datetime.now(UTC)
+    if expires_at <= issued_at or now >= expires_at:
+        raise PermissionError("adapter confirmation token expired")
+    if expires_at - issued_at > timedelta(seconds=_ADAPTER_CONFIRMATION_TTL_SECONDS):
+        raise PermissionError("adapter confirmation token lifetime is invalid")
+    if issued_at > now + timedelta(seconds=30):
+        raise PermissionError("adapter confirmation token issued_at is invalid")
+    expected = {
+        **expected_claims,
+        "schema_version": _ADAPTER_CONFIRMATION_SCHEMA,
+    }
+    actual = {
+        key: value
+        for key, value in claims.items()
+        if key not in {"issued_at", "expires_at"}
+    }
+    if not hmac.compare_digest(canonical_json(actual), canonical_json(expected)):
+        raise PermissionError(
+            "adapter confirmation token does not match the current preview"
+        )
+
+
+def _adapter_plan_claims(
+    plan, *, project: str, source_id: str, policy_digest: str,
+) -> dict:
+    plan_snapshot = {
+        "adapter": plan.adapter,
+        "scope": plan.scope,
+        "installation_id": plan.installation_id,
+        "action": plan.action,
+        "original_exists": plan.original_exists,
+        "original_fingerprint": plan.original_fingerprint,
+        "target_fingerprint": plan.target_fingerprint,
+        "managed_fragment": plan.managed_fragment,
+        "config_path_sha256": hashlib.sha256(
+            str(plan.config_path).encode("utf-8")
+        ).hexdigest(),
+        "allowed_root_sha256": hashlib.sha256(
+            str(plan.allowed_root).encode("utf-8")
+        ).hexdigest(),
+        "ancestor_guard": plan.ancestor_guard,
+    }
+    return {
+        "operation": "adapter-install",
+        "project": project,
+        "source_id": source_id,
+        "policy_digest": policy_digest,
+        "installation_id": plan.installation_id,
+        "plan_fingerprint": hashlib.sha256(
+            canonical_json(plan_snapshot).encode("ascii")
+        ).hexdigest(),
+    }
+
+
+def _adapter_receipt_snapshot(
+    database: Path, installation_id: str,
+) -> tuple[dict, str]:
+    if (
+        len(installation_id) != 32
+        or any(character not in "0123456789abcdef" for character in installation_id)
+    ):
+        raise ValueError("adapter installation ID is invalid")
+    receipt_path = (
+        capture_control_root_path(database)
+        / "adapter-installs"
+        / f"{installation_id}.json"
+    )
+    receipt = read_json(receipt_path)
+    if receipt is None or receipt.get("installation_id") != installation_id:
+        raise ValueError("adapter installation receipt is missing or invalid")
+    fingerprint = hashlib.sha256(canonical_json(receipt).encode("ascii")).hexdigest()
+    return receipt, fingerprint
+
+
+def _adapter_remove_claims(
+    *, project: str, source_id: str | None, installation_id: str,
+    receipt_fingerprint: str,
+) -> dict:
+    return {
+        "operation": "adapter-remove",
+        "project": project,
+        "source_id": source_id or "",
+        "installation_id": installation_id,
+        "receipt_fingerprint": receipt_fingerprint,
+    }
+
+
+def _public_adapter_plan(
+    plan, *, database: Path, project: str, source_id: str, policy_digest: str,
+) -> dict:
+    claims = _adapter_plan_claims(
+        plan,
+        project=project,
+        source_id=source_id,
+        policy_digest=policy_digest,
+    )
+    confirmation_token, expires_at = _issue_adapter_confirmation(database, claims)
+    return {
+        "status": "preview",
+        "adapter": plan.adapter,
+        "scope": plan.scope,
+        "installation_id": plan.installation_id,
+        "action": plan.action,
+        "original_exists": plan.original_exists,
+        "original_fingerprint": plan.original_fingerprint,
+        "target_fingerprint": plan.target_fingerprint,
+        "managed_events": sorted(plan.managed_fragment),
+        "requires_confirmation": True,
+        "confirmation_token": confirmation_token,
+        "confirmation_expires_at": expires_at,
+    }
+
+
+def _adapter_receipts(database: Path) -> list[dict]:
+    directory = capture_control_root_path(database) / "adapter-installs"
+    if not directory.exists():
+        return []
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValueError("adapter receipt directory is unsafe")
+    receipts = []
+    for candidate in sorted(directory.glob("*.json"))[:1024]:
+        if not is_safe_regular_file(candidate):
+            raise ValueError("adapter installation receipt is unsafe")
+        row = read_json(candidate)
+        if row is None:
+            raise ValueError("adapter installation receipt is malformed")
+        receipts.append({
+            key: row.get(key)
+            for key in ("installation_id", "adapter", "scope", "installed")
+        })
+    return receipts
+
+
+def _write_private_export(path: Path, payload: dict) -> dict:
+    target = path.expanduser().absolute()
+    if not target.parent.is_dir() or target.parent.is_symlink():
+        raise ValueError("capture export parent must be an existing unlinked directory")
+    encoded = (json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    descriptor = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    opened = os.fstat(descriptor)
+    identity = (opened.st_dev, opened.st_ino, opened.st_nlink)
+    try:
+        if os.name == "nt":
+            ensure_windows_path_private(target)
+            if not windows_path_is_private(target):
+                raise RuntimeError("capture export ACL verification failed")
+            current = target.lstat()
+            if (current.st_dev, current.st_ino, current.st_nlink) != identity:
+                raise RuntimeError("capture export changed identity before write")
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = -1
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        current = target.lstat()
+        if (current.st_dev, current.st_ino, current.st_nlink) != identity:
+            raise RuntimeError("capture export changed identity during write")
+        if os.name == "nt":
+            ensure_windows_path_private(target)
+            if not windows_path_is_private(target):
+                raise RuntimeError("capture export ACL verification failed")
+        else:
+            os.chmod(target, 0o600)
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            current = target.lstat()
+        except OSError:
+            current = None
+        if current is not None and (
+            current.st_dev,
+            current.st_ino,
+            current.st_nlink,
+        ) == identity:
+            target.unlink(missing_ok=True)
+        raise
+    return {
+        "status": "ok",
+        "bytes": len(encoded),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+        "events": len(payload.get("events", [])),
+        "redaction_verified": bool(payload.get("redaction_verified")),
+    }
+
+
+def _dispatch_capture(args, conn) -> dict:
+    database = Path(args.db).expanduser().resolve()
+    active_root = Path(args.root).expanduser().resolve()
+    group = args.capture_group
+    action = getattr(args, "capture_action", None)
+
+    if group == "policy":
+        if action == "list":
+            return list_capture_policies(
+                conn, project=args.project, include_retired=args.include_retired,
+            )
+        if action == "create":
+            return register_capture_policy(
+                conn, project=args.project, active_root=active_root,
+                policy_id=_required_cli("--id", args.id),
+                policy_version=args.version,
+                policy=_capture_policy_from_args(args),
+            )
+        return retire_capture_policy(
+            conn, project=args.project, active_root=active_root,
+            policy_digest=_required_cli("--digest", args.digest),
+        )
+
+    if group == "adapter":
+        if action == "list":
+            return {
+                "status": "ok",
+                "adapters": [
+                    {
+                        "name": definition.name,
+                        "version": definition.version,
+                        "managed_installation": name != "generic" and name != "codex-jsonl",
+                    }
+                    for name, definition in sorted(adapter_catalog().items())
+                ],
+            }
+        if action == "status":
+            return {
+                **list_capture_sources(conn, project=args.project),
+                "installations": _adapter_receipts(database),
+            }
+        if action in {"pause", "resume"}:
+            return set_capture_source_state(
+                conn, project=args.project, active_root=active_root,
+                source_id=_required_cli("--source-id", args.source_id),
+                state="paused" if action == "pause" else "active",
+            )
+        if action == "remove":
+            installation_id = _required_cli("--installation-id", args.installation_id)
+            receipt, receipt_fingerprint = _adapter_receipt_snapshot(
+                database, installation_id,
+            )
+            confirmation_claims = _adapter_remove_claims(
+                project=args.project,
+                source_id=args.source_id,
+                installation_id=installation_id,
+                receipt_fingerprint=receipt_fingerprint,
+            )
+            if not args.confirm:
+                confirmation_token, expires_at = _issue_adapter_confirmation(
+                    database, confirmation_claims,
+                )
+                return {
+                    "status": "preview",
+                    "installation_id": installation_id,
+                    "adapter": receipt.get("adapter"),
+                    "scope": receipt.get("scope"),
+                    "receipt_fingerprint": receipt_fingerprint,
+                    "requires_confirmation": True,
+                    "confirmation_token": confirmation_token,
+                    "confirmation_expires_at": expires_at,
+                }
+            _verify_adapter_confirmation(
+                database, args.confirmation_token, confirmation_claims,
+            )
+            removed = remove_adapter(brain_path=database, installation_id=installation_id)
+            if args.source_id:
+                set_capture_source_state(
+                    conn, project=args.project, active_root=active_root,
+                    source_id=args.source_id, state="removed",
+                )
+            return {
+                "status": "ok",
+                "installation_id": removed["installation_id"],
+                "adapter": removed["adapter"],
+                "scope": removed["scope"],
+                "removed": bool(removed.get("removed")),
+                "idempotent_replay": bool(removed.get("idempotent_replay")),
+            }
+        selected_adapter = _required_cli("--adapter", args.adapter)
+        source_id = args.source_id or f"{selected_adapter}-{args.scope}-local"
+        plan = plan_adapter_installation(
+            selected_adapter,
+            scope=args.scope,
+            project_root=active_root,
+            home=Path(args.home),
+            brain_path=database,
+            command_parts=_capture_adapter_command(args, source_id),
+            platform_name=sys.platform,
+        )
+        policies = list_capture_policies(conn, project=args.project)["policies"]
+        matches = (
+            [row for row in policies if row["policy_digest"] == args.policy_digest]
+            if args.policy_digest
+            else [row for row in policies if row["profile"] == "continuity"]
+        )
+        if len(matches) != 1:
+            raise ValueError(
+                "adapter installation requires --policy-digest when exactly one active continuity policy cannot be selected"
+            )
+        selected_policy_digest = str(matches[0]["policy_digest"])
+        preview = _public_adapter_plan(
+            plan,
+            database=database,
+            project=args.project,
+            source_id=source_id,
+            policy_digest=selected_policy_digest,
+        )
+        if action == "plan" or not args.confirm:
+            return preview
+        _verify_adapter_confirmation(
+            database,
+            args.confirmation_token,
+            _adapter_plan_claims(
+                plan,
+                project=args.project,
+                source_id=source_id,
+                policy_digest=selected_policy_digest,
+            ),
+        )
+        installed = install_adapter(plan)
+        definition = adapter_catalog()[selected_adapter]
+        try:
+            register_capture_source(
+                conn,
+                project=args.project,
+                active_root=active_root,
+                source=CaptureSource(
+                    source_id=source_id,
+                    adapter=selected_adapter,
+                    adapter_version=definition.version,
+                    installation_scope=args.scope,
+                    config_fingerprint=plan.target_fingerprint,
+                ),
+                policy_digest=selected_policy_digest,
+            )
+        except BaseException:
+            if not installed.get("idempotent_replay"):
+                remove_adapter(
+                    brain_path=database,
+                    installation_id=str(installed["installation_id"]),
+                )
+            raise
+        return {
+            "status": "ok",
+            "adapter": installed["adapter"],
+            "scope": installed["scope"],
+            "installation_id": installed["installation_id"],
+            "source_id": source_id,
+            "installed": bool(installed["installed"]),
+            "idempotent_replay": bool(installed.get("idempotent_replay")),
+        }
+
+    if group == "emit":
+        source_id = _required_cli("--source-id", args.source_id)
+        raw = sys.stdin.buffer.read(1_048_577) if hasattr(sys.stdin, "buffer") else sys.stdin.read(1_048_577).encode("utf-8")
+        if len(raw) > 1_048_576:
+            return {"status": "rejected", "reason": "input_too_large"}
+        try:
+            record = json.loads(raw.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError, RecursionError, MemoryError):
+            return {"status": "rejected", "reason": "invalid_json"}
+        if not isinstance(record, dict):
+            return {"status": "rejected", "reason": "invalid_record"}
+        try:
+            spool_record = prepare_capture_spool_record(
+                conn,
+                project=args.project,
+                active_root=active_root,
+                source_id=source_id,
+                record=record,
+                original_bytes=len(raw),
+            )
+            receipt = CaptureSpool(database).publish(
+                source_id,
+                spool_record,
+                project=args.project,
+                allowed_fields=CAPTURE_INGRESS_FIELDS,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return {"status": "unavailable", "reason": "normalization_unavailable"}
+        return receipt.as_dict()
+
+    if group == "daemon":
+        if action == "start":
+            payload = start_capture(
+                database, interval_seconds=args.interval, batch_size=args.batch_size,
+            )
+        elif action == "stop":
+            payload = stop_capture(database, timeout=args.timeout)
+        else:
+            return public_capture_daemon_status(database)
+        public = dict(payload)
+        for key in ("db_path", "token_hash", "process_identity"):
+            public.pop(key, None)
+        return public
+
+    if group == "bind-session":
+        if args.close_binding:
+            return close_session_binding(
+                conn, database=database, project=args.project,
+                active_root=active_root, binding_id=args.close_binding,
+                operator_id=args.operator_id,
+            )
+        return bind_capture_session(
+            conn, database=database, project=args.project,
+            active_root=active_root,
+            source_id=_required_cli("--source-id", args.source_id),
+            external_session_id=_required_cli("--session-id", args.session_id),
+            cursor_kind=args.cursor_kind,
+            start_cursor=_required_cli("--start-cursor", args.start_cursor),
+            operator_id=args.operator_id,
+        )
+
+    if group in {"events", "export"}:
+        payload = export_capture_events(
+            conn, project=args.project, active_root=active_root,
+            after_sequence=args.after_sequence, limit=args.limit,
+            privacy_ceiling=args.privacy_ceiling,
+        )
+        if group == "export" and args.output:
+            return _write_private_export(Path(args.output), payload)
+        return payload
+
+    if group == "replay":
+        return capture_replay(
+            conn, project=args.project, active_root=active_root,
+            mode=args.mode, after_sequence=args.after_sequence,
+            limit=args.limit, privacy_ceiling=args.privacy_ceiling,
+        )
+
+    if group == "retain":
+        return control_capture_retention(
+            conn, project=args.project, active_root=active_root,
+            policy_digest=_required_cli("--policy-digest", args.policy_digest),
+            run_id=args.run_id or f"retention-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}",
+            actor_id=args.operator_id,
+            batch_size=args.batch_size, now=args.now,
+            confirm=bool(args.confirm),
+            confirmation_token=args.confirmation_token,
+        )
+
+    if group in {"redact", "delete"}:
+        return delete_capture_content(
+            conn, project=args.project, active_root=active_root,
+            scope=_required_cli("--scope", args.scope),
+            scope_token=_required_cli("--scope-token", args.scope_token),
+            reason_class=args.reason, actor_id=args.operator_id,
+            policy_digest=_required_cli("--policy-digest", args.policy_digest),
+            confirm=bool(args.confirm),
+            confirmation_token=args.confirmation_token,
+            secure_compact=bool(getattr(args, "secure_compact", False)),
+        )
+
+    if group == "doctor":
+        return capture_diagnostics(
+            conn, database=database, project=args.project, active_root=active_root,
+        )
+    raise ValueError(f"unknown capture command: {group}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -250,6 +903,111 @@ def build_parser() -> argparse.ArgumentParser:
     continuity_worker.add_argument("--inactivity", type=float, required=True)
     continuity_worker.add_argument("--lookback-days", type=float, required=True)
     continuity_worker.add_argument("--backlog-tail-bytes", type=int, required=True)
+
+    capture = sub.add_parser("capture", help="Inspect and govern universal passive capture")
+    add_common_options(capture)
+    capture.add_argument("--project", default="default")
+    capture.add_argument("--root", required=True, help="Exact canonical project root")
+    capture_actions = capture.add_subparsers(dest="capture_group", required=True)
+
+    capture_policy = capture_actions.add_parser("policy", help="Manage immutable capture policies")
+    capture_policy_actions = capture_policy.add_subparsers(dest="capture_action", required=True)
+    capture_policy_list = capture_policy_actions.add_parser("list")
+    capture_policy_list.add_argument("--include-retired", action="store_true")
+    capture_policy_create = capture_policy_actions.add_parser("create")
+    capture_policy_create.add_argument("--id")
+    capture_policy_create.add_argument("--version", type=int, default=1)
+    capture_policy_create.add_argument(
+        "--profile", choices=("metadata-only", "continuity", "forensic"),
+        default="continuity",
+    )
+    capture_policy_create.add_argument("--retention-seconds", type=int)
+    capture_policy_create.add_argument("--privacy-ceiling", choices=("public", "internal", "sensitive", "restricted"))
+    capture_policy_retire = capture_policy_actions.add_parser("retire")
+    capture_policy_retire.add_argument("--digest")
+
+    capture_adapter = capture_actions.add_parser("adapter", help="Preview and manage supported adapters")
+    capture_adapter_actions = capture_adapter.add_subparsers(dest="capture_action", required=True)
+    for action in ("list", "status"):
+        capture_adapter_actions.add_parser(action)
+    for action in ("plan", "install"):
+        command = capture_adapter_actions.add_parser(action)
+        command.add_argument("--adapter", choices=("claude-code", "cursor", "github-copilot", "gemini-cli"))
+        command.add_argument("--scope", choices=("project", "user"), default="project")
+        command.add_argument("--source-id")
+        command.add_argument("--policy-digest")
+        command.add_argument("--home", default=str(Path.home()))
+        command.add_argument("--confirm", action="store_true")
+        command.add_argument("--confirmation-token")
+    capture_adapter_remove = capture_adapter_actions.add_parser("remove")
+    capture_adapter_remove.add_argument("--installation-id")
+    capture_adapter_remove.add_argument("--source-id")
+    capture_adapter_remove.add_argument("--confirm", action="store_true")
+    capture_adapter_remove.add_argument("--confirmation-token")
+    for action in ("pause", "resume"):
+        command = capture_adapter_actions.add_parser(action)
+        command.add_argument("--source-id")
+
+    capture_emit = capture_actions.add_parser("emit", help="Publish one bounded JSON event from stdin")
+    capture_emit.add_argument("--source-id")
+
+    capture_daemon = capture_actions.add_parser("daemon", help="Manage the capture normalizer daemon")
+    capture_daemon_actions = capture_daemon.add_subparsers(dest="capture_action", required=True)
+    capture_daemon_start = capture_daemon_actions.add_parser("start")
+    capture_daemon_start.add_argument("--interval", type=float, default=1.0)
+    capture_daemon_start.add_argument("--batch-size", type=int, default=100)
+    capture_daemon_actions.add_parser("status")
+    capture_daemon_stop = capture_daemon_actions.add_parser("stop")
+    capture_daemon_stop.add_argument("--timeout", type=float, default=10.0)
+
+    capture_bind = capture_actions.add_parser("bind-session")
+    capture_bind.add_argument("--source-id")
+    capture_bind.add_argument("--session-id")
+    capture_bind.add_argument("--cursor-kind", choices=("byte-offset", "sequence"), default="sequence")
+    capture_bind.add_argument("--start-cursor")
+    capture_bind.add_argument("--operator-id", default="local-operator")
+    capture_bind.add_argument("--close-binding")
+
+    for action in ("events", "replay", "export"):
+        command = capture_actions.add_parser(action)
+        command.add_argument("--after-sequence", type=int, default=0)
+        command.add_argument("--limit", type=int, default=100)
+        command.add_argument("--privacy-ceiling", choices=("public", "internal", "sensitive", "restricted"), default="internal")
+        if action == "replay":
+            command.add_argument("--mode", choices=("chronological", "causal"), default="chronological")
+        if action == "export":
+            command.add_argument("--output")
+
+    capture_retain = capture_actions.add_parser("retain")
+    capture_retain.add_argument("--policy-digest")
+    capture_retain.add_argument("--run-id")
+    capture_retain.add_argument("--batch-size", type=int, default=100)
+    capture_retain.add_argument("--now")
+    capture_retain.add_argument("--operator-id", default="local-operator")
+    capture_retain.add_argument("--confirm", action="store_true")
+    capture_retain.add_argument("--confirmation-token")
+
+    for action in ("redact", "delete"):
+        command = capture_actions.add_parser(action)
+        command.add_argument("--scope", choices=("event-content", "session-content", "source-content", "project-content"))
+        command.add_argument("--scope-token")
+        command.add_argument("--policy-digest")
+        command.add_argument("--reason", default="operator-request")
+        command.add_argument("--operator-id", default="local-operator")
+        command.add_argument("--confirm", action="store_true")
+        command.add_argument("--confirmation-token")
+        if action == "delete":
+            command.add_argument("--secure-compact", action="store_true")
+
+    capture_actions.add_parser("doctor")
+
+    capture_worker = sub.add_parser("_capture-worker", help=argparse.SUPPRESS)
+    capture_worker.add_argument("--db", required=True)
+    capture_worker.add_argument("--state-file", required=True)
+    capture_worker.add_argument("--stop-file", required=True)
+    capture_worker.add_argument("--lock-file", required=True)
+    capture_worker.add_argument("--interval", type=float, required=True)
+    capture_worker.add_argument("--batch-size", type=int, required=True)
 
     settings = sub.add_parser("settings", help="Read or update a project's indexing and retrieval policy")
     add_common_options(settings)
@@ -828,6 +1586,13 @@ def build_parser() -> argparse.ArgumentParser:
     console.add_argument("--no-open", action="store_true", help="Do not open the browser")
     console.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Emit stable JSON")
 
+    supervisor = sub.add_parser("supervisor", help="Restore explicitly enrolled local services")
+    supervisor.add_argument("action", choices=("start",))
+    supervisor.add_argument("--brain-dir", default=str(Path.home() / "Documents" / "Codex" / "brains"))
+    supervisor.add_argument("--port", type=int, default=8765)
+    supervisor.add_argument("--no-open", action="store_true", help="Do not open the browser")
+    supervisor.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Emit stable JSON")
+
     console_worker = sub.add_parser("_console-worker", help=argparse.SUPPRESS)
     console_worker.add_argument("--tool-root", required=True)
     console_worker.add_argument("--brain-dir", required=True)
@@ -892,6 +1657,21 @@ def main(argv=None) -> int:
             Path(args.lock_file),
             Path(args.token_file),
         )
+    if args.command == "supervisor":
+        try:
+            payload = supervise_brain(
+                tool_root(), Path(args.brain_dir), port=args.port,
+                open_browser=not args.no_open,
+            )
+            emit(payload, args.json)
+            return 0 if payload.get("status") == "ok" else 1
+        except Exception as exc:  # noqa: BLE001 - CLI emits a bounded error envelope
+            error = {"status": "error", "error": {"type": exc.__class__.__name__, "message": str(exc)}}
+            if getattr(args, "json", False):
+                print(json.dumps(error, indent=2, sort_keys=True), file=sys.stderr)
+            else:
+                print(f"error: {exc}", file=sys.stderr)
+            return 1
     if args.command == "console":
         try:
             brain_dir = Path(args.brain_dir)
@@ -956,6 +1736,12 @@ def main(argv=None) -> int:
             Path(args.db), Path(args.root), args.project, Path(args.sessions_root),
             Path(args.state_file), Path(args.stop_file), Path(args.lock_file),
             args.interval, args.inactivity, args.lookback_days, args.backlog_tail_bytes,
+        )
+    if args.command == "_capture-worker":
+        return run_capture_worker(
+            Path(args.db), Path(args.state_file), Path(args.stop_file),
+            Path(args.lock_file), interval_seconds=args.interval,
+            batch_size=args.batch_size,
         )
     if args.command == "watcher":
         try:
@@ -1094,10 +1880,13 @@ def main(argv=None) -> int:
                 print(f"error: {exc}", file=sys.stderr)
             return 1
     exit_code = 0
+    conn = None
     try:
         conn = connect(Path(args.db))
         with conn:
-            if args.command == "init":
+            if args.command == "capture":
+                payload = _dispatch_capture(args, conn)
+            elif args.command == "init":
                 if args.rebind_root:
                     raise ValueError("--rebind-root is retired for init; use root-rebind with a no-clobber backup path")
                 payload = init_project(conn, args.project, str(Path(args.root).resolve()), allow_root_rebind=args.rebind_root)
@@ -1653,6 +2442,9 @@ def main(argv=None) -> int:
         else:
             print(f"error: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 if __name__ == "__main__":

@@ -46,6 +46,17 @@ The Playwright journey verifies:
 - literal PowerShell and POSIX command serialization for substitutions, backticks, quotes, and
   embedded newlines, with both shells executed on the Windows release host.
 
+The dedicated Universal Capture journey additionally verifies:
+
+- empty, healthy, running, paused, backpressured, quarantined, and recovery states;
+- preview-first adapter installation and removal with bound confirmation tokens;
+- daemon start, status, restart recovery, and stop from the rendered console;
+- causal replay, privacy filtering, and explicit incomplete-history diagnostics;
+- downloaded export JSON schema, journal proof, redaction proof, payload exclusion,
+  canonical-path exclusion, and provider-credential exclusion; and
+- keyboard, reduced-motion, responsive, clipboard-denial, and authorization behavior
+  on the capture surface.
+
 CI installs Chromium and runs this journey on `windows-latest`, `macos-latest`, and
 `ubuntu-latest` with Python 3.11. Backend unit and integration tests still cover hostile inputs,
 race conditions, rollback, parser failures, and lower-level API contracts.

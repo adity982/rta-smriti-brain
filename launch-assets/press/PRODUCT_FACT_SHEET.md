@@ -2,11 +2,11 @@
 
 **Category:** Open-source developer tool, local AI project memory
 
-**Current candidate:** `v0.8.0-alpha`
+**Current candidate:** `v0.9.0-alpha`
 
 **Latest published release:** [`v0.6.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.6.0-alpha)
 
-**Release state:** v0.8 is under local qualification and is not yet published. Published releases provide SHA-256 checksums, a wheel, and standalone Windows, Linux, and macOS artifacts.
+**Release state:** v0.9 is under local qualification and is not yet published. Published releases provide SHA-256 checksums, a wheel, and standalone Windows, Linux, and macOS artifacts.
 
 **License:** MIT
 

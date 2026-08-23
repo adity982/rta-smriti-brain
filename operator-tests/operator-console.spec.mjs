@@ -69,6 +69,12 @@ async function runCleanupCommand(args, timeoutMs = 12_000) {
 
 async function stopBootstrappedDaemons(tempRoot) {
   const database = path.join(tempRoot, "brains", "bootstrapped-project.sqlite");
+  const projectRoot = path.join(tempRoot, "bootstrapped-project");
+  await runCleanupCommand([
+    path.join(root, "rta-brain.py"), "capture", "--db", database,
+    "--project", "bootstrapped-project", "--root", projectRoot,
+    "daemon", "stop",
+  ]);
   await runCleanupCommand([
     path.join(root, "rta-brain.py"), "--db", database,
     "continuity", "stop", "--project", "bootstrapped-project",
@@ -146,6 +152,7 @@ test("real operator can inspect, govern, continue, and move a project brain", as
       ["Imports", () => page.getByRole("region", { name: "Typed project data tables" })],
       ["Memories", () => page.getByRole("region", { name: "Typed project data tables" })],
       ["Evidence", () => page.getByRole("heading", { name: "Evidence Inspector", exact: true })],
+      ["Capture", () => page.getByRole("region", { name: "Universal capture console" })],
       ["Search", () => page.getByLabel("Search graph nodes")],
       ["Action Gate", () => page.getByRole("heading", { name: "Action Gate", exact: true })],
       ["Intelligence", () => page.getByRole("heading", { name: "Project Intelligence", exact: true })],

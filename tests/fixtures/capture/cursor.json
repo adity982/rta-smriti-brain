@@ -1,0 +1,17 @@
+{
+  "adapter": "cursor",
+  "adapter_version": "hooks-v1",
+  "vendor_event": "afterFileEdit",
+  "session_id": "session-cursor-001",
+  "cursor": "edit-3",
+  "observed_at": "2026-08-22T12:00:02Z",
+  "trusted_workspace_roots": ["C:/synthetic/workspace"],
+  "payload": {
+    "hook_event_name": "afterFileEdit",
+    "workspace_roots": ["C:/synthetic/workspace"],
+    "file_path": "C:/synthetic/workspace/src/example.py",
+    "edits": [{"old_string": "before", "new_string": "after"}],
+    "user_email": "synthetic@example.invalid"
+  },
+  "expected_event": "file.edited.v1"
+}
