@@ -24,6 +24,7 @@ PATH_PATTERNS = RELEASE_PATH_BYTE_PATTERNS
 FORBIDDEN_SUFFIXES = {".db", ".key", ".log", ".pem", ".sqlite", ".sqlite-shm", ".sqlite-wal"}
 FORBIDDEN_NAMES = {".env"}
 MAX_SCAN_BYTES = 25 * 1024 * 1024
+MAX_CONFIGURABLE_SCAN_BYTES = 128 * 1024 * 1024
 MAX_ARCHIVE_ENTRIES = 10_000
 MAX_ARCHIVE_TOTAL_BYTES = 100 * 1024 * 1024
 MAX_SCAN_FILES = 100_000
@@ -313,7 +314,20 @@ def _scan_archive(
     return findings
 
 
-def scan(root: Path, deny_terms: list[str]) -> list[tuple[str, str]]:
+def scan(
+    root: Path,
+    deny_terms: list[str],
+    *,
+    max_file_bytes: int | None = None,
+) -> list[tuple[str, str]]:
+    scan_file_bytes = MAX_SCAN_BYTES if max_file_bytes is None else max_file_bytes
+    if (
+        isinstance(scan_file_bytes, bool)
+        or not isinstance(scan_file_bytes, int)
+        or scan_file_bytes <= 0
+        or scan_file_bytes > MAX_CONFIGURABLE_SCAN_BYTES
+    ):
+        return [(".", "invalid-max-file-bytes")]
     root = Path(root).expanduser().resolve()
     if not root.exists():
         return [(".", "missing-release-root")]
@@ -355,15 +369,15 @@ def scan(root: Path, deny_terms: list[str]) -> list[tuple[str, str]]:
         if not stat.S_ISREG(metadata.st_mode):
             findings.append((relative, "special-release-file"))
             continue
-        if metadata.st_size > MAX_SCAN_BYTES:
-            findings.append((relative, f"unscanned-file-over-{MAX_SCAN_BYTES}-bytes"))
+        if metadata.st_size > scan_file_bytes:
+            findings.append((relative, f"unscanned-file-over-{scan_file_bytes}-bytes"))
             continue
         budget.raw_bytes += metadata.st_size
         if budget.raw_bytes > MAX_SCAN_TOTAL_BYTES:
             findings.append((".", f"scan-over-{MAX_SCAN_TOTAL_BYTES}-raw-bytes"))
             break
         try:
-            data = stable_file_bytes(path, maximum_bytes=MAX_SCAN_BYTES)
+            data = stable_file_bytes(path, maximum_bytes=scan_file_bytes)
         except (FileNotFoundError, OSError, RuntimeError, ValueError):
             findings.append((relative, "unstable-release-file"))
             continue
@@ -377,9 +391,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Scan public-candidate files for credentials, local paths, and private names.")
     parser.add_argument("--deny-term", action="append", default=[], help="Private project, client, or product name that must not appear. Repeat as needed.")
     parser.add_argument("--root", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--max-file-bytes",
+        type=int,
+        default=MAX_SCAN_BYTES,
+        help=(
+            "Maximum bytes read from one top-level file. "
+            f"Must be between 1 and {MAX_CONFIGURABLE_SCAN_BYTES}."
+        ),
+    )
     args = parser.parse_args()
     root = args.root.resolve()
-    findings = scan(root, args.deny_term)
+    findings = scan(root, args.deny_term, max_file_bytes=args.max_file_bytes)
     print("privacy scan: completed")
     if findings:
         for path, category in findings:
