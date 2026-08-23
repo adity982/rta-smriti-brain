@@ -221,6 +221,21 @@ def process_alive(pid: int | None) -> bool:
             )
         finally:
             kernel32.CloseHandle(handle)
+    if all(
+        hasattr(os, name)
+        for name in ("waitid", "P_PID", "WEXITED", "WNOHANG", "WNOWAIT")
+    ):
+        try:
+            child_state = os.waitid(
+                os.P_PID,
+                int(pid),
+                os.WEXITED | os.WNOHANG | os.WNOWAIT,
+            )
+        except (ChildProcessError, OSError, ValueError):
+            pass
+        else:
+            if child_state is not None:
+                return False
     if sys.platform.startswith("linux"):
         try:
             stat_line = (Path("/proc") / str(int(pid)) / "stat").read_text(
@@ -285,6 +300,21 @@ def process_identity(pid: int | None) -> str | None:
             return f"windows:{selected_pid}:{birth}"
         finally:
             kernel32.CloseHandle(handle)
+    if all(
+        hasattr(os, name)
+        for name in ("waitid", "P_PID", "WEXITED", "WNOHANG", "WNOWAIT")
+    ):
+        try:
+            child_state = os.waitid(
+                os.P_PID,
+                int(pid),
+                os.WEXITED | os.WNOHANG | os.WNOWAIT,
+            )
+        except (ChildProcessError, OSError, ValueError):
+            pass
+        else:
+            if child_state is not None:
+                return False
     if sys.platform.startswith("linux"):
         try:
             with (Path("/proc") / str(selected_pid) / "stat").open(

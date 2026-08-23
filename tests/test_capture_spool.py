@@ -80,7 +80,8 @@ class CaptureSpoolTests(unittest.TestCase):
             paths = spool.ensure_source("private-project/session-one")
             token = source_token("private-project/session-one")
             self.assertRegex(token, r"^[0-9a-f]{32}$")
-            self.assertNotIn("private", str(paths["root"]))
+            self.assertNotIn("private-project", paths["root"].parts)
+            self.assertNotIn("session-one", paths["root"].parts)
             self.assertEqual(paths["root"].name, token)
             for name in ("inbox", "processing", "quarantine", "receipts"):
                 self.assertTrue(paths[name].is_dir())
