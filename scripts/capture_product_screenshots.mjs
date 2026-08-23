@@ -1,0 +1,101 @@
+import { chromium } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const baseUrl = process.env.RTA_DEMO_CONSOLE_URL;
+const token = process.env.RTA_DEMO_CONSOLE_TOKEN;
+const outputDir = process.env.RTA_SCREENSHOT_OUTPUT_DIR
+  ? path.resolve(process.env.RTA_SCREENSHOT_OUTPUT_DIR)
+  : path.join(root, "launch-assets", "screenshots");
+
+if (!baseUrl || !token) {
+  throw new Error("RTA_DEMO_CONSOLE_URL and RTA_DEMO_CONSOLE_TOKEN are required");
+}
+
+await mkdir(outputDir, { recursive: true });
+
+const browser = await chromium.launch();
+const errors = [];
+
+async function openConsole(viewport) {
+  const context = await browser.newContext({ viewport, deviceScaleFactor: 1 });
+  const page = await context.newPage();
+  page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
+  page.on("console", (message) => {
+    if (["error", "warning"].includes(message.type())) {
+      errors.push(`${message.type()}: ${message.text()}`);
+    }
+  });
+  await page.goto(`${baseUrl.replace(/\/$/, "")}/#token=${encodeURIComponent(token)}`, {
+    waitUntil: "domcontentloaded",
+  });
+  await page.getByText("rta-smriti-demo", { exact: true }).first().waitFor({ timeout: 60_000 });
+  await page.waitForFunction(() => document.fonts.status === "loaded");
+  await page.getByText(/^Brain Path /).evaluate((element) => {
+    element.textContent = "Brain Path %USERPROFILE%\\Documents\\Rta-Smriti\\brains";
+  });
+  return { context, page };
+}
+
+async function selectNavigation(page, label) {
+  const button = page
+    .getByRole("navigation", { name: "Operator console navigation" })
+    .getByRole("button", { name: new RegExp(`^${label}(?:\\s+\\d+)?$`) });
+  await button.click();
+}
+
+try {
+  const desktop = await openConsole({ width: 1440, height: 900 });
+  const { page } = desktop;
+
+  await page.locator(".graphCanvas").waitFor({ timeout: 60_000 });
+  await page.waitForFunction(() => document.querySelectorAll(".graphNode").length > 0);
+  await page.screenshot({
+    path: path.join(outputDir, "operator-console-v0.9.png"),
+    animations: "disabled",
+  });
+
+  await selectNavigation(page, "Files");
+  await page.locator(".fileExplorer").waitFor();
+  await page.screenshot({
+    path: path.join(outputDir, "operator-files-v0.9.png"),
+    animations: "disabled",
+  });
+
+  await selectNavigation(page, "Truth Timeline");
+  await page.locator(".truthWorkspace").waitFor();
+  await page.waitForFunction(() => Number(document.querySelector(".truthMetrics strong")?.textContent) > 0);
+  await page.getByRole("tab", { name: "Claims", exact: true }).click();
+  await page.locator(".truthClaimList button").first().waitFor();
+  await page.screenshot({
+    path: path.join(outputDir, "operator-truth-v0.9.png"),
+    animations: "disabled",
+  });
+
+  await selectNavigation(page, "Capture");
+  await page.getByRole("region", { name: "Universal capture console" }).waitFor();
+  await page.waitForFunction(() => Number(document.querySelector(".captureMetrics strong")?.textContent) > 0);
+  await page.screenshot({
+    path: path.join(outputDir, "operator-capture-v0.9.png"),
+    animations: "disabled",
+  });
+  await desktop.context.close();
+
+  const mobile = await openConsole({ width: 390, height: 844 });
+  await mobile.page.locator(".graphCanvas").waitFor({ timeout: 60_000 });
+  await mobile.page.waitForFunction(() => document.querySelectorAll(".graphNode").length > 0);
+  await mobile.page.screenshot({
+    path: path.join(outputDir, "operator-console-mobile-v0.9.png"),
+    animations: "disabled",
+  });
+  await mobile.context.close();
+
+  if (errors.length) {
+    throw new Error(`console emitted errors during capture:\n${errors.join("\n")}`);
+  }
+  process.stdout.write(`Captured public-safe v0.9 product screenshots in ${outputDir}\n`);
+} finally {
+  await browser.close();
+}

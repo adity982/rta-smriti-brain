@@ -11,7 +11,7 @@
 
 Rta-Smriti now connects repository intelligence, durable decisions, agent-session continuity, and evidence-aware retrieval through a private local event journal. Capture is opt-in, bounded, redacted before durable queuing, and explicitly treated as untrusted evidence until an operator or verifier promotes a claim.
 
-[Latest prerelease assets](https://github.com/sulabhdubey/rta-smriti-brain/releases) · [Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second product demo](launch-assets/product-hunt/rta-smriti-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Public benchmark](docs/PUBLIC_BENCHMARK.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
+[Latest prerelease assets](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.0-alpha) · [Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second v0.9 product demo](launch-assets/product-hunt/rta-smriti-v0.9-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Public benchmark](docs/PUBLIC_BENCHMARK.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
 
 Rta-Smriti Brain turns a project repository, long agent threads, durable decisions, and evidence into a small local memory graph that Codex, Claude Code, Cursor, or any MCP-capable agent can reuse before doing work.
 
@@ -194,7 +194,7 @@ sessions, or pass `--sessions-root` when Codex stores sessions somewhere else.
 
 The dashboard runs on `127.0.0.1` and includes:
 
-![Rta-Smriti operator console with evidence graph and retrieval diagnostics](launch-assets/screenshots/operator-console-v0.6.png)
+![Rta-Smriti v0.9 operator console with evidence graph and retrieval diagnostics](launch-assets/screenshots/operator-console-v0.9.png)
 
 - **Project switcher**: every local brain, readiness, file count, memory count
 - **Canonical-root and Git identity**: bound project root, repository root, branch, HEAD, dirty-file count, and duplicate-root warnings
@@ -207,6 +207,8 @@ The dashboard runs on `127.0.0.1` and includes:
 - **Types**: show/hide file, memory, docs, config, test, data, and artifact nodes
 - **Context-Pack Studio**: choose any supported or custom target agent, select a 2K/4K/8K/16K token budget, type a task, and generate a focused pack; pack text and receipt metadata remain in the current browser session only
 - **Evidence inspector**: open the optional detail panel for the selected node, must-know memories, and measured fresh/changed/missing/added/blocked source counts
+- **Truth Timeline**: inspect bitemporal claims, evidence links, contradictions, validator health, and recorded-versus-valid time without flattening history into mutable notes
+- **Universal Capture**: review explicitly authorized agent-event sources, bounded normalized events, replay order, redaction state, queue health, retention previews, and daemon diagnostics; captured text remains untrusted until promoted with evidence
 - **Incremental refresh**: update the selected repo index from the freshness control; filesystem events force a bounded content-hash check for touched paths, while unchanged projects use a fast stat manifest
 - **Indexing policy**: configure metadata-only or strict oversized-file handling, parser/LSP behavior, local thread compaction, and optional hybrid retrieval per project
 - **References and backlinks**: inspect why a node is connected and follow its visible relationships
