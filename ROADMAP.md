@@ -1,6 +1,29 @@
 # Roadmap
 
-## Current Release Candidate
+## Current v0.9.0-alpha Candidate
+
+- Opt-in universal passive capture for supported coding-agent hooks and generic local producers
+- Private bounded spools, one normalizing daemon per brain, append-only hash-chained events, causal replay, and interruption diagnostics
+- Preview-first reversible adapter management with explicit policy binding and capability-separated CLI/MCP controls
+- Metadata-only, continuity, and encrypted forensic profiles with retention, redaction, deletion receipts, and local operator visibility
+
+## Included From v0.8.0-alpha
+
+- Agent-profile-aware context compilation with explicit token, privacy, and authority contracts
+- Immutable task contracts, candidate selection, context envelopes, receipts, explanations, and revocation
+- Multi-mode context comparison and outcome recording without silent self-reinforcement
+- Canonical-root-aware repository inspection reused across local brain databases
+- Event-sourced bitemporal truth from v0.7 remains the evidence kernel beneath context compilation
+
+## Included From v0.7.0-alpha
+
+- Canonical repository and per-checkout identity with clone/worktree distinction
+- Wrong-root freshness, readiness, MCP startup, and long-running MCP call rejection
+- Backup-first, worker-safe, atomic root rebinding with rollback evidence
+- Duplicate-root detection in one database and across the local dashboard registry
+- Privacy-safe integrity diagnostics in CLI, MCP, and operator settings
+
+## Published v0.6.0-alpha
 
 - Bounded transcript rebinding across Codex task working-directory changes
 - Exact-command MCP lifecycle diagnostics before agent-host registration
@@ -13,7 +36,7 @@
 - Metadata-only large-file isolation plus explicit strict blocking
 - Safe local language-server discovery and loopback-only Ollama continuity compaction
 
-## Next After v0.6.0-alpha
+## Next After v0.9.0-alpha
 
 - Expand the public benchmark with community-reviewed corpora and blinded human relevance judgments
 - Add approximate nearest-neighbor indexes for very large local embedding collections

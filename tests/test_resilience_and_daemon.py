@@ -143,7 +143,7 @@ class RtaBrainResilienceTests(unittest.TestCase):
                 emitted.append(response["id"])
                 first_emit.set()
 
-            scheduler = McpRequestScheduler(SlowServer(Path("unused.sqlite"), "demo"), emit)
+            scheduler = McpRequestScheduler(object.__new__(SlowServer), emit)
             await scheduler.submit(
                 {
                     "jsonrpc": "2.0",

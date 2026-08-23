@@ -33,6 +33,7 @@ import {
   Network,
   PanelRightOpen,
   Plus,
+  RadioTower,
   RefreshCw,
   RotateCcw,
   Route,
@@ -50,6 +51,7 @@ import {
 } from "lucide-react";
 import { chooseProject, defaultProjectIdentity, isExactProjectIdentity } from "./project-selection.js";
 import { shellPathArg, shellQuote } from "./shell-command.js";
+import CaptureConsole from "./capture-console.jsx";
 import "./styles.css";
 
 const DEFAULT_TASK = "Prepare this project for a focused coding task";
@@ -389,6 +391,14 @@ function App() {
   const [selectedProject, setSelectedProject] = useState(null);
   const [task, setTask] = useState(DEFAULT_TASK);
   const [contextBudget, setContextBudget] = useState(4000);
+  const [contextStudioMode, setContextStudioMode] = useState("quick");
+  const [compilerMode, setCompilerMode] = useState("balanced");
+  const [comparisonMode, setComparisonMode] = useState("minimal");
+  const [governedCompilation, setGovernedCompilation] = useState(null);
+  const [compilerInspection, setCompilerInspection] = useState(null);
+  const contextSessionRef = useRef(
+    `dashboard-${globalThis.crypto?.randomUUID?.() || Date.now().toString(36)}`,
+  );
   const [packText, setPackText] = useState("");
   const [memories, setMemories] = useState([]);
   const [graphData, setGraphData] = useState({ nodes: [], edges: [] });
@@ -445,6 +455,16 @@ function App() {
   const [isGovernanceBusy, setIsGovernanceBusy] = useState(false);
   const [intelligence, setIntelligence] = useState({ diagnostics: null, graph: null, workspaces: [] });
   const [isIntelligenceBusy, setIsIntelligenceBusy] = useState(false);
+  const [truthData, setTruthData] = useState({ claims: [], events: [], contradictions: [], validators: [], abstentions: [], counts: {} });
+  const [truthDetail, setTruthDetail] = useState(null);
+  const [truthDiff, setTruthDiff] = useState(null);
+  const [isTruthBusy, setIsTruthBusy] = useState(false);
+  const captureRequestRef = useRef(0);
+  const [captureData, setCaptureData] = useState({ overview: null, replay: null, diagnostics: null });
+  const [captureBusy, setCaptureBusy] = useState(false);
+  const [captureError, setCaptureError] = useState("");
+  const [captureReplayMode, setCaptureReplayMode] = useState("chronological");
+  const [capturePrivacyCeiling, setCapturePrivacyCeiling] = useState("internal");
 
   const selectedParams = useMemo(() => {
     if (!selectedProject) return null;
@@ -468,6 +488,22 @@ function App() {
   const targetAgentLabel = targetAgent === "custom"
     ? customAgent.trim() || "Custom Agent"
     : targetAgents.find((agent) => agent.value === targetAgent)?.label || "Universal / Any Agent";
+  const contextBinding = useMemo(() => JSON.stringify({
+    dbPath: selectedProject?.db_path || null,
+    project: selectedProject?.project || null,
+    task: task.trim(),
+    contextBudget,
+    contextStudioMode,
+    compilerMode,
+    comparisonMode,
+    targetAgent,
+    customAgent: customAgent.trim(),
+  }), [
+    selectedProject?.db_path, selectedProject?.project, task, contextBudget,
+    contextStudioMode, compilerMode, comparisonMode, targetAgent, customAgent,
+  ]);
+  const contextBindingRef = useRef(contextBinding);
+  contextBindingRef.current = contextBinding;
 
   async function loadHealth(preferredProject = null) {
     setIsLoading(true);
@@ -550,6 +586,7 @@ function App() {
       watcherPayload,
       governancePayload,
       continuityPayload,
+      truthPayload,
     ] = await Promise.all([
       api(`/api/memories?${qs({ ...params, limit: 40 })}`),
       api(`/api/graph?${qs({ ...params, limit: 120 })}`),
@@ -559,6 +596,7 @@ function App() {
       api(`/api/watcher?${qs(params)}`),
       api(`/api/governance?${qs({ ...params, limit: 50 })}`),
       api(`/api/continuity?${qs(params)}`),
+      api(`/api/truth?${qs({ ...params, mode: "overview", limit: 120 })}`),
     ]);
     if (requestId !== projectRequestRef.current) return;
     setMemories(memoryPayload.memories || []);
@@ -573,8 +611,75 @@ function App() {
       setGovernance({ policies: governancePayload.policies || [], receipts: governancePayload.receipts || [] });
     }
     setContinuity(continuityPayload);
+    setTruthData(truthPayload);
+    setTruthDetail(null);
+    setTruthDiff(null);
     setSelectedNode(null);
     setReferenceHistory([]);
+  }
+
+  async function loadCapture(
+    project = selectedProject,
+    replayMode = captureReplayMode,
+    privacyCeiling = capturePrivacyCeiling,
+  ) {
+    if (!project) return null;
+    const requestId = captureRequestRef.current + 1;
+    captureRequestRef.current = requestId;
+    setCaptureBusy(true);
+    try {
+      const params = { db_path: project.db_path, project: project.project };
+      const [overview, replay, diagnostics] = await Promise.all([
+        api(`/api/capture?${qs({ ...params, mode: "overview" })}`),
+        api(`/api/capture?${qs({ ...params, mode: "replay", replay_mode: replayMode, privacy_ceiling: privacyCeiling, limit: 100 })}`),
+        api(`/api/capture?${qs({ ...params, mode: "diagnostics" })}`),
+      ]);
+      if (requestId !== captureRequestRef.current) return null;
+      const next = { overview, replay, diagnostics };
+      setCaptureData(next);
+      setCaptureError("");
+      return next;
+    } catch (error) {
+      if (requestId === captureRequestRef.current) {
+        setCaptureError(error.message);
+        setMessage(`Capture console could not load: ${error.message}`);
+      }
+      return null;
+    } finally {
+      if (requestId === captureRequestRef.current) setCaptureBusy(false);
+    }
+  }
+
+  async function runCaptureAction(action, values = {}, success = "Capture state updated.") {
+    if (!selectedParams || captureBusy) return null;
+    setCaptureBusy(true);
+    setCaptureError("");
+    try {
+      const result = await api("/api/capture", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, action, ...values }),
+      });
+      setMessage(success);
+      await loadCapture(selectedProject);
+      return result;
+    } catch (error) {
+      setCaptureError(error.message);
+      setMessage(`Capture operation failed: ${error.message}`);
+      return null;
+    } finally {
+      setCaptureBusy(false);
+    }
+  }
+
+  async function exportCapture(privacyCeiling) {
+    const payload = await runCaptureAction(
+      "export",
+      { privacy_ceiling: privacyCeiling, limit: 500, max_bytes: 16_000_000 },
+      "Privacy-verified capture export prepared.",
+    );
+    if (!payload) return;
+    downloadJson(`${selectedProject.project}-capture.json`, payload);
+    setMessage("Privacy-verified capture export downloaded.");
   }
 
   async function loadFiles(prefix = "", query = "", project = selectedProject) {
@@ -622,6 +727,12 @@ function App() {
   }, [targetAgent]);
 
   useEffect(() => {
+    setPackText("");
+    setGovernedCompilation(null);
+    setCompilerInspection(null);
+  }, [contextBinding]);
+
+  useEffect(() => {
     if (selectedProject) {
       setFileTree({ entries: [], prefix: "", query: "", total_files: 0 });
       setFilePreview(null);
@@ -636,6 +747,10 @@ function App() {
         .catch((error) => setMessage(`Could not load ${selectedProject.project}: ${error.message}`));
     }
   }, [selectedProject?.db_path, selectedProject?.project]);
+
+  useEffect(() => {
+    if (viewMode === "capture" && selectedProject) loadCapture(selectedProject);
+  }, [viewMode, selectedProject?.db_path, selectedProject?.project]);
 
   useEffect(() => {
     if (!selectedProject) return undefined;
@@ -681,18 +796,46 @@ function App() {
   async function generatePack() {
     if (!selectedParams) return setMessage("Select a project first.");
     if (!task.trim()) return setMessage("Enter a task first.");
+    const requestBinding = contextBinding;
     setIsGenerating(true);
+    setPackText("");
+    setGovernedCompilation(null);
+    setCompilerInspection(null);
     try {
-      setMessage("Generating context pack...");
-      const payload = await api("/api/context-pack", {
-        method: "POST",
-        body: JSON.stringify({ ...selectedParams, task: task.trim(), limit: 8, max_tokens: contextBudget }),
-      });
-      const rawText = typeof payload.pack === "string" ? payload.pack : JSON.stringify(payload.pack, null, 2);
+      setMessage(contextStudioMode === "governed" ? "Authorizing and compiling context..." : "Generating context pack...");
+      const payload = contextStudioMode === "governed"
+        ? await api("/api/context-compiler", {
+          method: "POST",
+          body: JSON.stringify({
+            ...selectedParams,
+            action: "authorize-and-compile",
+            profile_id: targetAgent === "custom" ? "custom" : targetAgent,
+            max_input_tokens: contextBudget,
+            objective: task.trim(),
+            compiler_mode: compilerMode,
+            comparison_modes: comparisonMode && comparisonMode !== compilerMode ? [comparisonMode] : [],
+            privacy_ceiling: "internal",
+            principal_id: targetAgent === "custom" ? customAgent.trim() || "custom-agent" : targetAgent,
+            session_id: contextSessionRef.current,
+            variant: "primary",
+          }),
+        })
+        : await api("/api/context-pack", {
+          method: "POST",
+          body: JSON.stringify({ ...selectedParams, task: task.trim(), limit: 8, max_tokens: contextBudget }),
+        });
+      if (contextBindingRef.current !== requestBinding) {
+        setMessage("Context inputs changed while compilation was running. The stale result was discarded.");
+        return;
+      }
+      const rawPack = contextStudioMode === "governed" ? payload.context_pack?.context_text : payload.pack;
+      const rawText = typeof rawPack === "string" ? rawPack : JSON.stringify(rawPack, null, 2);
       const text = targetAgent === "universal" ? rawText : `Target agent: ${targetAgentLabel}\n\n${rawText}`;
       setPackText(text);
+      setGovernedCompilation(contextStudioMode === "governed" ? payload : null);
+      setCompilerInspection(null);
       const receipt = {
-        id: `pack-${Date.now()}`,
+        id: payload.compilation_receipt?.compilation_id || `pack-${Date.now()}`,
         createdAt: new Date().toISOString(),
         project: selectedProject.project,
         task: task.trim(),
@@ -701,10 +844,14 @@ function App() {
         nodes: buildGraph(selectedProject, graphData, memories, text, graphOptions).nodes.length,
         bytes: new Blob([text]).size,
         pack: text,
+        governed: contextStudioMode === "governed",
+        mode: payload.context_pack?.compiler_mode,
+        receiptDigest: payload.compilation_receipt?.receipt_digest,
+        variants: payload.available_variants || [],
       };
       const nextReceipts = [receipt, ...receipts].slice(0, 30);
       setReceipts(nextReceipts);
-      setMessage("Context pack generated.");
+      setMessage(contextStudioMode === "governed" ? "Governed context compiled and receipted." : "Context pack generated.");
       showDrawer("receipts");
       setViewMode("graph");
       setGraphMode("task");
@@ -1035,6 +1182,94 @@ function App() {
     }
   }
 
+  async function loadTruth(project = selectedProject, { silent = false } = {}) {
+    if (!project) return null;
+    if (!silent) setIsTruthBusy(true);
+    try {
+      const payload = await api(`/api/truth?${qs({
+        db_path: project.db_path, project: project.project, mode: "overview", limit: 120,
+      })}`);
+      setTruthData(payload);
+      return payload;
+    } catch (error) {
+      setMessage(`Temporal truth could not load: ${error.message}`);
+      return null;
+    } finally {
+      if (!silent) setIsTruthBusy(false);
+    }
+  }
+
+  async function inspectGovernedCompilation(action) {
+    const compilationId = governedCompilation?.compilation_receipt?.compilation_id;
+    if (!selectedParams || !compilationId) return setMessage("Compile a governed context pack first.");
+    try {
+      setMessage(`${action === "audit" ? "Auditing" : "Explaining"} compilation receipt...`);
+      const payload = await api("/api/context-compiler", {
+        method: "POST",
+        body: JSON.stringify({
+          ...selectedParams,
+          action,
+          compilation_id: compilationId,
+          principal_id: targetAgent === "custom" ? customAgent.trim() || "custom-agent" : targetAgent,
+          session_id: action === "audit" ? `${contextSessionRef.current}-operator` : contextSessionRef.current,
+        }),
+      });
+      setCompilerInspection({ action, payload });
+      setMessage(`${action === "audit" ? "Receipt audit" : "Context explanation"} verified.`);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function inspectTruthClaim(claimId) {
+    if (!selectedProject || !claimId) return;
+    setIsTruthBusy(true);
+    try {
+      const payload = await api(`/api/truth?${qs({
+        ...selectedParams, mode: "explain", claim_id: claimId,
+      })}`);
+      setTruthDetail(payload);
+    } catch (error) {
+      setMessage(`Claim evidence could not load: ${error.message}`);
+    } finally {
+      setIsTruthBusy(false);
+    }
+  }
+
+  async function compareTruth(fromSequence, toSequence, validAt) {
+    if (!selectedProject) return;
+    setIsTruthBusy(true);
+    try {
+      const payload = await api(`/api/truth?${qs({
+        ...selectedParams, mode: "diff", from_sequence: fromSequence,
+        to_sequence: toSequence, valid_at: validAt, limit: 200,
+      })}`);
+      setTruthDiff(payload);
+      setMessage(`${payload.changes?.length || 0} truth changes found between sequences ${fromSequence} and ${toSequence}.`);
+    } catch (error) {
+      setMessage(`Truth diff failed: ${error.message}`);
+    } finally {
+      setIsTruthBusy(false);
+    }
+  }
+
+  async function rebuildTruth() {
+    if (!selectedProject || isTruthBusy) return;
+    setIsTruthBusy(true);
+    try {
+      const payload = await api("/api/truth", {
+        method: "POST",
+        body: JSON.stringify({ ...selectedParams, action: "rebuild" }),
+      });
+      await loadTruth(selectedProject, { silent: true });
+      setMessage(`Temporal projections rebuilt from ${payload.events_replayed} verified events.`);
+    } catch (error) {
+      setMessage(`Projection rebuild failed: ${error.message}`);
+    } finally {
+      setIsTruthBusy(false);
+    }
+  }
+
   async function removeWorkspaceMember(values) {
     if (!selectedParams) return null;
     setIsIntelligenceBusy(true);
@@ -1197,6 +1432,22 @@ function App() {
     loadFiles(fileTree.prefix || "", fileTree.query || "");
   }
 
+  function showTruth() {
+    setViewMode("truth");
+    setSemanticFocus(null);
+    setNavContext("truth");
+    setSettingsOpen(false);
+    loadTruth();
+  }
+
+  function showCapture() {
+    setViewMode("capture");
+    setSemanticFocus(null);
+    setNavContext("capture");
+    setSettingsOpen(false);
+    setInspectorOpen(false);
+  }
+
   function showBase(table, kind = "", context = "bases") {
     setViewMode("bases");
     setSemanticFocus(null);
@@ -1223,7 +1474,7 @@ function App() {
           </div>
           <div>
             <h1>Rta-Smriti Brain</h1>
-            <span>v0.6 Alpha Operator Console</span>
+            <span>v0.9 Development Operator Console</span>
           </div>
         </div>
         <div className="topStatus">
@@ -1279,14 +1530,14 @@ function App() {
                       setSelectedProject(project);
                       setProjectsOpen(false);
                     }}
-                    aria-label={`${project.project}, ${safeNumber(project.sources)} files, ${project.root_conflict ? "root conflict" : project.ready ? "indexed" : "needs indexing"}`}
+                    aria-label={`${project.project}, ${safeNumber(project.sources)} files, ${project.root_conflict || project.root_duplicate ? "root conflict" : project.ready ? "indexed" : "needs indexing"}`}
                   >
                     <Network size={15} />
                     <span>
                       <strong>{project.project}</strong>
                       <small>{safeNumber(project.sources)} files / {safeNumber(project.memories)} memories{project.git?.branch ? ` / ${project.git.branch}@${project.git.head || "unborn"}` : ""}</small>
                     </span>
-                    <i className={project.ready && !project.root_conflict ? "ok" : "warn"} title={project.root_conflict ? "Same project name is bound to multiple roots" : ""} />
+                    <i className={project.ready && !project.root_conflict && !project.root_duplicate ? "ok" : "warn"} title={project.root_conflict || project.root_duplicate ? "Canonical checkout ownership needs review" : ""} />
                   </button>
                 ))}
                 {isLoading && !projects.length && <div className="railEmpty">Scanning local brains...</div>}
@@ -1310,6 +1561,8 @@ function App() {
               <button title="Scan indexed dependencies" aria-current={navContext === "imports" ? "page" : undefined} className={navContext === "imports" ? "active" : ""} onClick={() => showBase("files", "import", "imports")}><GitBranch size={17} /><span>Imports</span></button>
               <button title="Review durable project knowledge" aria-current={navContext === "memories" ? "page" : undefined} className={navContext === "memories" ? "active" : ""} onClick={() => showBase("memory", "", "memories")}><MemoryStick size={17} /><span>Memories</span></button>
               <button title="Inspect evidence and freshness" aria-current={navContext === "evidence" ? "page" : undefined} className={navContext === "evidence" ? "active" : ""} onClick={() => { focusSemanticHub("evidence"); showDrawer("evidence"); }}><ShieldCheck size={17} /><span>Evidence</span></button>
+              <button title="Inspect event-sourced project truth" aria-current={navContext === "truth" ? "page" : undefined} className={navContext === "truth" ? "active" : ""} onClick={showTruth}><Activity size={17} /><span>Truth Timeline</span><em>{truthData.counts?.events || 0}</em></button>
+              <button title="Review authorized agent continuity events" aria-current={navContext === "capture" ? "page" : undefined} className={navContext === "capture" ? "active" : ""} onClick={showCapture}><RadioTower size={17} /><span>Capture</span><em>{captureData.overview?.sources?.length || 0}</em></button>
             </div>
             <div className="navGroup">
               <span className="navGroupLabel">Tools</span>
@@ -1340,40 +1593,49 @@ function App() {
               <button aria-pressed={viewMode === "graph"} className={viewMode === "graph" ? "active" : ""} onClick={() => showWorkspace("graph")}><GitBranch size={15} /> Graph</button>
               <button aria-pressed={viewMode === "canvas"} className={viewMode === "canvas" ? "active" : ""} onClick={() => showWorkspace("canvas")}><MapIcon size={15} /> Canvas</button>
               <button aria-pressed={viewMode === "bases"} className={viewMode === "bases" ? "active" : ""} onClick={() => showBase("memory", "", "bases")}><Table2 size={15} /> Bases</button>
+              <button aria-pressed={viewMode === "truth"} className={viewMode === "truth" ? "active" : ""} onClick={showTruth}><Activity size={15} /> Truth</button>
+              <button aria-pressed={viewMode === "capture"} className={viewMode === "capture" ? "active" : ""} onClick={showCapture}><RadioTower size={15} /> Capture</button>
             </div>
-            <div className="modeGroup" aria-label="Graph scope">
-              {graphModes.map((mode) => (
-                <button key={mode} aria-pressed={graphMode === mode} className={graphMode === mode ? "active" : ""} onClick={() => setGraphMode(mode)}>{mode}</button>
-              ))}
-            </div>
-            <button className={searchOpen ? "toolButton active" : "toolButton"} onClick={() => setSearchOpen((value) => !value)} aria-label="Search" aria-pressed={searchOpen} title="Search">
-              <Search size={16} /> <span className="toolText">Search</span>
-            </button>
-            <button className={typesOpen ? "toolButton active" : "toolButton"} onClick={() => setTypesOpen((value) => !value)} aria-label="Types" aria-pressed={typesOpen} title="Types">
-              <Layers3 size={16} /> <span className="toolText">Types</span>
-            </button>
-            <button className={settingsOpen ? "toolButton active" : "toolButton"} onClick={() => setSettingsOpen((value) => { const next = !value; setNavContext(next ? "settings" : viewMode); return next; })} aria-label="Settings" aria-pressed={settingsOpen} title="Graph settings">
-              <SlidersHorizontal size={16} /> <span className="toolText">Settings</span>
-            </button>
-            <button className="toolButton iconOnly" onClick={() => exportView(`${selectedProject?.project || "rta-smriti"}-${viewMode}.json`, { project: selectedProject?.project, task, view: viewMode, graph: visibleGraph })} aria-label="Export current view" title="Export current view">
-              <Download size={16} />
-            </button>
-            <button className={inspectorOpen ? "toolButton active" : "toolButton"} onClick={() => setInspectorOpen((value) => !value)} aria-label={inspectorOpen ? "Close detail panel" : "Open detail panel"} title={inspectorOpen ? "Close detail panel" : "Open detail panel"}>
-              <PanelRightOpen size={16} />
-            </button>
-            <button className="toolButton" onClick={() => setStageExpanded((value) => !value)} aria-label={stageExpanded ? "Exit expanded graph" : "Expand graph"}>
+            {!(["truth", "capture"].includes(viewMode)) && (
+              <>
+                <div className="modeGroup" aria-label="Graph scope">
+                  {graphModes.map((mode) => (
+                    <button key={mode} aria-pressed={graphMode === mode} className={graphMode === mode ? "active" : ""} onClick={() => setGraphMode(mode)}>{mode}</button>
+                  ))}
+                </div>
+                <button className={searchOpen ? "toolButton active" : "toolButton"} onClick={() => setSearchOpen((value) => !value)} aria-label="Search" aria-pressed={searchOpen} title="Search">
+                  <Search size={16} /> <span className="toolText">Search</span>
+                </button>
+                <button className={typesOpen ? "toolButton active" : "toolButton"} onClick={() => setTypesOpen((value) => !value)} aria-label="Types" aria-pressed={typesOpen} title="Types">
+                  <Layers3 size={16} /> <span className="toolText">Types</span>
+                </button>
+                <button className={settingsOpen ? "toolButton active" : "toolButton"} onClick={() => setSettingsOpen((value) => { const next = !value; setNavContext(next ? "settings" : viewMode); return next; })} aria-label="Settings" aria-pressed={settingsOpen} title="Graph settings">
+                  <SlidersHorizontal size={16} /> <span className="toolText">Settings</span>
+                </button>
+                <button className="toolButton iconOnly" onClick={() => exportView(`${selectedProject?.project || "rta-smriti"}-${viewMode}.json`, { project: selectedProject?.project, task, view: viewMode, graph: visibleGraph })} aria-label="Export current view" title="Export current view">
+                  <Download size={16} />
+                </button>
+                <button className={inspectorOpen ? "toolButton active" : "toolButton"} onClick={() => setInspectorOpen((value) => !value)} aria-label={inspectorOpen ? "Close detail panel" : "Open detail panel"} title={inspectorOpen ? "Close detail panel" : "Open detail panel"}>
+                  <PanelRightOpen size={16} />
+                </button>
+              </>
+            )}
+            <button className="toolButton" onClick={() => setStageExpanded((value) => !value)} aria-label={stageExpanded ? "Exit expanded workspace" : "Expand workspace"}>
               <Maximize2 size={16} />
             </button>
-            {selectedProject?.root_conflict && (
+            {(selectedProject?.root_conflict || selectedProject?.root_duplicate || selectedProject?.integrity?.operationally_ready === false) && (
               <div className="rootConflictBanner" role="alert">
                 <ShieldCheck size={17} />
-                <span><strong>Canonical-root conflict.</strong> This project name is bound to more than one folder. Verify the selected checkout before using its context.</span>
+                <span>
+                  <strong>{selectedProject?.root_conflict || selectedProject?.root_duplicate ? "Canonical-root conflict." : "Checkout integrity needs attention."}</strong>
+                  <span className="rootConflictDetail"> Verify the selected project binding before using its context.</span>
+                </span>
                 <button onClick={() => showDrawer("checkpoint")}>Review</button>
               </div>
             )}
           </div>
 
-          <div className={searchOpen || typesOpen || settingsOpen ? "graphFilters" : "graphFilters collapsed"}>
+          {!(["truth", "capture"].includes(viewMode)) && <div className={searchOpen || typesOpen || settingsOpen ? "graphFilters" : "graphFilters collapsed"}>
               {searchOpen && (
                 <label className="nodeSearch" id="graph-search-controls">
                   <Search size={15} />
@@ -1401,6 +1663,7 @@ function App() {
                   projectSettings={projectSettings}
                   setProjectSettings={setProjectSettings}
                   parserCapabilities={parserCapabilities}
+                  integrity={selectedProject?.integrity}
                   onSave={saveProjectSettings}
                   isSaving={isSavingSettings}
                   watcher={watcher}
@@ -1412,7 +1675,7 @@ function App() {
                   isChangingContinuity={isChangingContinuity}
                 />
               )}
-            </div>
+            </div>}
 
           {viewMode === "graph" && <GraphCanvas graph={visibleGraph} selectedNode={selectedNode} onSelect={selectPrimaryNode} query={nodeQuery} showLabels={showLabels} showEdges={showEdges} />}
           {viewMode === "files" && (
@@ -1431,8 +1694,38 @@ function App() {
           )}
           {viewMode === "canvas" && <CanvasBoard project={selectedProject} graph={visibleGraph} onSelect={(node) => selectPrimaryNode(node, "evidence")} onKeyboardInspect={inspectCanvasNodeFromKeyboard} onExport={exportView} />}
           {viewMode === "bases" && <BasesView memories={memories} graph={computedGraph} publish={publish} onSelect={(node) => selectPrimaryNode(node, "evidence")} initialTable={baseScope.table} kindFilter={baseScope.kind} />}
+          {viewMode === "truth" && (
+            <TemporalTruthWorkspace
+              data={truthData}
+              detail={truthDetail}
+              diff={truthDiff}
+              busy={isTruthBusy}
+              onRefresh={() => loadTruth()}
+              onInspect={inspectTruthClaim}
+              onCompare={compareTruth}
+              onRebuild={rebuildTruth}
+            />
+          )}
 
-          <TaskComposer
+          {viewMode === "capture" && (
+            <CaptureConsole
+              project={selectedProject}
+              overview={captureData.overview}
+              replay={captureData.replay}
+              diagnostics={captureData.diagnostics}
+              busy={captureBusy}
+              error={captureError}
+              replayMode={captureReplayMode}
+              privacyCeiling={capturePrivacyCeiling}
+              onReplayMode={(mode) => { setCaptureReplayMode(mode); loadCapture(selectedProject, mode, capturePrivacyCeiling); }}
+              onPrivacyCeiling={(ceiling) => { setCapturePrivacyCeiling(ceiling); loadCapture(selectedProject, captureReplayMode, ceiling); }}
+              onRefresh={() => loadCapture()}
+              onAction={runCaptureAction}
+              onExport={exportCapture}
+            />
+          )}
+
+          {viewMode !== "capture" && <TaskComposer
             task={task}
             setTask={setTask}
             project={selectedProject}
@@ -1451,7 +1744,16 @@ function App() {
             setCustomAgent={setCustomAgent}
             contextBudget={contextBudget}
             setContextBudget={setContextBudget}
-          />
+            studioMode={contextStudioMode}
+            setStudioMode={setContextStudioMode}
+            compilerMode={compilerMode}
+            setCompilerMode={setCompilerMode}
+            comparisonMode={comparisonMode}
+            setComparisonMode={setComparisonMode}
+            governedCompilation={governedCompilation}
+            compilerInspection={compilerInspection}
+            onInspectCompilation={inspectGovernedCompilation}
+          />}
         </main>
 
         <aside ref={inspectorRef} tabIndex={-1} aria-label="Project detail inspector" className={inspectorOpen ? "inspector" : "inspector hidden"}>
@@ -1579,7 +1881,7 @@ function App() {
 function GraphSettings({
   id,
   depth, setDepth, showLabels, setShowLabels, showEdges, setShowEdges,
-  projectSettings, setProjectSettings, parserCapabilities, onSave, isSaving,
+  projectSettings, setProjectSettings, parserCapabilities, integrity, onSave, isSaving,
   watcher, onStartWatcher, onStopWatcher, isChangingWatcher,
   continuity, onToggleContinuity, isChangingContinuity,
 }) {
@@ -1676,6 +1978,18 @@ function GraphSettings({
         </button>
         <p className="blockedPolicyWarning"><ShieldCheck size={14} /> Metadata-only files remain visible as warnings and are never represented as content-verified. Strict block mode remains available.</p>
       </div>
+      <div className={`settingsGroup integritySettings ${integrity?.operationally_ready ? "verified" : "attention"}`}>
+        <div className="watcherHeading">
+          <ShieldCheck size={16} />
+          <span><strong>Checkout integrity</strong><small>{integrity?.operationally_ready ? "Verified" : "Attention required"}</small></span>
+        </div>
+        <div className="integrityFacts">
+          <span>Schema <b>v{integrity?.schema_version ?? "?"}</b></span>
+          <span>Binding <b>{integrity?.binding?.state?.replaceAll("_", " ") || "unknown"}</b></span>
+          <span>Root <b>{integrity?.binding?.root_fingerprint || "unbound"}</b></span>
+          <span>Duplicates <b>{integrity?.duplicate_root_count ?? 0}</b></span>
+        </div>
+      </div>
       <div className="settingsGroup watcherSettings">
         <div className="watcherHeading">
           <span className={`watcherDot ${watcher?.state === "running" ? "running" : ""}`} />
@@ -1715,6 +2029,162 @@ function GraphSettings({
     </div>
   );
 }
+
+function TemporalTruthWorkspace({ data, detail, diff, busy, onRefresh, onInspect, onCompare, onRebuild }) {
+  const [tab, setTab] = useState("timeline");
+  const maxSequence = Math.max(1, ...(data.events || []).map((event) => Number(event.project_sequence || 0)));
+  const [fromSequence, setFromSequence] = useState(Math.max(1, maxSequence - 1));
+  const [toSequence, setToSequence] = useState(maxSequence);
+  const [validAt, setValidAt] = useState(() => new Date().toISOString());
+
+  useEffect(() => {
+    setFromSequence(Math.max(1, maxSequence - 1));
+    setToSequence(maxSequence);
+  }, [maxSequence]);
+
+  const readiness = data.readiness || {};
+  const counts = data.counts || {};
+  const selectedClaim = detail?.claim;
+  const objectText = (value) => {
+    const encoded = JSON.stringify(value) ?? "null";
+    return encoded.length > 180 ? `${encoded.slice(0, 177)}...` : encoded;
+  };
+
+  return (
+    <section className="truthWorkspace" aria-label="Temporal truth workspace">
+      <header className="truthHeader">
+        <div>
+          <span className="sectionEyebrow">Selective event sourcing</span>
+          <h2>Temporal Truth</h2>
+          <p>What the project claimed, when it applied, and when the brain learned it.</p>
+        </div>
+        <div className="truthHeaderActions">
+          <span className={readiness.ledger_intact ? "truthHealth ok" : "truthHealth danger"}>
+            {readiness.ledger_intact ? <ShieldCheck size={15} /> : <ShieldAlert size={15} />}
+            {readiness.ledger_intact ? "Ledger intact" : "Ledger failed"}
+          </span>
+          <button className="iconButton" onClick={onRefresh} disabled={busy} title="Refresh temporal truth" aria-label="Refresh temporal truth"><RefreshCw size={16} /></button>
+          <button className="secondaryButton" onClick={onRebuild} disabled={busy || !readiness.ledger_intact}><RotateCcw size={15} /> Rebuild projections</button>
+        </div>
+      </header>
+
+      <div className="truthMetrics" aria-label="Temporal truth counts">
+        <article><strong>{safeNumber(counts.events)}</strong><span>Immutable events</span></article>
+        <article><strong>{safeNumber(counts.current_claims)}</strong><span>Current claims</span></article>
+        <article className={counts.contradictions ? "warn" : ""}><strong>{safeNumber(counts.contradictions)}</strong><span>Contradictions</span></article>
+        <article className={counts.failed_validators ? "danger" : ""}><strong>{safeNumber(counts.failed_validators)}</strong><span>Failed validators</span></article>
+        <article><strong>{safeNumber(counts.abstentions)}</strong><span>Abstentions</span></article>
+      </div>
+
+      <div className="truthTabs" role="tablist" aria-label="Temporal truth views">
+        {["timeline", "claims", "conflicts", "validators", "diff"].map((item) => (
+          <button key={item} role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>
+            {item === "conflicts" ? "Contradictions" : item === "validators" ? "Validator Health" : item[0].toUpperCase() + item.slice(1)}
+          </button>
+        ))}
+      </div>
+
+      <div className="truthBody">
+        <div className="truthPrimary">
+          {tab === "timeline" && (
+            <div className="truthTimeline" role="tabpanel">
+              {(data.events || []).map((event) => (
+                <article key={event.event_id}>
+                  <div className="timelineRail"><i /><span>{event.project_sequence}</span></div>
+                  <div className="timelineCard">
+                    <header><strong>{String(event.event_type).replace(/\.v\d+$/, "").replaceAll("_", " ")}</strong><time>{new Date(event.recorded_at).toLocaleString()}</time></header>
+                    <p>{event.stream_id} / v{event.stream_version}</p>
+                    <code>{objectText(event.payload_summary || {})}</code>
+                    <footer>{event.actor_type}:{event.actor_id} / {event.source} / {event.verification_status}</footer>
+                  </div>
+                </article>
+              ))}
+              {!data.events?.length && <div className="truthEmpty"><Activity size={24} /><strong>No temporal events yet</strong><span>Create the first consequential claim through the CLI or operator API.</span></div>}
+            </div>
+          )}
+
+          {tab === "claims" && (
+            <div className="truthClaimList" role="tabpanel">
+              {(data.claims || []).map((claim) => (
+                <button key={claim.claim_id} onClick={() => onInspect(claim.claim_id)} className={selectedClaim?.claim_id === claim.claim_id ? "active" : ""}>
+                  <span className={`truthState ${claim.effective_state}`}>{claim.effective_state}</span>
+                  <strong>{claim.redacted ? `${String(claim.privacy_class || "private").replace(/^./, (letter) => letter.toUpperCase())} claim` : claim.subject}</strong>
+                  <span>{claim.redacted ? "Value hidden by privacy policy" : `${claim.predicate} = ${objectText(claim.object)}`}</span>
+                  <small>Recorded from sequence {claim.recorded_from_sequence}</small>
+                </button>
+              ))}
+              {!data.claims?.length && <div className="truthEmpty"><Database size={24} /><strong>No current claims</strong><span>The legacy memory index remains available while temporal truth starts empty.</span></div>}
+            </div>
+          )}
+
+          {tab === "conflicts" && (
+            <div className="truthConflictList" role="tabpanel">
+              {(data.contradictions || []).map((item) => (
+                <article key={item.relation_id}>
+                  <ShieldAlert size={18} />
+                  <div><strong>{item.from_claim_id}</strong><span>contradicts</span><strong>{item.to_claim_id}</strong></div>
+                  <small>{item.authority_class} / confidence {Number(item.confidence || 0).toFixed(2)}</small>
+                </article>
+              ))}
+              {!data.contradictions?.length && <div className="truthEmpty"><CheckCircle2 size={24} /><strong>No active contradictions</strong><span>Competing branches will appear here without being silently resolved.</span></div>}
+            </div>
+          )}
+
+          {tab === "validators" && (
+            <div className="truthValidatorList" role="tabpanel">
+              {(data.validators || []).map((validator) => (
+                <article key={validator.validator_id} className={validator.outcome === "fail" || validator.outcome === "error" ? "failed" : ""}>
+                  <div className={`validatorOutcome ${validator.outcome}`}><CircleDot size={15} /> {validator.outcome}</div>
+                  <strong>{validator.validator_id}</strong>
+                  <span>{validator.type} protects {validator.claim_id}</span>
+                  <small>Failure makes the claim {validator.failure_effect}</small>
+                </article>
+              ))}
+              {!data.validators?.length && <div className="truthEmpty"><ShieldCheck size={24} /><strong>No validators defined</strong><span>Add deterministic proof checks from the CLI or operator API.</span></div>}
+            </div>
+          )}
+
+          {tab === "diff" && (
+            <div className="truthDiff" role="tabpanel">
+              <form onSubmit={(event) => { event.preventDefault(); onCompare(fromSequence, toSequence, validAt); }}>
+                <label>From sequence<input type="number" min="1" value={fromSequence} onChange={(event) => setFromSequence(Number(event.target.value))} /></label>
+                <label>To sequence<input type="number" min="1" value={toSequence} onChange={(event) => setToSequence(Number(event.target.value))} /></label>
+                <label>Valid at<input value={validAt} onChange={(event) => setValidAt(event.target.value)} /></label>
+                <button className="primaryButton" type="submit" disabled={busy || fromSequence >= toSequence}><GitBranch size={15} /> Compare</button>
+              </form>
+              <div className="truthDiffResults">
+                {(diff?.changes || []).map((change) => (
+                  <article key={change.claim_id}>
+                    <strong>{change.claim_id}</strong>
+                    <div><span>Before</span><code>{objectText(change.before || { status: "absent" })}</code></div>
+                    <div><span>After</span><code>{objectText(change.after || { status: "absent" })}</code></div>
+                  </article>
+                ))}
+                {diff && !diff.changes?.length && <div className="truthEmpty"><CheckCircle2 size={24} /><strong>No truth changes</strong><span>The selected recorded-time interval produced the same valid-time view.</span></div>}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <aside className="truthInspector" aria-label="Selected truth claim evidence">
+          <span className="sectionEyebrow">Claim inspector</span>
+          {selectedClaim ? (
+            <>
+              <span className={`truthState ${selectedClaim.effective_state}`}>{selectedClaim.effective_state}</span>
+              <h3>{selectedClaim.redacted ? `${String(selectedClaim.privacy_class || "private").replace(/^./, (letter) => letter.toUpperCase())} claim` : selectedClaim.subject}</h3>
+              <p>{selectedClaim.redacted ? "Value hidden by privacy policy" : `${selectedClaim.predicate} = ${objectText(selectedClaim.object)}`}</p>
+              <section><strong>Evidence</strong>{(detail.evidence || []).map((item) => <div key={item.evidence_id} className="truthEvidence"><span>{item.polarity}</span><b>{item.evidence_id}</b><small>{item.method} / {item.authority_class}</small></div>)}{!detail.evidence?.length && <small>No evidence attached.</small>}</section>
+              <section><strong>Relations</strong>{(detail.relations || []).map((item) => <div key={item.relation_id} className="truthEvidence"><span>{item.relation_type}</span><b>{item.from_claim_id} → {item.to_claim_id}</b></div>)}{!detail.relations?.length && <small>No relations attached.</small>}</section>
+            </>
+          ) : (
+            <div className="truthEmpty"><Eye size={24} /><strong>Select a claim</strong><span>Open Claims to inspect its evidence, contradictions, and provenance.</span></div>
+          )}
+        </aside>
+      </div>
+    </section>
+  );
+}
+
 
 function GraphCanvas({ graph, selectedNode, onSelect, query, showLabels, showEdges }) {
   const canvasRef = useRef(null);
@@ -2356,7 +2826,7 @@ function BasesView({ memories, graph, publish, onSelect, initialTable = "memory"
   );
 }
 
-function TaskComposer({ task, setTask, project, freshness, command, packText, onGenerate, onCopy, onReceipts, onCopyContinuation, receiptCount, isGenerating, targetAgent, setTargetAgent, customAgent, setCustomAgent, contextBudget, setContextBudget }) {
+function TaskComposer({ task, setTask, project, freshness, command, packText, onGenerate, onCopy, onReceipts, onCopyContinuation, receiptCount, isGenerating, targetAgent, setTargetAgent, customAgent, setCustomAgent, contextBudget, setContextBudget, studioMode, setStudioMode, compilerMode, setCompilerMode, comparisonMode, setComparisonMode, governedCompilation, compilerInspection, onInspectCompilation }) {
   const [copyAction, setCopyAction] = useState("");
   const copyTimer = useRef(null);
 
@@ -2389,6 +2859,15 @@ function TaskComposer({ task, setTask, project, freshness, command, packText, on
           </button>
         </div>
       </div>
+      <div className="studioModeSwitch" role="group" aria-label="Context studio mode">
+        <button type="button" aria-pressed={studioMode === "quick"} className={studioMode === "quick" ? "active" : ""} onClick={() => setStudioMode("quick")}>
+          <Zap size={14} /> Quick Pack
+        </button>
+        <button type="button" aria-pressed={studioMode === "governed"} className={studioMode === "governed" ? "active" : ""} onClick={() => setStudioMode("governed")}>
+          <ShieldCheck size={14} /> Governed Compiler
+        </button>
+        <span>{studioMode === "governed" ? "Authorized, receipted, explainable" : "Fast lexical and structural context"}</span>
+      </div>
       <div className="composerGrid">
         <div className="formStack">
           <label>
@@ -2412,31 +2891,76 @@ function TaskComposer({ task, setTask, project, freshness, command, packText, on
               <option value={16000}>Extended / 16K tokens</option>
             </select>
           </label>
+          {studioMode === "governed" && (
+            <>
+              <label>
+                <span>Compiler Mode</span>
+                <select value={compilerMode} onChange={(event) => {
+                  const next = event.target.value;
+                  setCompilerMode(next);
+                  if (comparisonMode === next) setComparisonMode("");
+                }}>
+                  <option value="minimal">Minimal</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="investigative">Investigative</option>
+                  <option value="handoff">Handoff</option>
+                </select>
+              </label>
+              <label>
+                <span>Compare With</span>
+                <select value={comparisonMode} onChange={(event) => setComparisonMode(event.target.value)}>
+                  <option value="">No comparison</option>
+                  {["minimal", "balanced", "investigative", "handoff"].filter((mode) => mode !== compilerMode).map((mode) => (
+                    <option key={mode} value={mode}>{mode[0].toUpperCase() + mode.slice(1)}</option>
+                  ))}
+                </select>
+              </label>
+            </>
+          )}
           <label>
             <span>Objective</span>
             <textarea rows="3" value={task} onChange={(event) => setTask(event.target.value)} />
           </label>
           <label>
-            <span>Command Bridge</span>
-            <code>{command}</code>
+            <span>{studioMode === "governed" ? "Trust Boundary" : "Command Bridge"}</span>
+            <code>{studioMode === "governed" ? "Local authority key / operator contract / agent-safe pack" : command}</code>
           </label>
         </div>
-        <div className="packPreview">
+        <div className={studioMode === "governed" ? "packPreview governedPreview" : "packPreview"}>
           <div className="freshRing">
-            <strong>{freshness?.state === "fresh" ? "OK" : freshness?.state === "stale" ? "!" : "?"}</strong>
-            <span>{freshness?.state || "Checking"}</span>
+            <strong>{studioMode === "governed" && governedCompilation ? "✓" : freshness?.state === "fresh" ? "OK" : freshness?.state === "stale" ? "!" : "?"}</strong>
+            <span>{studioMode === "governed" && governedCompilation ? "receipted" : freshness?.state || "Checking"}</span>
           </div>
           <div>
-            <p>Files</p>
-            <strong>{safeNumber(project?.sources)}</strong>
+            <p>{studioMode === "governed" ? "Mode" : "Files"}</p>
+            <strong>{studioMode === "governed" ? governedCompilation?.context_pack?.compiler_mode || compilerMode : safeNumber(project?.sources)}</strong>
           </div>
           <div>
-            <p>Memories</p>
-            <strong>{safeNumber(project?.memories)}</strong>
+            <p>{studioMode === "governed" ? "Variants" : "Memories"}</p>
+            <strong>{studioMode === "governed" ? governedCompilation?.available_variants?.length || (comparisonMode ? 2 : 1) : safeNumber(project?.memories)}</strong>
           </div>
           <button className="generateButton" onClick={onGenerate} disabled={isGenerating}>
-            <Zap size={18} /> {isGenerating ? "Generating..." : "Generate Context Pack"}
+            {studioMode === "governed" ? <ShieldCheck size={18} /> : <Zap size={18} />}
+            {isGenerating ? "Generating..." : studioMode === "governed" ? "Authorize & Compile" : "Generate Context Pack"}
           </button>
+          {studioMode === "governed" && governedCompilation && (
+            <div className="compilerReceiptSummary">
+              <div>
+                <span>Receipt</span>
+                <code>{governedCompilation.compilation_receipt?.compilation_id}</code>
+              </div>
+              <div className="compilerReceiptActions">
+                <button type="button" onClick={() => onInspectCompilation("explain")}><Eye size={14} /> Explain</button>
+                <button type="button" onClick={() => onInspectCompilation("audit")}><KeyRound size={14} /> Audit</button>
+              </div>
+              {compilerInspection && (
+                <p>
+                  {compilerInspection.action === "audit" ? "Audit verified" : "Explanation verified"}
+                  {" · "}{compilerInspection.payload.selection?.included_count ?? compilerInspection.payload.candidate_receipts?.length ?? 0} included receipts
+                </p>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </section>

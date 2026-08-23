@@ -1,15 +1,67 @@
 import argparse
+import base64
+import hashlib
+import hmac
 import json
+import os
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from . import __version__
 from .autostart import autostart_status, disable_autostart, enable_autostart
-from .context import build_context_pack, build_continuation_prompt
 from .benchmark import (
-    append_benchmark_history, benchmark_history, default_public_benchmark_path,
-    run_public_benchmark, write_benchmark_report,
+    append_benchmark_history,
+    benchmark_history,
+    default_public_benchmark_path,
+    run_public_benchmark,
+    write_benchmark_report,
 )
+from .capture import (
+    bind_session as bind_capture_session,
+)
+from .capture import (
+    close_session_binding,
+    control_capture_retention,
+    delete_capture_content,
+    export_capture_events,
+    list_capture_policies,
+    list_capture_sources,
+    retire_capture_policy,
+    set_capture_source_state,
+)
+from .capture import (
+    register_policy as register_capture_policy,
+)
+from .capture import (
+    register_source as register_capture_source,
+)
+from .capture_adapters import (
+    adapter_catalog,
+    install_adapter,
+    plan_adapter_installation,
+    remove_adapter,
+)
+from .capture_control import (
+    capture_diagnostics,
+    capture_replay,
+    public_capture_daemon_status,
+)
+from .capture_daemon import (
+    CAPTURE_INGRESS_FIELDS,
+    prepare_capture_spool_record,
+    run_capture_worker,
+    start_capture,
+    stop_capture,
+)
+from .capture_spool import (
+    CaptureSpool,
+    _validate_json_shape,
+    capture_control_root_path,
+    ensure_windows_path_private,
+    windows_path_is_private,
+)
+from .capture_types import CapturePolicy, CaptureSource, canonical_json
 from .console import publish_readiness, run_dashboard
 from .console_daemon import (
     console_status,
@@ -19,37 +71,127 @@ from .console_daemon import (
     start_console,
     stop_console,
 )
+from .context import build_context_pack, build_continuation_prompt
+from .context_host import (
+    audit_context_for_operator,
+    authorize_context_contract,
+    compile_context_for_agent,
+    context_authority_status,
+    ensure_context_agent_profile,
+    explain_context_for_agent,
+    load_bounded_context_json,
+    load_context_authority_secret,
+    record_context_outcome_for_operator,
+    revoke_context_compilation_grant,
+)
 from .continuity import (
-    append_event, ingest_codex_session, list_events, operational_readiness,
-    reconcile_work_items, upsert_work_item,
+    append_event,
+    ingest_codex_session,
+    list_events,
+    operational_readiness,
+    reconcile_work_items,
+    upsert_work_item,
 )
 from .continuity_daemon import (
-    continuity_status, run_continuity_worker, start_continuity, stop_continuity,
+    continuity_status,
+    run_continuity_worker,
+    start_continuity,
+    stop_continuity,
 )
 from .db import (
-    connect, doctor, get_project_settings, graph, graph_query, ingest_repo, ingest_thread, init_project, reflect,
-    remember, save_checkpoint, search, stale_check, update_project_settings,
+    connect,
+    doctor,
+    get_project_settings,
+    graph,
+    graph_query,
+    ingest_repo,
+    ingest_thread,
+    init_project,
+    integrity_diagnostics,
+    project_binding_status,
+    rebind_project_root,
+    reflect,
+    remember,
+    save_checkpoint,
+    search,
+    stale_check,
+    update_project_settings,
 )
-from .governance import build_operational_context, create_policy, list_policies, list_receipts, preflight, retire_policy
 from .diagnostics import retrieval_diagnostics
+from .governance import (
+    build_operational_context,
+    create_policy,
+    list_policies,
+    list_receipts,
+    preflight,
+    retire_policy,
+)
 from .hooks import install_git_hooks, uninstall_git_hooks
 from .lifecycle import apply_memory_feedback, run_conservative_decay
-from .onboarding import SUPPORTED_TARGET_AGENTS, onboard_project
+from .onboarding import SUPPORTED_TARGET_AGENTS, onboard_project, supervise_brain
 from .portability import (
-    export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_create_encrypted,
-    snapshot_keygen, snapshot_passphrase_keygen, snapshot_restore_encrypted, snapshot_verify,
+    export_bundle,
+    import_bundle,
+    inspect_bundle,
+    snapshot_create,
+    snapshot_create_encrypted,
+    snapshot_keygen,
+    snapshot_passphrase_keygen,
+    snapshot_restore_encrypted,
+    snapshot_verify,
     snapshot_verify_encrypted,
 )
 from .project import (
-    bootstrap_project, install_local, mcp_config_payload, mcp_doctor,
-    mcp_gateway_config_payload, projects_list, self_check,
+    bootstrap_project,
+    install_local,
+    mcp_config_payload,
+    mcp_doctor,
+    mcp_gateway_config_payload,
+    projects_list,
+    self_check,
+)
+from .runtime_control import detached_worker_bootstrap, is_safe_regular_file, read_json
+from .temporal import (
+    append_claim,
+    attach_evidence,
+    change_claim_state,
+    define_validator,
+    observe_repository_anchor,
+    rebuild_projections,
+    record_abstention,
+    relate_claims,
+    revise_claim,
+    run_validator,
+    truth_as_of,
+    truth_at_commit,
+    truth_current,
+    truth_diff,
+    truth_explain,
+    truth_history,
+    validator_history,
+    verify_ledger,
 )
 from .watch import watch_repository
-from .watch_daemon import run_watcher_worker, start_watcher, stop_watcher, watcher_status
-from .workspaces import (
-    add_project_to_workspace, create_workspace, delete_workspace, get_workspace, list_workspaces,
-    remove_project_from_workspace, search_workspace, workspace_health,
+from .watch_daemon import (
+    run_watcher_worker,
+    start_watcher,
+    stop_watcher,
+    watcher_status,
 )
+from .workspaces import (
+    add_project_to_workspace,
+    create_workspace,
+    delete_workspace,
+    get_workspace,
+    list_workspaces,
+    remove_project_from_workspace,
+    search_workspace,
+    workspace_health,
+)
+
+_ADAPTER_CONFIRMATION_SCHEMA = "rta-smriti.adapter-confirmation/v1"
+_ADAPTER_CONFIRMATION_TTL_SECONDS = 300
+_MAX_ADAPTER_CONFIRMATION_TOKEN_BYTES = 4096
 
 
 def default_db_path() -> Path:
@@ -69,6 +211,615 @@ def emit(payload, as_json: bool) -> None:
         print(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def parse_json_argument(name: str, value: str):
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{name} must contain valid JSON") from exc
+
+
+def _required_cli(name: str, value: str | None) -> str:
+    selected = str(value or "").strip()
+    if not selected:
+        raise ValueError(f"{name} is required")
+    return selected
+
+
+def _capture_policy_from_args(args) -> CapturePolicy:
+    base = (
+        CapturePolicy.metadata_only()
+        if args.profile == "metadata-only"
+        else CapturePolicy.continuity()
+        if args.profile == "continuity"
+        else CapturePolicy(profile="forensic")
+    )
+    values = base.as_dict()
+    values.pop("schema_version", None)
+    if args.retention_seconds is not None:
+        values["retention_seconds"] = args.retention_seconds
+    if args.privacy_ceiling is not None:
+        values["privacy_ceiling"] = args.privacy_ceiling
+    values["enabled_event_names"] = tuple(values["enabled_event_names"])
+    values["field_allowlist"] = {
+        key: tuple(items) for key, items in values["field_allowlist"].items()
+    }
+    return CapturePolicy(**values)
+
+
+def _capture_adapter_command(args, source_id: str) -> tuple[str, ...]:
+    suffix = (
+        "--db", str(Path(args.db).expanduser().resolve()),
+        "capture", "--project", args.project,
+        "--root", str(Path(args.root).expanduser().resolve()),
+        "emit", "--source-id", source_id,
+    )
+    executable = str(Path(sys.executable).resolve())
+    if getattr(sys, "frozen", False):
+        return (executable, *suffix)
+    return (
+        executable,
+        "-I",
+        "-c",
+        detached_worker_bootstrap(
+            "rta_brain.cli", Path(__file__).resolve().parents[1]
+        ),
+        *suffix,
+    )
+
+
+def _adapter_confirmation_key(database: Path) -> bytes:
+    return hmac.new(
+        load_context_authority_secret(database),
+        b"rta-smriti.adapter-confirmation/v1",
+        hashlib.sha256,
+    ).digest()
+
+
+def _adapter_b64encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _adapter_b64decode(value: str) -> bytes:
+    try:
+        decoded = base64.b64decode(
+            value.encode("ascii") + b"=" * (-len(value) % 4),
+            altchars=b"-_",
+            validate=True,
+        )
+    except (UnicodeEncodeError, ValueError) as exc:
+        raise PermissionError("adapter confirmation token is malformed") from exc
+    if _adapter_b64encode(decoded) != value:
+        raise PermissionError("adapter confirmation token is malformed")
+    return decoded
+
+
+def _issue_adapter_confirmation(
+    database: Path, claims: dict,
+) -> tuple[str, str]:
+    issued_at = datetime.now(UTC).replace(microsecond=0)
+    expires_at = issued_at + timedelta(seconds=_ADAPTER_CONFIRMATION_TTL_SECONDS)
+    signed_claims = {
+        **claims,
+        "schema_version": _ADAPTER_CONFIRMATION_SCHEMA,
+        "issued_at": issued_at.isoformat(),
+        "expires_at": expires_at.isoformat(),
+    }
+    payload = canonical_json(signed_claims).encode("ascii")
+    signature = hmac.new(
+        _adapter_confirmation_key(database), payload, hashlib.sha256,
+    ).digest()
+    return f"{_adapter_b64encode(payload)}.{_adapter_b64encode(signature)}", expires_at.isoformat()
+
+
+def _adapter_timestamp(label: str, value) -> datetime:
+    if not isinstance(value, str):
+        raise PermissionError(f"adapter confirmation token {label} is invalid")
+    try:
+        selected = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise PermissionError(
+            f"adapter confirmation token {label} is invalid"
+        ) from exc
+    if selected.tzinfo is None:
+        raise PermissionError(f"adapter confirmation token {label} is invalid")
+    return selected.astimezone(UTC)
+
+
+def _verify_adapter_confirmation(
+    database: Path, token: str | None, expected_claims: dict,
+) -> None:
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token.encode("utf-8", errors="ignore")) > _MAX_ADAPTER_CONFIRMATION_TOKEN_BYTES
+    ):
+        raise PermissionError(
+            "adapter mutation requires its preview confirmation token"
+        )
+    try:
+        payload_text, signature_text = token.split(".", 1)
+    except ValueError as exc:
+        raise PermissionError("adapter confirmation token is malformed") from exc
+    payload = _adapter_b64decode(payload_text)
+    signature = _adapter_b64decode(signature_text)
+    if len(signature) != hashlib.sha256().digest_size:
+        raise PermissionError("adapter confirmation token is invalid")
+    expected_signature = hmac.new(
+        _adapter_confirmation_key(database), payload, hashlib.sha256,
+    ).digest()
+    if not hmac.compare_digest(signature, expected_signature):
+        raise PermissionError("adapter confirmation token is invalid")
+    try:
+        claims = json.loads(payload.decode("ascii"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PermissionError("adapter confirmation token is malformed") from exc
+    if not isinstance(claims, dict) or canonical_json(claims).encode("ascii") != payload:
+        raise PermissionError("adapter confirmation token is non-canonical")
+    if claims.get("schema_version") != _ADAPTER_CONFIRMATION_SCHEMA:
+        raise PermissionError("adapter confirmation token schema is invalid")
+    issued_at = _adapter_timestamp("issued_at", claims.get("issued_at"))
+    expires_at = _adapter_timestamp("expires_at", claims.get("expires_at"))
+    now = datetime.now(UTC)
+    if expires_at <= issued_at or now >= expires_at:
+        raise PermissionError("adapter confirmation token expired")
+    if expires_at - issued_at > timedelta(seconds=_ADAPTER_CONFIRMATION_TTL_SECONDS):
+        raise PermissionError("adapter confirmation token lifetime is invalid")
+    if issued_at > now + timedelta(seconds=30):
+        raise PermissionError("adapter confirmation token issued_at is invalid")
+    expected = {
+        **expected_claims,
+        "schema_version": _ADAPTER_CONFIRMATION_SCHEMA,
+    }
+    actual = {
+        key: value
+        for key, value in claims.items()
+        if key not in {"issued_at", "expires_at"}
+    }
+    if not hmac.compare_digest(canonical_json(actual), canonical_json(expected)):
+        raise PermissionError(
+            "adapter confirmation token does not match the current preview"
+        )
+
+
+def _adapter_plan_claims(
+    plan, *, project: str, source_id: str, policy_digest: str,
+) -> dict:
+    plan_snapshot = {
+        "adapter": plan.adapter,
+        "scope": plan.scope,
+        "installation_id": plan.installation_id,
+        "action": plan.action,
+        "original_exists": plan.original_exists,
+        "original_fingerprint": plan.original_fingerprint,
+        "target_fingerprint": plan.target_fingerprint,
+        "managed_fragment": plan.managed_fragment,
+        "config_path_sha256": hashlib.sha256(
+            str(plan.config_path).encode("utf-8")
+        ).hexdigest(),
+        "allowed_root_sha256": hashlib.sha256(
+            str(plan.allowed_root).encode("utf-8")
+        ).hexdigest(),
+        "ancestor_guard": plan.ancestor_guard,
+    }
+    return {
+        "operation": "adapter-install",
+        "project": project,
+        "source_id": source_id,
+        "policy_digest": policy_digest,
+        "installation_id": plan.installation_id,
+        "plan_fingerprint": hashlib.sha256(
+            canonical_json(plan_snapshot).encode("ascii")
+        ).hexdigest(),
+    }
+
+
+def _adapter_receipt_snapshot(
+    database: Path, installation_id: str,
+) -> tuple[dict, str]:
+    if (
+        len(installation_id) != 32
+        or any(character not in "0123456789abcdef" for character in installation_id)
+    ):
+        raise ValueError("adapter installation ID is invalid")
+    receipt_path = (
+        capture_control_root_path(database)
+        / "adapter-installs"
+        / f"{installation_id}.json"
+    )
+    receipt = read_json(receipt_path)
+    if receipt is None or receipt.get("installation_id") != installation_id:
+        raise ValueError("adapter installation receipt is missing or invalid")
+    fingerprint = hashlib.sha256(canonical_json(receipt).encode("ascii")).hexdigest()
+    return receipt, fingerprint
+
+
+def _adapter_remove_claims(
+    *, project: str, source_id: str | None, installation_id: str,
+    receipt_fingerprint: str,
+) -> dict:
+    return {
+        "operation": "adapter-remove",
+        "project": project,
+        "source_id": source_id or "",
+        "installation_id": installation_id,
+        "receipt_fingerprint": receipt_fingerprint,
+    }
+
+
+def _public_adapter_plan(
+    plan, *, database: Path, project: str, source_id: str, policy_digest: str,
+) -> dict:
+    claims = _adapter_plan_claims(
+        plan,
+        project=project,
+        source_id=source_id,
+        policy_digest=policy_digest,
+    )
+    confirmation_token, expires_at = _issue_adapter_confirmation(database, claims)
+    return {
+        "status": "preview",
+        "adapter": plan.adapter,
+        "scope": plan.scope,
+        "installation_id": plan.installation_id,
+        "action": plan.action,
+        "original_exists": plan.original_exists,
+        "original_fingerprint": plan.original_fingerprint,
+        "target_fingerprint": plan.target_fingerprint,
+        "managed_events": sorted(plan.managed_fragment),
+        "requires_confirmation": True,
+        "confirmation_token": confirmation_token,
+        "confirmation_expires_at": expires_at,
+    }
+
+
+def _adapter_receipts(database: Path) -> list[dict]:
+    directory = capture_control_root_path(database) / "adapter-installs"
+    if not directory.exists():
+        return []
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValueError("adapter receipt directory is unsafe")
+    receipts = []
+    for candidate in sorted(directory.glob("*.json"))[:1024]:
+        if not is_safe_regular_file(candidate):
+            raise ValueError("adapter installation receipt is unsafe")
+        row = read_json(candidate)
+        if row is None:
+            raise ValueError("adapter installation receipt is malformed")
+        receipts.append({
+            key: row.get(key)
+            for key in ("installation_id", "adapter", "scope", "installed")
+        })
+    return receipts
+
+
+def _write_private_export(path: Path, payload: dict) -> dict:
+    target = path.expanduser().absolute()
+    if not target.parent.is_dir() or target.parent.is_symlink():
+        raise ValueError("capture export parent must be an existing unlinked directory")
+    encoded = (json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    descriptor = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    opened = os.fstat(descriptor)
+    identity = (opened.st_dev, opened.st_ino, opened.st_nlink)
+    try:
+        if os.name == "nt":
+            ensure_windows_path_private(target)
+            if not windows_path_is_private(target):
+                raise RuntimeError("capture export ACL verification failed")
+            current = target.lstat()
+            if (current.st_dev, current.st_ino, current.st_nlink) != identity:
+                raise RuntimeError("capture export changed identity before write")
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = -1
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        current = target.lstat()
+        if (current.st_dev, current.st_ino, current.st_nlink) != identity:
+            raise RuntimeError("capture export changed identity during write")
+        if os.name == "nt":
+            ensure_windows_path_private(target)
+            if not windows_path_is_private(target):
+                raise RuntimeError("capture export ACL verification failed")
+        else:
+            os.chmod(target, 0o600)
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            current = target.lstat()
+        except OSError:
+            current = None
+        if current is not None and (
+            current.st_dev,
+            current.st_ino,
+            current.st_nlink,
+        ) == identity:
+            target.unlink(missing_ok=True)
+        raise
+    return {
+        "status": "ok",
+        "bytes": len(encoded),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+        "events": len(payload.get("events", [])),
+        "redaction_verified": bool(payload.get("redaction_verified")),
+    }
+
+
+def _dispatch_capture(args, conn) -> dict:
+    database = Path(args.db).expanduser().resolve()
+    active_root = Path(args.root).expanduser().resolve()
+    group = args.capture_group
+    action = getattr(args, "capture_action", None)
+
+    if group == "policy":
+        if action == "list":
+            return list_capture_policies(
+                conn, project=args.project, include_retired=args.include_retired,
+            )
+        if action == "create":
+            return register_capture_policy(
+                conn, project=args.project, active_root=active_root,
+                policy_id=_required_cli("--id", args.id),
+                policy_version=args.version,
+                policy=_capture_policy_from_args(args),
+            )
+        return retire_capture_policy(
+            conn, project=args.project, active_root=active_root,
+            policy_digest=_required_cli("--digest", args.digest),
+        )
+
+    if group == "adapter":
+        if action == "list":
+            return {
+                "status": "ok",
+                "adapters": [
+                    {
+                        "name": definition.name,
+                        "version": definition.version,
+                        "managed_installation": name != "generic" and name != "codex-jsonl",
+                    }
+                    for name, definition in sorted(adapter_catalog().items())
+                ],
+            }
+        if action == "status":
+            return {
+                **list_capture_sources(conn, project=args.project),
+                "installations": _adapter_receipts(database),
+            }
+        if action in {"pause", "resume"}:
+            return set_capture_source_state(
+                conn, project=args.project, active_root=active_root,
+                source_id=_required_cli("--source-id", args.source_id),
+                state="paused" if action == "pause" else "active",
+            )
+        if action == "remove":
+            installation_id = _required_cli("--installation-id", args.installation_id)
+            receipt, receipt_fingerprint = _adapter_receipt_snapshot(
+                database, installation_id,
+            )
+            confirmation_claims = _adapter_remove_claims(
+                project=args.project,
+                source_id=args.source_id,
+                installation_id=installation_id,
+                receipt_fingerprint=receipt_fingerprint,
+            )
+            if not args.confirm:
+                confirmation_token, expires_at = _issue_adapter_confirmation(
+                    database, confirmation_claims,
+                )
+                return {
+                    "status": "preview",
+                    "installation_id": installation_id,
+                    "adapter": receipt.get("adapter"),
+                    "scope": receipt.get("scope"),
+                    "receipt_fingerprint": receipt_fingerprint,
+                    "requires_confirmation": True,
+                    "confirmation_token": confirmation_token,
+                    "confirmation_expires_at": expires_at,
+                }
+            _verify_adapter_confirmation(
+                database, args.confirmation_token, confirmation_claims,
+            )
+            removed = remove_adapter(brain_path=database, installation_id=installation_id)
+            if args.source_id:
+                set_capture_source_state(
+                    conn, project=args.project, active_root=active_root,
+                    source_id=args.source_id, state="removed",
+                )
+            return {
+                "status": "ok",
+                "installation_id": removed["installation_id"],
+                "adapter": removed["adapter"],
+                "scope": removed["scope"],
+                "removed": bool(removed.get("removed")),
+                "idempotent_replay": bool(removed.get("idempotent_replay")),
+            }
+        selected_adapter = _required_cli("--adapter", args.adapter)
+        source_id = args.source_id or f"{selected_adapter}-{args.scope}-local"
+        plan = plan_adapter_installation(
+            selected_adapter,
+            scope=args.scope,
+            project_root=active_root,
+            home=Path(args.home),
+            brain_path=database,
+            command_parts=_capture_adapter_command(args, source_id),
+            platform_name=sys.platform,
+        )
+        policies = list_capture_policies(conn, project=args.project)["policies"]
+        matches = (
+            [row for row in policies if row["policy_digest"] == args.policy_digest]
+            if args.policy_digest
+            else [row for row in policies if row["profile"] == "continuity"]
+        )
+        if len(matches) != 1:
+            raise ValueError(
+                "adapter installation requires --policy-digest when exactly one active continuity policy cannot be selected"
+            )
+        selected_policy_digest = str(matches[0]["policy_digest"])
+        preview = _public_adapter_plan(
+            plan,
+            database=database,
+            project=args.project,
+            source_id=source_id,
+            policy_digest=selected_policy_digest,
+        )
+        if action == "plan" or not args.confirm:
+            return preview
+        _verify_adapter_confirmation(
+            database,
+            args.confirmation_token,
+            _adapter_plan_claims(
+                plan,
+                project=args.project,
+                source_id=source_id,
+                policy_digest=selected_policy_digest,
+            ),
+        )
+        installed = install_adapter(plan)
+        definition = adapter_catalog()[selected_adapter]
+        try:
+            register_capture_source(
+                conn,
+                project=args.project,
+                active_root=active_root,
+                source=CaptureSource(
+                    source_id=source_id,
+                    adapter=selected_adapter,
+                    adapter_version=definition.version,
+                    installation_scope=args.scope,
+                    config_fingerprint=plan.target_fingerprint,
+                ),
+                policy_digest=selected_policy_digest,
+            )
+        except BaseException:
+            if not installed.get("idempotent_replay"):
+                remove_adapter(
+                    brain_path=database,
+                    installation_id=str(installed["installation_id"]),
+                )
+            raise
+        return {
+            "status": "ok",
+            "adapter": installed["adapter"],
+            "scope": installed["scope"],
+            "installation_id": installed["installation_id"],
+            "source_id": source_id,
+            "installed": bool(installed["installed"]),
+            "idempotent_replay": bool(installed.get("idempotent_replay")),
+        }
+
+    if group == "emit":
+        source_id = _required_cli("--source-id", args.source_id)
+        raw = sys.stdin.buffer.read(1_048_577) if hasattr(sys.stdin, "buffer") else sys.stdin.read(1_048_577).encode("utf-8")
+        if len(raw) > 1_048_576:
+            return {"status": "rejected", "reason": "input_too_large"}
+        try:
+            record = json.loads(raw.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError, RecursionError, MemoryError):
+            return {"status": "rejected", "reason": "invalid_json"}
+        if not isinstance(record, dict):
+            return {"status": "rejected", "reason": "invalid_record"}
+        try:
+            _validate_json_shape(record, max_depth=12, max_items=10_000)
+        except (TypeError, ValueError, RecursionError, MemoryError):
+            return {"status": "rejected", "reason": "invalid_json"}
+        try:
+            spool_record = prepare_capture_spool_record(
+                conn,
+                project=args.project,
+                active_root=active_root,
+                source_id=source_id,
+                record=record,
+                original_bytes=len(raw),
+            )
+            receipt = CaptureSpool(database).publish(
+                source_id,
+                spool_record,
+                project=args.project,
+                allowed_fields=CAPTURE_INGRESS_FIELDS,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return {"status": "unavailable", "reason": "normalization_unavailable"}
+        return receipt.as_dict()
+
+    if group == "daemon":
+        if action == "start":
+            payload = start_capture(
+                database, interval_seconds=args.interval, batch_size=args.batch_size,
+            )
+        elif action == "stop":
+            payload = stop_capture(database, timeout=args.timeout)
+        else:
+            return public_capture_daemon_status(database)
+        public = dict(payload)
+        for key in ("db_path", "token_hash", "process_identity"):
+            public.pop(key, None)
+        return public
+
+    if group == "bind-session":
+        if args.close_binding:
+            return close_session_binding(
+                conn, database=database, project=args.project,
+                active_root=active_root, binding_id=args.close_binding,
+                operator_id=args.operator_id,
+            )
+        return bind_capture_session(
+            conn, database=database, project=args.project,
+            active_root=active_root,
+            source_id=_required_cli("--source-id", args.source_id),
+            external_session_id=_required_cli("--session-id", args.session_id),
+            cursor_kind=args.cursor_kind,
+            start_cursor=_required_cli("--start-cursor", args.start_cursor),
+            operator_id=args.operator_id,
+        )
+
+    if group in {"events", "export"}:
+        payload = export_capture_events(
+            conn, project=args.project, active_root=active_root,
+            after_sequence=args.after_sequence, limit=args.limit,
+            privacy_ceiling=args.privacy_ceiling,
+        )
+        if group == "export" and args.output:
+            return _write_private_export(Path(args.output), payload)
+        return payload
+
+    if group == "replay":
+        return capture_replay(
+            conn, project=args.project, active_root=active_root,
+            mode=args.mode, after_sequence=args.after_sequence,
+            limit=args.limit, privacy_ceiling=args.privacy_ceiling,
+        )
+
+    if group == "retain":
+        return control_capture_retention(
+            conn, project=args.project, active_root=active_root,
+            policy_digest=_required_cli("--policy-digest", args.policy_digest),
+            run_id=args.run_id or f"retention-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}",
+            actor_id=args.operator_id,
+            batch_size=args.batch_size, now=args.now,
+            confirm=bool(args.confirm),
+            confirmation_token=args.confirmation_token,
+        )
+
+    if group in {"redact", "delete"}:
+        return delete_capture_content(
+            conn, project=args.project, active_root=active_root,
+            scope=_required_cli("--scope", args.scope),
+            scope_token=_required_cli("--scope-token", args.scope_token),
+            reason_class=args.reason, actor_id=args.operator_id,
+            policy_digest=_required_cli("--policy-digest", args.policy_digest),
+            confirm=bool(args.confirm),
+            confirmation_token=args.confirmation_token,
+            secure_compact=bool(getattr(args, "secure_compact", False)),
+        )
+
+    if group == "doctor":
+        return capture_diagnostics(
+            conn, database=database, project=args.project, active_root=active_root,
+        )
+    raise ValueError(f"unknown capture command: {group}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rta-brain", description="Rta-Smriti local project brain")
     parser.add_argument("--db", default=str(default_db_path()), help="Path to SQLite brain file")
@@ -84,7 +835,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(init)
     init.add_argument("--project", default="default")
     init.add_argument("--root", default=str(Path.cwd()))
-    init.add_argument("--rebind-root", action="store_true", help="Explicitly replace an existing canonical project root")
+    init.add_argument("--rebind-root", action="store_true", help="Deprecated; use root-rebind so backup and rollback are enforced")
 
     remember_cmd = sub.add_parser("remember", help="Store a durable memory")
     add_common_options(remember_cmd)
@@ -106,7 +857,13 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--project", default="default")
     ingest.add_argument("--force", action="store_true", help="Re-read and re-index every eligible file even when metadata is unchanged")
     ingest.add_argument("--repair-deep-stale", action="store_true", help="Hash every eligible file and re-index only content-drifted sources")
-    ingest.add_argument("--rebind-root", action="store_true", help="Explicitly replace the brain's canonical project root")
+    ingest.add_argument("--rebind-root", action="store_true", help="Deprecated; use root-rebind so backup and rollback are enforced")
+
+    root_rebind = sub.add_parser("root-rebind", help="Back up and atomically migrate a project brain to another checkout")
+    add_common_options(root_rebind)
+    root_rebind.add_argument("path")
+    root_rebind.add_argument("--project", default="default")
+    root_rebind.add_argument("--backup", required=True, help="No-clobber SQLite backup written before migration")
 
     watch = sub.add_parser("watch-repo", help="Continuously refresh a repository using the incremental index")
     add_common_options(watch)
@@ -152,6 +909,111 @@ def build_parser() -> argparse.ArgumentParser:
     continuity_worker.add_argument("--lookback-days", type=float, required=True)
     continuity_worker.add_argument("--backlog-tail-bytes", type=int, required=True)
 
+    capture = sub.add_parser("capture", help="Inspect and govern universal passive capture")
+    add_common_options(capture)
+    capture.add_argument("--project", default="default")
+    capture.add_argument("--root", required=True, help="Exact canonical project root")
+    capture_actions = capture.add_subparsers(dest="capture_group", required=True)
+
+    capture_policy = capture_actions.add_parser("policy", help="Manage immutable capture policies")
+    capture_policy_actions = capture_policy.add_subparsers(dest="capture_action", required=True)
+    capture_policy_list = capture_policy_actions.add_parser("list")
+    capture_policy_list.add_argument("--include-retired", action="store_true")
+    capture_policy_create = capture_policy_actions.add_parser("create")
+    capture_policy_create.add_argument("--id")
+    capture_policy_create.add_argument("--version", type=int, default=1)
+    capture_policy_create.add_argument(
+        "--profile", choices=("metadata-only", "continuity", "forensic"),
+        default="continuity",
+    )
+    capture_policy_create.add_argument("--retention-seconds", type=int)
+    capture_policy_create.add_argument("--privacy-ceiling", choices=("public", "internal", "sensitive", "restricted"))
+    capture_policy_retire = capture_policy_actions.add_parser("retire")
+    capture_policy_retire.add_argument("--digest")
+
+    capture_adapter = capture_actions.add_parser("adapter", help="Preview and manage supported adapters")
+    capture_adapter_actions = capture_adapter.add_subparsers(dest="capture_action", required=True)
+    for action in ("list", "status"):
+        capture_adapter_actions.add_parser(action)
+    for action in ("plan", "install"):
+        command = capture_adapter_actions.add_parser(action)
+        command.add_argument("--adapter", choices=("claude-code", "cursor", "github-copilot", "gemini-cli"))
+        command.add_argument("--scope", choices=("project", "user"), default="project")
+        command.add_argument("--source-id")
+        command.add_argument("--policy-digest")
+        command.add_argument("--home", default=str(Path.home()))
+        command.add_argument("--confirm", action="store_true")
+        command.add_argument("--confirmation-token")
+    capture_adapter_remove = capture_adapter_actions.add_parser("remove")
+    capture_adapter_remove.add_argument("--installation-id")
+    capture_adapter_remove.add_argument("--source-id")
+    capture_adapter_remove.add_argument("--confirm", action="store_true")
+    capture_adapter_remove.add_argument("--confirmation-token")
+    for action in ("pause", "resume"):
+        command = capture_adapter_actions.add_parser(action)
+        command.add_argument("--source-id")
+
+    capture_emit = capture_actions.add_parser("emit", help="Publish one bounded JSON event from stdin")
+    capture_emit.add_argument("--source-id")
+
+    capture_daemon = capture_actions.add_parser("daemon", help="Manage the capture normalizer daemon")
+    capture_daemon_actions = capture_daemon.add_subparsers(dest="capture_action", required=True)
+    capture_daemon_start = capture_daemon_actions.add_parser("start")
+    capture_daemon_start.add_argument("--interval", type=float, default=1.0)
+    capture_daemon_start.add_argument("--batch-size", type=int, default=100)
+    capture_daemon_actions.add_parser("status")
+    capture_daemon_stop = capture_daemon_actions.add_parser("stop")
+    capture_daemon_stop.add_argument("--timeout", type=float, default=10.0)
+
+    capture_bind = capture_actions.add_parser("bind-session")
+    capture_bind.add_argument("--source-id")
+    capture_bind.add_argument("--session-id")
+    capture_bind.add_argument("--cursor-kind", choices=("byte-offset", "sequence"), default="sequence")
+    capture_bind.add_argument("--start-cursor")
+    capture_bind.add_argument("--operator-id", default="local-operator")
+    capture_bind.add_argument("--close-binding")
+
+    for action in ("events", "replay", "export"):
+        command = capture_actions.add_parser(action)
+        command.add_argument("--after-sequence", type=int, default=0)
+        command.add_argument("--limit", type=int, default=100)
+        command.add_argument("--privacy-ceiling", choices=("public", "internal", "sensitive", "restricted"), default="internal")
+        if action == "replay":
+            command.add_argument("--mode", choices=("chronological", "causal"), default="chronological")
+        if action == "export":
+            command.add_argument("--output")
+
+    capture_retain = capture_actions.add_parser("retain")
+    capture_retain.add_argument("--policy-digest")
+    capture_retain.add_argument("--run-id")
+    capture_retain.add_argument("--batch-size", type=int, default=100)
+    capture_retain.add_argument("--now")
+    capture_retain.add_argument("--operator-id", default="local-operator")
+    capture_retain.add_argument("--confirm", action="store_true")
+    capture_retain.add_argument("--confirmation-token")
+
+    for action in ("redact", "delete"):
+        command = capture_actions.add_parser(action)
+        command.add_argument("--scope", choices=("event-content", "session-content", "source-content", "project-content"))
+        command.add_argument("--scope-token")
+        command.add_argument("--policy-digest")
+        command.add_argument("--reason", default="operator-request")
+        command.add_argument("--operator-id", default="local-operator")
+        command.add_argument("--confirm", action="store_true")
+        command.add_argument("--confirmation-token")
+        if action == "delete":
+            command.add_argument("--secure-compact", action="store_true")
+
+    capture_actions.add_parser("doctor")
+
+    capture_worker = sub.add_parser("_capture-worker", help=argparse.SUPPRESS)
+    capture_worker.add_argument("--db", required=True)
+    capture_worker.add_argument("--state-file", required=True)
+    capture_worker.add_argument("--stop-file", required=True)
+    capture_worker.add_argument("--lock-file", required=True)
+    capture_worker.add_argument("--interval", type=float, required=True)
+    capture_worker.add_argument("--batch-size", type=int, required=True)
+
     settings = sub.add_parser("settings", help="Read or update a project's indexing and retrieval policy")
     add_common_options(settings)
     settings.add_argument("--project", default="default")
@@ -192,6 +1054,269 @@ def build_parser() -> argparse.ArgumentParser:
     graph_query_cmd.add_argument("--type", dest="query_type", choices=("dependencies", "dependents", "impact", "evidence", "relevance"), default="impact")
     graph_query_cmd.add_argument("--depth", type=int, default=2)
     graph_query_cmd.add_argument("--limit", type=int, default=100)
+
+    truth_cmd = sub.add_parser("truth", help="Read and write temporal project truth")
+    add_common_options(truth_cmd)
+    truth_actions = truth_cmd.add_subparsers(dest="truth_action", required=True)
+
+    truth_assert = truth_actions.add_parser("assert", help="Append a new truth claim")
+    truth_assert.add_argument("--project", default="default")
+    truth_assert.add_argument("--root", required=True, help="Exact canonical project root")
+    truth_assert.add_argument("--claim-id")
+    truth_assert.add_argument("--subject", required=True)
+    truth_assert.add_argument("--predicate", required=True)
+    truth_assert.add_argument("--value-json", required=True)
+    truth_assert.add_argument("--idempotency-key", required=True)
+    truth_assert.add_argument("--expected-version", type=int, required=True)
+    truth_assert.add_argument("--valid-from")
+    truth_assert.add_argument("--valid-to")
+    truth_assert.add_argument("--expires-at")
+    truth_assert.add_argument(
+        "--state",
+        default="observed",
+        choices=(
+            "hypothesis", "observed", "corroborated", "accepted", "disputed",
+            "stale", "refuted", "superseded", "retracted",
+        ),
+    )
+    truth_assert.add_argument("--confidence", type=float, default=1.0)
+    truth_assert.add_argument("--actor-type", choices=("operator", "agent"), default="operator")
+    truth_assert.add_argument("--actor-id", default="local-operator")
+
+    truth_current_cmd = truth_actions.add_parser("current", help="Read one current truth claim")
+    truth_current_cmd.add_argument("--project", default="default")
+    truth_current_cmd.add_argument("--claim-id", required=True)
+    truth_current_cmd.add_argument("--valid-at")
+
+    truth_state = truth_actions.add_parser("state", help="Append an epistemic state transition")
+    truth_state.add_argument("--project", default="default")
+    truth_state.add_argument("--root", required=True, help="Exact canonical project root")
+    truth_state.add_argument("--claim-id", required=True)
+    truth_state.add_argument(
+        "--state", required=True,
+        choices=(
+            "hypothesis", "observed", "corroborated", "accepted", "disputed",
+            "stale", "refuted", "superseded", "retracted",
+        ),
+    )
+    truth_state.add_argument("--reason", required=True)
+    truth_state.add_argument("--idempotency-key", required=True)
+    truth_state.add_argument("--expected-version", type=int, required=True)
+    truth_state.add_argument("--actor-type", choices=("operator", "agent"), default="operator")
+    truth_state.add_argument("--actor-id", default="local-operator")
+
+    truth_history_cmd = truth_actions.add_parser("history", help="Read recorded history for one claim")
+    truth_history_cmd.add_argument("--project", default="default")
+    truth_history_cmd.add_argument("--claim-id", required=True)
+    truth_history_cmd.add_argument("--limit", type=int, default=500)
+
+    truth_as_of_cmd = truth_actions.add_parser("as-of", help="Read valid-time truth at a recorded sequence")
+    truth_as_of_cmd.add_argument("--project", default="default")
+    truth_as_of_cmd.add_argument("--claim-id", required=True)
+    truth_as_of_cmd.add_argument("--valid-at", required=True)
+    truth_as_of_cmd.add_argument("--recorded-sequence", type=int, required=True)
+
+    truth_revise = truth_actions.add_parser("revise", help="Append a corrected truth claim value")
+    truth_revise.add_argument("--project", default="default")
+    truth_revise.add_argument("--root", required=True)
+    truth_revise.add_argument("--claim-id", required=True)
+    truth_revise.add_argument("--value-json", required=True)
+    truth_revise.add_argument("--reason", required=True)
+    truth_revise.add_argument("--idempotency-key", required=True)
+    truth_revise.add_argument("--expected-version", type=int, required=True)
+    truth_revise.add_argument("--valid-from")
+    truth_revise.add_argument("--valid-to")
+    truth_revise.add_argument("--actor-type", choices=("operator", "agent"), default="operator")
+    truth_revise.add_argument("--actor-id", default="local-operator")
+
+    truth_relate = truth_actions.add_parser("relate", help="Append a typed relation between current claims")
+    truth_relate.add_argument("--project", default="default")
+    truth_relate.add_argument("--root", required=True)
+    truth_relate.add_argument("--relation-id")
+    truth_relate.add_argument("--from-claim", required=True)
+    truth_relate.add_argument("--type", required=True, choices=(
+        "supports", "contradicts", "supersedes", "retracts", "refutes",
+        "derived_from", "alternate_of", "specialization_of",
+    ))
+    truth_relate.add_argument("--to-claim", required=True)
+    truth_relate.add_argument("--idempotency-key", required=True)
+    truth_relate.add_argument("--expected-version", type=int, required=True)
+    truth_relate.add_argument("--confidence", type=float, default=0.7)
+    truth_relate.add_argument("--actor-type", choices=("operator", "agent"), default="operator")
+    truth_relate.add_argument("--actor-id", default="local-operator")
+
+    truth_evidence = truth_actions.add_parser("evidence", help="Attach provenance-bearing evidence to a claim")
+    truth_evidence.add_argument("--project", default="default")
+    truth_evidence.add_argument("--root", required=True)
+    truth_evidence.add_argument("--claim-id", required=True)
+    truth_evidence.add_argument("--evidence-id", required=True)
+    truth_evidence.add_argument("--source-identifier", required=True)
+    truth_evidence.add_argument("--source-hash")
+    truth_evidence.add_argument("--method", required=True)
+    truth_evidence.add_argument("--polarity", required=True, choices=("supporting", "weakening", "refuting"))
+    truth_evidence.add_argument("--authority-class", required=True)
+    truth_evidence.add_argument("--confidence", type=float, required=True)
+    truth_evidence.add_argument("--uncertainty", default="")
+    truth_evidence.add_argument("--provenance-json", required=True)
+    truth_evidence.add_argument("--idempotency-key", required=True)
+    truth_evidence.add_argument("--expected-version", type=int, required=True)
+    truth_evidence.add_argument("--verification-status", default="unverified", choices=("unverified", "verified", "failed", "stale"))
+    truth_evidence.add_argument("--actor-type", choices=("operator", "agent"), default="operator")
+    truth_evidence.add_argument("--actor-id", default="local-operator")
+
+    truth_abstain = truth_actions.add_parser("abstain", help="Record an explicit evidence-bound abstention")
+    truth_abstain.add_argument("--project", default="default")
+    truth_abstain.add_argument("--root", required=True)
+    truth_abstain.add_argument("--abstention-id")
+    truth_abstain.add_argument("--query-scope", required=True)
+    truth_abstain.add_argument("--missing-evidence-json", required=True)
+    truth_abstain.add_argument("--unresolved-conflicts-json", required=True)
+    truth_abstain.add_argument("--minimum-revalidation-action", required=True)
+    truth_abstain.add_argument("--idempotency-key", required=True)
+    truth_abstain.add_argument("--expected-version", type=int, required=True)
+    truth_abstain.add_argument("--actor-type", choices=("operator", "agent"), default="operator")
+    truth_abstain.add_argument("--actor-id", default="local-operator")
+
+    truth_explain_cmd = truth_actions.add_parser("explain", help="Explain a claim with evidence and relations")
+    truth_explain_cmd.add_argument("--project", default="default")
+    truth_explain_cmd.add_argument("--claim-id", required=True)
+    truth_explain_cmd.add_argument("--valid-at")
+
+    truth_diff_cmd = truth_actions.add_parser("diff", help="Compare truth at two recorded sequences")
+    truth_diff_cmd.add_argument("--project", default="default")
+    truth_diff_cmd.add_argument("--from-sequence", type=int, required=True)
+    truth_diff_cmd.add_argument("--to-sequence", type=int, required=True)
+    truth_diff_cmd.add_argument("--valid-at", required=True)
+    truth_diff_cmd.add_argument("--limit", type=int, default=500)
+
+    truth_anchor = truth_actions.add_parser("anchor", help="Observe the exact current Git repository anchor")
+    truth_anchor.add_argument("--project", default="default")
+    truth_anchor.add_argument("--root", required=True)
+    truth_anchor.add_argument("--anchor-id", required=True)
+    truth_anchor.add_argument("--idempotency-key", required=True)
+    truth_anchor.add_argument("--expected-version", type=int, required=True)
+
+    truth_commit = truth_actions.add_parser("at-commit", help="Read truth at an explicitly observed Git commit")
+    truth_commit.add_argument("--project", default="default")
+    truth_commit.add_argument("--claim-id", required=True)
+    truth_commit.add_argument("--commit", required=True)
+    truth_commit.add_argument("--valid-at", required=True)
+
+    truth_validator = truth_actions.add_parser("validator", help="Define, run, or inspect deterministic validators")
+    validator_actions = truth_validator.add_subparsers(dest="validator_action", required=True)
+    validator_add = validator_actions.add_parser("add", help="Define an inert validator policy")
+    validator_add.add_argument("--project", default="default")
+    validator_add.add_argument("--root", required=True)
+    validator_add.add_argument("--validator-id", required=True)
+    validator_add.add_argument("--type", required=True, choices=(
+        "file_exists", "file_sha256", "json_pointer_equals", "sqlite_integrity",
+        "git_head_equals", "git_clean_state", "command_exit",
+    ))
+    validator_add.add_argument("--claim-id", required=True)
+    validator_add.add_argument("--config-json", required=True)
+    validator_add.add_argument("--failure-effect", required=True, choices=("disputed", "stale", "refuted"))
+    validator_add.add_argument("--idempotency-key", required=True)
+    validator_add.add_argument("--expected-version", type=int, required=True)
+    validator_add.add_argument("--actor-id", default="local-operator")
+    validator_run = validator_actions.add_parser("run", help="Execute a registered deterministic validator")
+    validator_run.add_argument("--project", default="default")
+    validator_run.add_argument("--root", required=True)
+    validator_run.add_argument("--validator-id", required=True)
+    validator_run.add_argument("--idempotency-key", required=True)
+    validator_run.add_argument("--expected-version", type=int, required=True)
+    validator_run.add_argument("--allow-command", action="store_true")
+    validator_run.add_argument("--trusted-executable", action="append", default=[])
+    validator_run.add_argument("--actor-id", default="local-operator")
+    validator_history_cmd = validator_actions.add_parser("history", help="Read bounded validator result history")
+    validator_history_cmd.add_argument("--project", default="default")
+    validator_history_cmd.add_argument("--validator-id", required=True)
+    validator_history_cmd.add_argument("--limit", type=int, default=100)
+
+    truth_ledger = truth_actions.add_parser("ledger", help="Verify the immutable event ledger")
+    ledger_actions = truth_ledger.add_subparsers(dest="ledger_action", required=True)
+    ledger_verify = ledger_actions.add_parser("verify")
+    ledger_verify.add_argument("--project", default="default")
+
+    truth_projection = truth_actions.add_parser("projection", help="Rebuild or compare temporal projections")
+    projection_actions = truth_projection.add_subparsers(dest="projection_action", required=True)
+    projection_rebuild = projection_actions.add_parser("rebuild")
+    projection_rebuild.add_argument("--project", default="default")
+    projection_rebuild.add_argument("--root", required=True)
+    projection_compare = projection_actions.add_parser("compare")
+    projection_compare.add_argument("--project", default="default")
+
+    context_cmd = sub.add_parser(
+        "context", help="Authorize, compile, explain, and audit bounded agent context"
+    )
+    add_common_options(context_cmd)
+    context_actions = context_cmd.add_subparsers(dest="context_action", required=True)
+    context_actions.add_parser(
+        "authority-status", help="Verify host-owned context authority readiness"
+    )
+
+    context_profile = context_actions.add_parser(
+        "profile-register", help="Register an operator-verified agent consumption profile"
+    )
+    context_profile.add_argument("--project", default="default")
+    context_profile.add_argument("--profile-id", required=True)
+    context_profile.add_argument("--operator-id", required=True)
+    context_profile.add_argument("--max-input-tokens", type=int, required=True)
+    context_profile.add_argument(
+        "--privacy-ceiling",
+        choices=("public", "internal", "sensitive", "restricted"),
+        default="internal",
+    )
+
+    context_contract = context_actions.add_parser(
+        "contract-authorize", help="Authorize one bounded task contract JSON document"
+    )
+    context_contract.add_argument("--project", default="default")
+    context_contract.add_argument("--profile-version-id", type=int, required=True)
+    context_contract.add_argument("--contract-file", required=True)
+    context_contract.add_argument("--operator-id", required=True)
+
+    context_compile = context_actions.add_parser(
+        "compile", help="Compile one authorized agent context variant"
+    )
+    context_compile.add_argument("--project", default="default")
+    context_compile.add_argument("--root", required=True)
+    context_compile.add_argument("--task-contract-id", type=int, required=True)
+    context_compile.add_argument("--principal-id", required=True)
+    context_compile.add_argument("--session-id", required=True)
+    context_compile.add_argument("--variant", default="primary")
+
+    context_explain = context_actions.add_parser(
+        "explain", help="Explain a compilation to its bound agent session"
+    )
+    context_explain.add_argument("--project", default="default")
+    context_explain.add_argument("--compilation-id", required=True)
+    context_explain.add_argument("--principal-id", required=True)
+    context_explain.add_argument("--session-id", required=True)
+
+    context_audit = context_actions.add_parser(
+        "audit", help="Read metadata-only compilation receipts as the operator"
+    )
+    context_audit.add_argument("--project", default="default")
+    context_audit.add_argument("--compilation-id", required=True)
+    context_audit.add_argument("--operator-id", required=True)
+    context_audit.add_argument("--session-id", required=True)
+
+    context_outcome = context_actions.add_parser(
+        "outcome", help="Record one bounded operator-confirmed outcome document"
+    )
+    context_outcome.add_argument("--project", default="default")
+    context_outcome.add_argument("--compilation-id", required=True)
+    context_outcome.add_argument("--outcome-file", required=True)
+    context_outcome.add_argument("--operator-id", required=True)
+    context_outcome.add_argument("--session-id", required=True)
+
+    context_revoke = context_actions.add_parser(
+        "revoke", help="Revoke the exact capability grant used by a compilation"
+    )
+    context_revoke.add_argument("--project", default="default")
+    context_revoke.add_argument("--compilation-id", required=True)
+    context_revoke.add_argument("--operator-id", required=True)
+    context_revoke.add_argument("--reason", required=True)
 
     diagnostics_cmd = sub.add_parser("retrieval-diagnostics", help="Explain retrieval mode, coverage, ranking, evidence, and freshness")
     add_common_options(diagnostics_cmd)
@@ -279,6 +1404,12 @@ def build_parser() -> argparse.ArgumentParser:
     stale.add_argument("--rehash", action="store_true", help="Bypass the stat-keyed hash cache; implies --deep")
     stale.add_argument("--details", action="store_true", help="Include fresh file rows as well as anomalies")
     stale.add_argument("--detail-limit", type=int, default=50, help="Maximum freshness detail rows to emit (0-500)")
+    stale.add_argument("--root", help="Active checkout root; mismatches fail closed before freshness is claimed")
+
+    integrity_cmd = sub.add_parser("integrity-diagnostics", help="Report schema, binding, and duplicate-root integrity without local paths")
+    add_common_options(integrity_cmd)
+    integrity_cmd.add_argument("--project", default="default")
+    integrity_cmd.add_argument("--root", help="Active checkout root to verify against the stored binding")
 
     checkpoint = sub.add_parser("checkpoint", help="Save a structured project continuation checkpoint")
     add_common_options(checkpoint)
@@ -336,6 +1467,7 @@ def build_parser() -> argparse.ArgumentParser:
     readiness = sub.add_parser("operational-readiness", help="Separate database health from task continuation readiness")
     add_common_options(readiness)
     readiness.add_argument("--project", default="default")
+    readiness.add_argument("--root", help="Active checkout root to verify before reporting continuation readiness")
 
     reflect_cmd = sub.add_parser("reflect", help="Consolidate duplicate memories and flag contradictions")
     add_common_options(reflect_cmd)
@@ -383,6 +1515,7 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_config.add_argument("--project", default="default")
     mcp_config.add_argument("--name", default="rta-smriti")
     mcp_config.add_argument("--brain-dir", help="Generate one multi-project MCP gateway for this brain directory")
+    mcp_config.add_argument("--root", help="Active checkout root that must match before configuration is emitted")
 
     mcp_doctor_cmd = sub.add_parser("mcp-doctor", help="Probe the exact generated MCP stdio server command")
     add_common_options(mcp_doctor_cmd)
@@ -420,6 +1553,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(self_check_cmd)
     self_check_cmd.add_argument("--project", default="default")
     self_check_cmd.add_argument("--check-files", action="store_true", help="Hash indexed files to include fresh/changed/missing counts")
+    self_check_cmd.add_argument("--root", help="Active checkout root to verify before reporting readiness")
 
     projects = sub.add_parser("projects-list", help="List projects registered in a brain database")
     add_common_options(projects)
@@ -431,6 +1565,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_cmd = sub.add_parser("doctor", help="Verify local brain health")
     add_common_options(doctor_cmd)
     doctor_cmd.add_argument("--project", help="Also evaluate task continuation readiness for one project")
+    doctor_cmd.add_argument("--root", help="Active checkout root to verify when --project is supplied")
 
     publish = sub.add_parser("publish-readiness", help="Check whether this package is ready to publish on GitHub")
     add_common_options(publish)
@@ -455,6 +1590,13 @@ def build_parser() -> argparse.ArgumentParser:
     console.add_argument("--port", type=int, default=8765)
     console.add_argument("--no-open", action="store_true", help="Do not open the browser")
     console.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Emit stable JSON")
+
+    supervisor = sub.add_parser("supervisor", help="Restore explicitly enrolled local services")
+    supervisor.add_argument("action", choices=("start",))
+    supervisor.add_argument("--brain-dir", default=str(Path.home() / "Documents" / "Codex" / "brains"))
+    supervisor.add_argument("--port", type=int, default=8765)
+    supervisor.add_argument("--no-open", action="store_true", help="Do not open the browser")
+    supervisor.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Emit stable JSON")
 
     console_worker = sub.add_parser("_console-worker", help=argparse.SUPPRESS)
     console_worker.add_argument("--tool-root", required=True)
@@ -520,6 +1662,21 @@ def main(argv=None) -> int:
             Path(args.lock_file),
             Path(args.token_file),
         )
+    if args.command == "supervisor":
+        try:
+            payload = supervise_brain(
+                tool_root(), Path(args.brain_dir), port=args.port,
+                open_browser=not args.no_open,
+            )
+            emit(payload, args.json)
+            return 0 if payload.get("status") == "ok" else 1
+        except Exception as exc:  # noqa: BLE001 - CLI emits a bounded error envelope
+            error = {"status": "error", "error": {"type": exc.__class__.__name__, "message": str(exc)}}
+            if getattr(args, "json", False):
+                print(json.dumps(error, indent=2, sort_keys=True), file=sys.stderr)
+            else:
+                print(f"error: {exc}", file=sys.stderr)
+            return 1
     if args.command == "console":
         try:
             brain_dir = Path(args.brain_dir)
@@ -584,6 +1741,12 @@ def main(argv=None) -> int:
             Path(args.db), Path(args.root), args.project, Path(args.sessions_root),
             Path(args.state_file), Path(args.stop_file), Path(args.lock_file),
             args.interval, args.inactivity, args.lookback_days, args.backlog_tail_bytes,
+        )
+    if args.command == "_capture-worker":
+        return run_capture_worker(
+            Path(args.db), Path(args.state_file), Path(args.stop_file),
+            Path(args.lock_file), interval_seconds=args.interval,
+            batch_size=args.batch_size,
         )
     if args.command == "watcher":
         try:
@@ -722,10 +1885,15 @@ def main(argv=None) -> int:
                 print(f"error: {exc}", file=sys.stderr)
             return 1
     exit_code = 0
+    conn = None
     try:
         conn = connect(Path(args.db))
         with conn:
-            if args.command == "init":
+            if args.command == "capture":
+                payload = _dispatch_capture(args, conn)
+            elif args.command == "init":
+                if args.rebind_root:
+                    raise ValueError("--rebind-root is retired for init; use root-rebind with a no-clobber backup path")
                 payload = init_project(conn, args.project, str(Path(args.root).resolve()), allow_root_rebind=args.rebind_root)
             elif args.command == "remember":
                 provenance = None
@@ -748,6 +1916,8 @@ def main(argv=None) -> int:
                     provenance=provenance,
                 )
             elif args.command == "ingest-repo":
+                if args.rebind_root:
+                    raise ValueError("--rebind-root is retired for ingest-repo; use root-rebind with a no-clobber backup path")
                 payload = ingest_repo(
                     conn,
                     Path(args.path),
@@ -755,6 +1925,10 @@ def main(argv=None) -> int:
                     force=args.force,
                     repair_deep_stale=args.repair_deep_stale,
                     allow_root_rebind=args.rebind_root,
+                )
+            elif args.command == "root-rebind":
+                payload = rebind_project_root(
+                    conn, Path(args.path), project=args.project, backup_path=Path(args.backup),
                 )
             elif args.command == "watch-repo":
                 payload = watch_repository(conn, Path(args.path), project=args.project, interval_seconds=args.interval)
@@ -845,6 +2019,76 @@ def main(argv=None) -> int:
                 payload = run_conservative_decay(
                     conn, project=args.project, minimum_age_days=args.minimum_age_days, step=args.step,
                 )
+            elif args.command == "context":
+                if args.context_action == "authority-status":
+                    payload = context_authority_status(Path(args.db))
+                elif args.context_action == "profile-register":
+                    payload = ensure_context_agent_profile(
+                        conn,
+                        project=args.project,
+                        profile_id=args.profile_id,
+                        actor_id=args.operator_id,
+                        max_input_tokens=args.max_input_tokens,
+                        privacy_ceiling=args.privacy_ceiling,
+                    )
+                elif args.context_action == "contract-authorize":
+                    payload = authorize_context_contract(
+                        conn,
+                        project=args.project,
+                        agent_profile_version_id=args.profile_version_id,
+                        contract=load_bounded_context_json(args.contract_file),
+                        actor_id=args.operator_id,
+                    )
+                elif args.context_action == "compile":
+                    payload = compile_context_for_agent(
+                        conn,
+                        db_path=Path(args.db),
+                        project=args.project,
+                        active_root=Path(args.root),
+                        task_contract_id=args.task_contract_id,
+                        principal_id=args.principal_id,
+                        session_id=args.session_id,
+                        variant_id=args.variant,
+                    )
+                elif args.context_action == "explain":
+                    payload = explain_context_for_agent(
+                        conn,
+                        db_path=Path(args.db),
+                        project=args.project,
+                        compilation_id=args.compilation_id,
+                        principal_id=args.principal_id,
+                        session_id=args.session_id,
+                    )
+                elif args.context_action == "audit":
+                    payload = audit_context_for_operator(
+                        conn,
+                        db_path=Path(args.db),
+                        project=args.project,
+                        compilation_id=args.compilation_id,
+                        operator_id=args.operator_id,
+                        session_id=args.session_id,
+                    )
+                elif args.context_action == "outcome":
+                    payload = record_context_outcome_for_operator(
+                        conn,
+                        db_path=Path(args.db),
+                        project=args.project,
+                        compilation_id=args.compilation_id,
+                        operator_id=args.operator_id,
+                        session_id=args.session_id,
+                        outcome=load_bounded_context_json(args.outcome_file),
+                    )
+                elif args.context_action == "revoke":
+                    payload = revoke_context_compilation_grant(
+                        conn,
+                        db_path=Path(args.db),
+                        project=args.project,
+                        compilation_id=args.compilation_id,
+                        operator_id=args.operator_id,
+                        reason=args.reason,
+                    )
+                else:
+                    raise ValueError(f"unknown context action: {args.context_action}")
             elif args.command == "context-pack":
                 payload = build_context_pack(
                     conn, args.task, project=args.project, limit=args.limit, max_tokens=args.max_tokens
@@ -857,6 +2101,211 @@ def main(argv=None) -> int:
                     refresh_hashes=args.rehash,
                     detail_limit=args.detail_limit,
                     include_fresh_details=args.details,
+                    active_root=Path(args.root) if args.root else None,
+                )
+            elif args.command == "truth":
+                if args.truth_action == "assert":
+                    payload = append_claim(
+                        conn,
+                        project=args.project,
+                        active_root=Path(args.root),
+                        claim_id=args.claim_id,
+                        subject=args.subject,
+                        predicate=args.predicate,
+                        value=parse_json_argument("--value-json", args.value_json),
+                        idempotency_key=args.idempotency_key,
+                        expected_stream_version=args.expected_version,
+                        valid_from=args.valid_from,
+                        valid_to=args.valid_to,
+                        expires_at=args.expires_at,
+                        epistemic_state=args.state,
+                        confidence=args.confidence,
+                        actor_type=args.actor_type,
+                        actor_id=args.actor_id,
+                        source="cli",
+                    )
+                elif args.truth_action == "current":
+                    payload = truth_current(
+                        conn,
+                        project=args.project,
+                        claim_id=args.claim_id,
+                        valid_at=args.valid_at,
+                    )
+                elif args.truth_action == "state":
+                    payload = change_claim_state(
+                        conn,
+                        project=args.project,
+                        active_root=Path(args.root),
+                        claim_id=args.claim_id,
+                        new_state=args.state,
+                        reason=args.reason,
+                        idempotency_key=args.idempotency_key,
+                        expected_stream_version=args.expected_version,
+                        actor_type=args.actor_type,
+                        actor_id=args.actor_id,
+                        source="cli",
+                    )
+                elif args.truth_action == "history":
+                    payload = truth_history(
+                        conn,
+                        project=args.project,
+                        claim_id=args.claim_id,
+                        limit=args.limit,
+                    )
+                elif args.truth_action == "as-of":
+                    payload = truth_as_of(
+                        conn,
+                        project=args.project,
+                        claim_id=args.claim_id,
+                        valid_at=args.valid_at,
+                        recorded_sequence=args.recorded_sequence,
+                    )
+                elif args.truth_action == "revise":
+                    payload = revise_claim(
+                        conn,
+                        project=args.project,
+                        active_root=Path(args.root),
+                        claim_id=args.claim_id,
+                        value=parse_json_argument("--value-json", args.value_json),
+                        reason=args.reason,
+                        idempotency_key=args.idempotency_key,
+                        expected_stream_version=args.expected_version,
+                        valid_from=args.valid_from,
+                        valid_to=args.valid_to,
+                        actor_type=args.actor_type,
+                        actor_id=args.actor_id,
+                        source="cli",
+                    )
+                elif args.truth_action == "relate":
+                    payload = relate_claims(
+                        conn,
+                        project=args.project,
+                        active_root=Path(args.root),
+                        relation_id=args.relation_id,
+                        from_claim_id=args.from_claim,
+                        relation_type=args.type,
+                        to_claim_id=args.to_claim,
+                        confidence=args.confidence,
+                        idempotency_key=args.idempotency_key,
+                        expected_stream_version=args.expected_version,
+                        actor_type=args.actor_type,
+                        actor_id=args.actor_id,
+                        source="cli",
+                    )
+                elif args.truth_action == "evidence":
+                    provenance = parse_json_argument("--provenance-json", args.provenance_json)
+                    if not isinstance(provenance, dict):
+                        raise ValueError("--provenance-json must contain a JSON object")
+                    payload = attach_evidence(
+                        conn,
+                        project=args.project,
+                        active_root=Path(args.root),
+                        claim_id=args.claim_id,
+                        evidence_id=args.evidence_id,
+                        source_identifier=args.source_identifier,
+                        source_hash=args.source_hash,
+                        method=args.method,
+                        polarity=args.polarity,
+                        authority_class=args.authority_class,
+                        confidence=args.confidence,
+                        uncertainty=args.uncertainty,
+                        provenance=provenance,
+                        idempotency_key=args.idempotency_key,
+                        expected_stream_version=args.expected_version,
+                        verification_status=args.verification_status,
+                        actor_type=args.actor_type,
+                        actor_id=args.actor_id,
+                        source="cli",
+                    )
+                elif args.truth_action == "abstain":
+                    missing = parse_json_argument("--missing-evidence-json", args.missing_evidence_json)
+                    conflicts = parse_json_argument("--unresolved-conflicts-json", args.unresolved_conflicts_json)
+                    if not isinstance(missing, list) or not isinstance(conflicts, list):
+                        raise ValueError("abstention evidence and conflicts must be JSON arrays")
+                    payload = record_abstention(
+                        conn,
+                        project=args.project,
+                        active_root=Path(args.root),
+                        abstention_id=args.abstention_id,
+                        query_scope=args.query_scope,
+                        missing_evidence=missing,
+                        unresolved_conflicts=conflicts,
+                        minimum_revalidation_action=args.minimum_revalidation_action,
+                        idempotency_key=args.idempotency_key,
+                        expected_stream_version=args.expected_version,
+                        actor_type=args.actor_type,
+                        actor_id=args.actor_id,
+                        source="cli",
+                    )
+                elif args.truth_action == "explain":
+                    payload = truth_explain(
+                        conn, project=args.project, claim_id=args.claim_id,
+                        valid_at=args.valid_at,
+                    )
+                elif args.truth_action == "diff":
+                    payload = truth_diff(
+                        conn, project=args.project,
+                        from_sequence=args.from_sequence,
+                        to_sequence=args.to_sequence,
+                        valid_at=args.valid_at,
+                        limit=args.limit,
+                    )
+                elif args.truth_action == "anchor":
+                    payload = observe_repository_anchor(
+                        conn, project=args.project, active_root=Path(args.root),
+                        anchor_id=args.anchor_id,
+                        idempotency_key=args.idempotency_key,
+                        expected_stream_version=args.expected_version,
+                        actor_type="operator", actor_id="local-operator", source="cli",
+                    )
+                elif args.truth_action == "at-commit":
+                    payload = truth_at_commit(
+                        conn, project=args.project, claim_id=args.claim_id,
+                        commit=args.commit, valid_at=args.valid_at,
+                    )
+                elif args.truth_action == "validator":
+                    if args.validator_action == "add":
+                        config = parse_json_argument("--config-json", args.config_json)
+                        if not isinstance(config, dict):
+                            raise ValueError("--config-json must contain a JSON object")
+                        payload = define_validator(
+                            conn, project=args.project, active_root=Path(args.root),
+                            validator_id=args.validator_id, validator_type=args.type,
+                            claim_id=args.claim_id, config=config,
+                            failure_effect=args.failure_effect,
+                            idempotency_key=args.idempotency_key,
+                            expected_stream_version=args.expected_version,
+                            actor_type="operator", actor_id=args.actor_id, source="cli",
+                        )
+                    elif args.validator_action == "run":
+                        payload = run_validator(
+                            conn, project=args.project, active_root=Path(args.root),
+                            validator_id=args.validator_id,
+                            idempotency_key=args.idempotency_key,
+                            expected_stream_version=args.expected_version,
+                            allow_command=args.allow_command,
+                            trusted_executables=tuple(args.trusted_executable),
+                            actor_type="operator", actor_id=args.actor_id, source="cli",
+                        )
+                    else:
+                        payload = validator_history(
+                            conn, project=args.project,
+                            validator_id=args.validator_id, limit=args.limit,
+                        )
+                elif args.truth_action == "ledger":
+                    payload = verify_ledger(conn, project=args.project)
+                elif args.truth_action == "projection":
+                    if args.projection_action == "rebuild":
+                        payload = rebuild_projections(
+                            conn, project=args.project, active_root=Path(args.root),
+                        )
+                    else:
+                        payload = verify_ledger(conn, project=args.project)
+                else:
+                    raise ValueError(f"unsupported truth action: {args.truth_action}")
+            elif args.command == "integrity-diagnostics":
+                payload = integrity_diagnostics(
+                    conn, project=args.project, active_root=Path(args.root) if args.root else None,
                 )
             elif args.command == "checkpoint":
                 payload = save_checkpoint(
@@ -895,6 +2344,7 @@ def main(argv=None) -> int:
             elif args.command == "operational-readiness":
                 payload = operational_readiness(
                     conn, args.project, lifecycle=continuity_status(Path(args.db), args.project),
+                    active_root=Path(args.root) if args.root else None,
                 )
             elif args.command == "reflect":
                 payload = reflect(conn, project=args.project)
@@ -947,6 +2397,12 @@ def main(argv=None) -> int:
             elif args.command == "governance-receipts":
                 payload = list_receipts(conn, project=args.project, limit=args.limit)
             elif args.command == "mcp-config":
+                if args.root and not args.brain_dir:
+                    binding = project_binding_status(conn, args.project, Path(args.root))
+                    if not binding["ready"]:
+                        raise ValueError(
+                            f"active checkout mismatch ({binding['state']}); verify or rebind the project root first"
+                        )
                 payload = (
                     mcp_gateway_config_payload(args.brain_dir, args.name, tool_root())
                     if args.brain_dir else build_mcp_config(args.db, args.project, args.name)
@@ -964,7 +2420,10 @@ def main(argv=None) -> int:
                     embedding_provider=args.embedding_provider,
                 )
             elif args.command == "self-check":
-                payload = self_check(conn, project=args.project, check_files=args.check_files)
+                payload = self_check(
+                    conn, project=args.project, check_files=args.check_files,
+                    active_root=Path(args.root) if args.root else None,
+                )
             elif args.command == "projects-list":
                 payload = projects_list(conn)
             elif args.command == "install-local":
@@ -974,6 +2433,7 @@ def main(argv=None) -> int:
                 if args.project:
                     payload["operational"] = operational_readiness(
                         conn, args.project, lifecycle=continuity_status(Path(args.db), args.project),
+                        active_root=Path(args.root) if args.root else None,
                     )
             else:
                 parser.error(f"unknown command: {args.command}")
@@ -987,6 +2447,9 @@ def main(argv=None) -> int:
         else:
             print(f"error: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 if __name__ == "__main__":

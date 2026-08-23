@@ -3,11 +3,22 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from rta_brain.benchmark import benchmark_report_markdown, default_public_benchmark_path, run_public_benchmark
-from rta_brain.db import connect, graph_query, ingest_repo, init_project, remember, update_project_settings
+from rta_brain.benchmark import (
+    benchmark_report_markdown,
+    default_public_benchmark_path,
+    run_context_compiler_benchmark,
+    run_public_benchmark,
+)
+from rta_brain.db import (
+    connect,
+    graph_query,
+    ingest_repo,
+    init_project,
+    remember,
+    update_project_settings,
+)
 from rta_brain.diagnostics import retrieval_diagnostics
 from rta_brain.parsers import RegexParser
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -94,7 +105,33 @@ class ReleaseIntelligenceTests(unittest.TestCase):
         self.assertEqual(first["quality_gates"]["continuation_success"], 1.0)
         self.assertEqual(first["quality_gates"]["governance_accuracy"], 1.0)
         self.assertNotIn(str(Path.home()), str(first))
-        self.assertNotIn("token", str(first).lower())
+        self.assertNotIn("capability_token", str(first).lower())
+        self.assertNotIn("authority_secret", str(first).lower())
+        self.assertNotIn("api_key", str(first).lower())
+
+    def test_context_compiler_benchmark_proves_synthetic_continuation_and_efficiency_gain(self):
+        first = run_context_compiler_benchmark()
+        second = run_context_compiler_benchmark()
+
+        self.assertEqual(first["schema_version"], 1)
+        self.assertEqual(first, second)
+        self.assertEqual(first["synthetic"], True)
+        self.assertEqual(first["baseline"]["implementation"], "v0.6-context-pack")
+        self.assertEqual(first["candidate"]["implementation"], "v0.8-context-compiler")
+        self.assertGreater(
+            first["candidate"]["continuation_success"],
+            first["baseline"]["continuation_success"],
+        )
+        self.assertGreater(
+            first["candidate"]["context_efficiency"],
+            first["baseline"]["context_efficiency"],
+        )
+        self.assertGreater(first["improvement"]["continuation_success_delta"], 0)
+        self.assertGreater(first["improvement"]["context_efficiency_delta"], 0)
+        self.assertEqual(first["gates"]["continuation_improved"], 1.0)
+        self.assertEqual(first["gates"]["context_efficiency_improved"], 1.0)
+        self.assertEqual(first["limitations"]["external_superiority_evidence"], False)
+        self.assertNotIn(str(Path.home()), str(first))
 
     def test_public_benchmark_reports_unavailable_optional_semantic_mode_without_failing(self):
         original = __import__("rta_brain.benchmark", fromlist=["_run_mode"])._run_mode
@@ -119,9 +156,15 @@ class ReleaseIntelligenceTests(unittest.TestCase):
         self.assertIn(result["dataset_digest"], report)
         self.assertIn("| Mode | Status | NDCG@K | Recall@K | MRR@K | Precision@K | P50 ms | P95 ms |", report)
         self.assertIn("hash_hybrid", report)
+        self.assertIn("## Context Compiler Comparison", report)
+        self.assertIn("v0.6-context-pack", report)
+        self.assertIn("v0.8-context-compiler", report)
+        self.assertIn("not an external agent-success", report)
         self.assertIn("synthetic reproducibility and regression harness", report)
         self.assertNotIn(str(Path.home()), report)
-        self.assertNotIn("token", report.lower())
+        self.assertNotIn("capability_token", report.lower())
+        self.assertNotIn("authority_secret", report.lower())
+        self.assertNotIn("api_key", report.lower())
 
     def test_public_benchmark_report_refuses_linked_output(self):
         from rta_brain.benchmark import write_benchmark_report

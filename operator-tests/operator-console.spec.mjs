@@ -8,11 +8,12 @@ import { fileURLToPath } from "node:url";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const captureLaunchAssets = process.env.RTA_CAPTURE_LAUNCH_ASSETS === "1";
+const captureOutputDir = process.env.RTA_CAPTURE_OUTPUT_DIR || path.join(root, "launch-assets", "screenshots");
 
 async function captureLaunchScreenshot(page, name) {
   if (!captureLaunchAssets) return;
   await page.screenshot({
-    path: path.join(root, "launch-assets", "screenshots", name),
+    path: path.join(captureOutputDir, name),
     animations: "disabled",
   });
 }
@@ -68,6 +69,12 @@ async function runCleanupCommand(args, timeoutMs = 12_000) {
 
 async function stopBootstrappedDaemons(tempRoot) {
   const database = path.join(tempRoot, "brains", "bootstrapped-project.sqlite");
+  const projectRoot = path.join(tempRoot, "bootstrapped-project");
+  await runCleanupCommand([
+    path.join(root, "rta-brain.py"), "capture", "--db", database,
+    "--project", "bootstrapped-project", "--root", projectRoot,
+    "daemon", "stop",
+  ]);
   await runCleanupCommand([
     path.join(root, "rta-brain.py"), "--db", database,
     "continuity", "stop", "--project", "bootstrapped-project",
@@ -145,6 +152,7 @@ test("real operator can inspect, govern, continue, and move a project brain", as
       ["Imports", () => page.getByRole("region", { name: "Typed project data tables" })],
       ["Memories", () => page.getByRole("region", { name: "Typed project data tables" })],
       ["Evidence", () => page.getByRole("heading", { name: "Evidence Inspector", exact: true })],
+      ["Capture", () => page.getByRole("region", { name: "Universal capture console" })],
       ["Search", () => page.getByLabel("Search graph nodes")],
       ["Action Gate", () => page.getByRole("heading", { name: "Action Gate", exact: true })],
       ["Intelligence", () => page.getByRole("heading", { name: "Project Intelligence", exact: true })],
@@ -177,6 +185,8 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect(page.locator("#base-panel-memory").getByRole("button")).toHaveCount(0);
     await expect(page.getByRole("status").last()).toBeAttached();
     await operatorNavigation.getByRole("button", { name: "Settings", exact: true }).click();
+    await expect(page.getByText("Checkout integrity", { exact: true })).toBeVisible();
+    await expect(page.getByText("Verified", { exact: true })).toBeVisible();
     const largeFilePolicy = page.getByLabel("Oversized source handling");
     const parserAdapter = page.getByLabel("Parser adapter");
     const compactionProvider = page.getByLabel("Thread compaction");
@@ -265,6 +275,21 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("context-pack");
     await page.getByRole("button", { name: "Generate Context Pack", exact: true }).click();
     await expect(page.getByRole("button", { name: /1 receipt/ })).toBeVisible();
+    await page.getByRole("button", { name: "Governed Compiler", exact: true }).click();
+    await expect(page.getByText("Authorized, receipted, explainable", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Authorize & Compile", exact: true }).click();
+    await expect(page.locator(".compilerReceiptSummary code")).toContainText("ctxc-");
+    await page.getByRole("button", { name: "Explain", exact: true }).click();
+    await expect(page.getByText(/Explanation verified/)).toBeVisible();
+    await page.getByRole("button", { name: "Audit", exact: true }).click();
+    await expect(page.getByText(/Audit verified/)).toBeVisible();
+    await expectNoAxeViolations(page, "Governed Context Compiler");
+    const governedObjective = page.getByLabel("Objective");
+    await governedObjective.fill(`${await governedObjective.inputValue()} with a changed objective`);
+    await expect(page.locator(".compilerReceiptSummary")).toHaveCount(0);
+    await expect(page.getByRole("main").getByRole("button", { name: "Copy Command", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Authorize & Compile", exact: true }).click();
+    await expect(page.locator(".compilerReceiptSummary code")).toContainText("ctxc-");
 
     await operatorNavigation.getByRole("button", { name: "Files", exact: true }).click();
     await page.getByRole("button", { name: /README\.md/ }).first().click();
@@ -345,7 +370,9 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     });
     await page.getByRole("main").getByRole("button", { name: "Copy Command", exact: true }).click();
     await expect(page.getByRole("button", { name: "Copy Failed", exact: true })).toBeVisible();
-    await expect(page.getByRole("status").last()).toContainText("Copy failed: clipboard permission was denied");
+    await expect(page.locator("footer.statusBar").getByRole("status")).toContainText(
+      "Copy failed: clipboard permission was denied",
+    );
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.getByText("Brain Status: Healthy", { exact: true })).toBeVisible();
 
@@ -370,8 +397,15 @@ test("real operator can inspect, govern, continue, and move a project brain", as
 
     await page.emulateMedia({ reducedMotion: "reduce" });
     await reloadedNavigation.getByRole("button", { name: "Graph", exact: true }).click();
-    const animated = await page.locator(".graphCanvas *").evaluateAll((elements) => elements.filter((element) => getComputedStyle(element).animationName !== "none").length);
-    expect(animated).toBe(0);
+    const animated = await page.locator(".graphCanvas *").evaluateAll((elements) => elements
+      .map((element) => ({
+        tag: element.tagName,
+        className: element.getAttribute("class") || "",
+        animationName: getComputedStyle(element).animationName,
+        animationDuration: getComputedStyle(element).animationDuration,
+      }))
+      .filter((value) => value.animationName.split(",").some((name) => name.trim() !== "none")));
+    expect(animated).toEqual([]);
 
     await page.emulateMedia({ reducedMotion: "reduce", forcedColors: "active" });
     await expect(page.getByRole("region", { name: "Interactive project brain graph" })).toBeVisible();
@@ -387,6 +421,8 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect(page.getByText("Brain Status: Healthy", { exact: true })).toBeVisible();
     await reloadedNavigation.getByRole("button", { name: "Graph", exact: true }).click();
     await page.evaluate(() => window.scrollTo(0, 0));
+    const mobileToolbarHeight = await page.locator(".stageToolbar").evaluate((toolbar) => toolbar.getBoundingClientRect().height);
+    expect(mobileToolbarHeight).toBeLessThanOrEqual(70);
     await captureLaunchScreenshot(page, "operator-console-mobile-v0.6.png");
     await reloadedNavigation.getByRole("button", { name: "Canvas", exact: true }).click();
     const mobileCanvas = page.getByRole("region", { name: "Spatial project canvas" });
@@ -458,6 +494,12 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     });
     await page.getByRole("button", { name: "Refresh projects", exact: true }).click();
     await expect(page.getByRole("alert")).toContainText("Canonical-root conflict");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.getByRole("alert").getByText("Canonical-root conflict.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("alert").locator(".rootConflictDetail")).toBeHidden();
+    await expect(page.getByRole("alert").getByRole("button", { name: "Review", exact: true })).toBeVisible();
+    await page.setViewportSize({ width: 1440, height: 900 });
     healthMode = "empty";
     await page.getByRole("button", { name: "Refresh projects", exact: true }).click();
     await page.getByRole("button", { name: /Projects Choose a brain/ }).click();

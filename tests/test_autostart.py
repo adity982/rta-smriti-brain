@@ -5,8 +5,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rta_brain.autostart import _entry_text, autostart_status, disable_autostart, enable_autostart
-
+from rta_brain.autostart import (
+    _entry_text,
+    autostart_status,
+    disable_autostart,
+    enable_autostart,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,7 +28,7 @@ class AutostartTests(unittest.TestCase):
             entry = Path(enabled["entry_path"])
             self.assertTrue(entry.is_file())
             text = entry.read_text(encoding="utf-8")
-            self.assertIn('"console" "start"', text)
+            self.assertIn('"supervisor" "start"', text)
             self.assertIn("--no-open", text)
             self.assertIn(str(brain_dir.resolve()), text)
             self.assertTrue(autostart_status(brain_dir, platform_name="win32", home=home, environment={"APPDATA": str(appdata)})["enabled"])
@@ -39,6 +43,7 @@ class AutostartTests(unittest.TestCase):
             payload = enable_autostart(ROOT, brain_dir, platform_name="darwin", home=home, environment={})
             text = Path(payload["entry_path"]).read_text(encoding="utf-8")
             self.assertIn("<key>ProgramArguments</key>", text)
+            self.assertIn("<string>supervisor</string>", text)
             self.assertIn("<string>--no-open</string>", text)
             self.assertIn("brains &amp; memory", text)
             self.assertNotIn("<key>Shell", text)
@@ -53,6 +58,7 @@ class AutostartTests(unittest.TestCase):
             )
             text = Path(supported["entry_path"]).read_text(encoding="utf-8")
             self.assertIn("Type=Application", text)
+            self.assertIn('"supervisor" "start"', text)
             self.assertIn("--no-open", text)
 
             unsupported = autostart_status(

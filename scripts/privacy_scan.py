@@ -1,8 +1,13 @@
 import argparse
 import hashlib
+import io
+import os
 import re
-import subprocess
+import stat
 import sys
+import time
+import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -10,6 +15,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from rta_brain.privacy import RELEASE_PATH_BYTE_PATTERNS, RELEASE_SECRET_BYTE_PATTERNS
+from rta_brain.repository import run_git_inspection
+from rta_brain.temporal_validators import stable_file_bytes
 
 SECRET_PATTERNS = RELEASE_SECRET_BYTE_PATTERNS
 PATH_PATTERNS = RELEASE_PATH_BYTE_PATTERNS
@@ -17,13 +24,41 @@ PATH_PATTERNS = RELEASE_PATH_BYTE_PATTERNS
 FORBIDDEN_SUFFIXES = {".db", ".key", ".log", ".pem", ".sqlite", ".sqlite-shm", ".sqlite-wal"}
 FORBIDDEN_NAMES = {".env"}
 MAX_SCAN_BYTES = 25 * 1024 * 1024
+MAX_ARCHIVE_ENTRIES = 10_000
+MAX_ARCHIVE_TOTAL_BYTES = 100 * 1024 * 1024
+MAX_SCAN_FILES = 100_000
+MAX_SCAN_TOTAL_BYTES = 512 * 1024 * 1024
+MAX_SCAN_EXPANDED_BYTES = 512 * 1024 * 1024
+MAX_ARCHIVE_DEPTH = 3
+MAX_SCAN_SECONDS = 120.0
+ZIP_SIGNATURES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
+
+
+@dataclass
+class ScanBudget:
+    deadline: float
+    files: int = 0
+    raw_bytes: int = 0
+    expanded_bytes: int = 0
+    archive_entries: int = 0
+
+    def expired(self) -> bool:
+        return time.monotonic() > self.deadline
+
+
+class ScanFileLimitExceeded(RuntimeError):
+    pass
+
+
+class ScanDeadlineExceeded(RuntimeError):
+    pass
 
 KNOWN_PATH_DEFINITION_LINE_SHA256 = {
     "scripts/privacy_scan.py": {
-        "a884a3e6b03becf8a2b72dd8d6bd42114ad0bd8e9daa9d59eda55fae9cc7ed29",
+        "9aacc06dbd65085e49e5e49d3039850e3261295d36ec5f036a7034e12dfdc2c5",
     },
     "rta_brain/privacy.py": {
-        "2f15cfdbb376945ca7e2e5b9c36bb3bf2a803eecfa28488eb32a2d807897de6d",
+        "c14eef0234cd796617e126dfbff1baa3c8c5e0636f247cb898122afe8ea5682f",
     },
 }
 
@@ -43,7 +78,7 @@ def path_scan_views(data: bytes) -> list[bytes]:
     prefixes = []
     for drive in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
         prefixes.extend((f"{drive}:\\Users\\", f"{drive}:/Users/"))
-    prefixes.extend(("/Users/", "/home/"))
+    prefixes.extend(("/Users/", "/home/", "\\\\?\\UNC\\"))
     for prefix in prefixes:
         for encoding in ("utf-16-le", "utf-16-be"):
             marker = prefix.encode(encoding)
@@ -62,7 +97,16 @@ def is_placeholder_path(match: bytes) -> bool:
 
 
 def is_known_path_definition(relative: str, view: bytes, start: int, end: int) -> bool:
-    allowed = KNOWN_PATH_DEFINITION_LINE_SHA256.get(relative)
+    normalized = relative.replace("\\", "/")
+    canonical = next(
+        (
+            candidate
+            for candidate in KNOWN_PATH_DEFINITION_LINE_SHA256
+            if normalized == candidate or normalized.endswith(f"/{candidate}")
+        ),
+        None,
+    )
+    allowed = KNOWN_PATH_DEFINITION_LINE_SHA256.get(canonical or "")
     if not allowed:
         return False
     line_start = view.rfind(b"\n", 0, start) + 1
@@ -73,49 +117,239 @@ def is_known_path_definition(relative: str, view: bytes, start: int, end: int) -
     return digest in allowed
 
 
-def candidate_files(root: Path) -> list[Path]:
-    result = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
-        cwd=root,
-        check=True,
-        capture_output=True,
-        text=True,
+def candidate_files(root: Path, budget: ScanBudget) -> list[Path]:
+    candidates: list[Path] = []
+
+    def add_candidate(path: Path) -> None:
+        if budget.expired():
+            raise ScanDeadlineExceeded
+        budget.files += 1
+        if budget.files > MAX_SCAN_FILES:
+            raise ScanFileLimitExceeded
+        candidates.append(path)
+
+    result = run_git_inspection(
+        root,
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        max_output_bytes=MAX_ARCHIVE_TOTAL_BYTES,
     )
-    return [root / item for item in result.stdout.splitlines() if item and (root / item).is_file()]
+    if result is not None and result.returncode == 0:
+        for item in result.stdout.split("\0"):
+            if not item:
+                continue
+            path = root / item
+            if os.path.lexists(path):
+                add_candidate(path)
+        return candidates
+
+    directories = [root]
+    while directories:
+        if budget.expired():
+            raise ScanDeadlineExceeded
+        directory = directories.pop()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if budget.expired():
+                    raise ScanDeadlineExceeded
+                path = Path(entry.path)
+                if path.name == ".git" and directory == root:
+                    continue
+                if entry.is_symlink() or _is_reparse_point(path):
+                    add_candidate(path)
+                elif entry.is_dir(follow_symlinks=False):
+                    directories.append(path)
+                else:
+                    add_candidate(path)
+    return sorted(candidates)
+
+
+def _is_reparse_point(path: Path) -> bool:
+    try:
+        attributes = path.lstat().st_file_attributes
+    except (AttributeError, OSError):
+        return False
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+
+
+def _looks_like_zip(data: bytes) -> bool:
+    return data.startswith(ZIP_SIGNATURES)
+
+
+def _unsafe_archive_path(member: str) -> bool:
+    if not member or any(ord(character) < 32 for character in member):
+        return True
+    normalized = member.replace("\\", "/")
+    if normalized.startswith("/") or re.match(r"^[A-Za-z]:($|/)", normalized):
+        return True
+    return ".." in normalized.split("/")
+
+
+def _scan_data(
+    relative: str,
+    data: bytes,
+    deny_patterns: list[tuple[str, re.Pattern[bytes]]],
+) -> list[tuple[str, str]]:
+    findings: list[tuple[str, str]] = []
+    for label, pattern in [*SECRET_PATTERNS.items(), *deny_patterns]:
+        if pattern.search(data):
+            findings.append((relative, label))
+    for label, pattern in PATH_PATTERNS.items():
+        found = False
+        for view in path_scan_views(data):
+            for match in pattern.finditer(view):
+                if is_placeholder_path(match.group(0)):
+                    continue
+                if is_known_path_definition(relative, view, match.start(), match.end()):
+                    continue
+                found = True
+                break
+            if found:
+                break
+        if found:
+            findings.append((relative, label))
+    return findings
+
+
+def _scan_archive(
+    archive_bytes: bytes,
+    relative: str,
+    deny_patterns: list[tuple[str, re.Pattern[bytes]]],
+    budget: ScanBudget,
+    depth: int = 1,
+) -> list[tuple[str, str]]:
+    findings: list[tuple[str, str]] = []
+    if depth > MAX_ARCHIVE_DEPTH:
+        return [(relative, f"archive-over-{MAX_ARCHIVE_DEPTH}-levels")]
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(archive_bytes))
+    except (OSError, ValueError, zipfile.BadZipFile):
+        return [(relative, "invalid-release-archive")]
+    with archive:
+        entries = archive.infolist()
+        if len(entries) > MAX_ARCHIVE_ENTRIES:
+            return [(relative, f"archive-over-{MAX_ARCHIVE_ENTRIES}-entries")]
+        budget.archive_entries += len(entries)
+        if budget.archive_entries > MAX_ARCHIVE_ENTRIES:
+            return [(relative, f"scan-over-{MAX_ARCHIVE_ENTRIES}-archive-entries")]
+        total_bytes = 0
+        for entry in entries:
+            if budget.expired():
+                findings.append((relative, f"scan-over-{int(MAX_SCAN_SECONDS)}-seconds"))
+                break
+            member = entry.filename.replace("\\", "/")
+            member_path = Path(member)
+            member_relative = f"{relative}!{member}"
+            if _unsafe_archive_path(member):
+                findings.append((member_relative, "unsafe-archive-path"))
+                continue
+            mode = entry.external_attr >> 16
+            file_type = stat.S_IFMT(mode)
+            if file_type == stat.S_IFLNK:
+                findings.append((member_relative, "linked-archive-entry"))
+                continue
+            if file_type not in {0, stat.S_IFREG, stat.S_IFDIR}:
+                findings.append((member_relative, "special-archive-entry"))
+                continue
+            if entry.is_dir() or file_type == stat.S_IFDIR:
+                if entry.file_size or entry.compress_size:
+                    findings.append((member_relative, "payload-bearing-archive-directory"))
+                continue
+            lower_name = member_path.name.lower()
+            lower_suffixes = "".join(member_path.suffixes).lower()
+            if lower_name in FORBIDDEN_NAMES or any(
+                lower_suffixes.endswith(suffix) for suffix in FORBIDDEN_SUFFIXES
+            ):
+                findings.append((member_relative, "forbidden-release-file"))
+                continue
+            total_bytes += entry.file_size
+            budget.expanded_bytes += entry.file_size
+            if entry.file_size > MAX_SCAN_BYTES:
+                findings.append((member_relative, f"unscanned-file-over-{MAX_SCAN_BYTES}-bytes"))
+                continue
+            if total_bytes > MAX_ARCHIVE_TOTAL_BYTES:
+                findings.append((relative, f"archive-over-{MAX_ARCHIVE_TOTAL_BYTES}-bytes"))
+                break
+            if budget.expanded_bytes > MAX_SCAN_EXPANDED_BYTES:
+                findings.append((relative, f"scan-over-{MAX_SCAN_EXPANDED_BYTES}-expanded-bytes"))
+                break
+            try:
+                with archive.open(entry) as source:
+                    data = source.read(MAX_SCAN_BYTES + 1)
+            except (OSError, RuntimeError, zipfile.BadZipFile):
+                findings.append((member_relative, "unreadable-archive-entry"))
+                continue
+            if len(data) > MAX_SCAN_BYTES:
+                findings.append((member_relative, f"unscanned-file-over-{MAX_SCAN_BYTES}-bytes"))
+                continue
+            findings.extend(_scan_data(member_relative, data, deny_patterns))
+            if _looks_like_zip(data):
+                findings.extend(
+                    _scan_archive(data, member_relative, deny_patterns, budget, depth=depth + 1)
+                )
+    return findings
 
 
 def scan(root: Path, deny_terms: list[str]) -> list[tuple[str, str]]:
+    root = Path(root).expanduser().resolve()
+    if not root.exists():
+        return [(".", "missing-release-root")]
+    if not root.is_dir() or root.is_symlink() or _is_reparse_point(root):
+        return [(".", "invalid-release-root")]
     findings: list[tuple[str, str]] = []
     deny_patterns = [(f"private-term:{term}", re.compile(re.escape(term).encode(), re.IGNORECASE)) for term in deny_terms if term]
-    for path in candidate_files(root):
+    budget = ScanBudget(deadline=time.monotonic() + MAX_SCAN_SECONDS)
+    try:
+        candidates = candidate_files(root, budget)
+    except ScanFileLimitExceeded:
+        return [(".", f"scan-over-{MAX_SCAN_FILES}-files")]
+    except ScanDeadlineExceeded:
+        return [(".", f"scan-over-{int(MAX_SCAN_SECONDS)}-seconds")]
+    except OSError:
+        return [(".", "unreadable-release-root")]
+    if not candidates:
+        return [(".", "empty-release-root")]
+    if len(candidates) > MAX_SCAN_FILES:
+        return [(".", f"scan-over-{MAX_SCAN_FILES}-files")]
+    for path in candidates:
+        if budget.expired():
+            findings.append((".", f"scan-over-{int(MAX_SCAN_SECONDS)}-seconds"))
+            break
         relative = path.relative_to(root).as_posix()
         lower_name = path.name.lower()
         lower_suffixes = "".join(path.suffixes).lower()
         if lower_name in FORBIDDEN_NAMES or any(lower_suffixes.endswith(suffix) for suffix in FORBIDDEN_SUFFIXES):
             findings.append((relative, "forbidden-release-file"))
             continue
-        if path.stat().st_size > MAX_SCAN_BYTES:
+        try:
+            metadata = path.lstat()
+        except OSError:
+            findings.append((relative, "unreadable-release-file"))
+            continue
+        if path.is_symlink() or _is_reparse_point(path) or metadata.st_nlink != 1:
+            findings.append((relative, "linked-release-file"))
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            findings.append((relative, "special-release-file"))
+            continue
+        if metadata.st_size > MAX_SCAN_BYTES:
             findings.append((relative, f"unscanned-file-over-{MAX_SCAN_BYTES}-bytes"))
             continue
-        data = path.read_bytes()
-        for label, pattern in [*SECRET_PATTERNS.items(), *deny_patterns]:
-            for match in pattern.finditer(data):
-                findings.append((relative, label))
-                break
-        for label, pattern in PATH_PATTERNS.items():
-            found = False
-            for view in path_scan_views(data):
-                for match in pattern.finditer(view):
-                    if is_placeholder_path(match.group(0)):
-                        continue
-                    if is_known_path_definition(relative, view, match.start(), match.end()):
-                        continue
-                    found = True
-                    break
-                if found:
-                    break
-            if found:
-                findings.append((relative, label))
+        budget.raw_bytes += metadata.st_size
+        if budget.raw_bytes > MAX_SCAN_TOTAL_BYTES:
+            findings.append((".", f"scan-over-{MAX_SCAN_TOTAL_BYTES}-raw-bytes"))
+            break
+        try:
+            data = stable_file_bytes(path, maximum_bytes=MAX_SCAN_BYTES)
+        except (FileNotFoundError, OSError, RuntimeError, ValueError):
+            findings.append((relative, "unstable-release-file"))
+            continue
+        findings.extend(_scan_data(relative, data, deny_patterns))
+        if path.suffix.lower() in {".whl", ".zip"} or _looks_like_zip(data):
+            findings.extend(_scan_archive(data, relative, deny_patterns, budget))
     return findings
 
 
@@ -126,7 +360,7 @@ def main() -> int:
     args = parser.parse_args()
     root = args.root.resolve()
     findings = scan(root, args.deny_term)
-    print(f"privacy scan: {len(candidate_files(root))} candidate files")
+    print("privacy scan: completed")
     if findings:
         for path, category in findings:
             print(f"BLOCK {category}: {path}")

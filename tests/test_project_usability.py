@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from rta_brain.db import connect, init_project
 from rta_brain.project import agent_file_text, install_local, mcp_config_payload
 
 
@@ -158,6 +159,13 @@ class RtaBrainProjectUsabilityTests(unittest.TestCase):
             installed_package_root = root / "site-packages"
             installed_package_root.mkdir()
             db = root / "brains" / "demo.sqlite"
+            repo = root / "repo"
+            repo.mkdir()
+            conn = connect(db)
+            try:
+                init_project(conn, "demo", str(repo))
+            finally:
+                conn.close()
 
             agent_text = agent_file_text(installed_package_root, db, "demo")
             self.assertIn("rta_brain.cli", agent_text)

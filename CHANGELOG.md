@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.9.0-alpha] - Unreleased
+
+- Added opt-in universal passive capture with versioned vendor adapters, bounded private spools, deterministic normalization, and one managed daemon per brain.
+- Added append-only hash-chained capture events, causal replay, interruption diagnostics, policy-bound retention, deletion receipts, and encrypted forensic payload grants.
+- Hardened interactive retention with preview-bound confirmation, made the multi-project MCP gateway strictly read-only, and closed expired-content, transcript-routing, checkpoint-authority, database-sidecar, adapter final-component, replay/deletion race, source-removal authorization, root-path redaction, provider-credential redaction, diagnostic resource-bound, cross-project status-isolation, stale-enrollment, MCP lifecycle-metadata exposure, daemon PID-reuse, privacy-filtered replay-chain, export-integrity, and paginated-anchor gaps.
+- Split continuity process control from ordinary MCP memory-write permission, made lifecycle control responses path-free, and fail closed when a live worker's process identity cannot be verified.
+- Added preview-first reversible adapter management, capability-separated CLI/MCP surfaces, and a local capture operator console.
+- Added fail-closed source binding, queue backpressure, crash recovery, integrity verification, redaction, and explicit untrusted-evidence boundaries for agent-facing context.
+
+## [0.8.0-alpha] - Unreleased
+
+- Added governed context compilation for named agent profiles, immutable task contracts, bounded candidate selection, and privacy-scoped envelopes.
+- Added durable authorization, explanation, outcome, comparison, and revocation receipts without exposing capability secrets.
+- Added context compiler workflows across CLI, MCP, and the local operator console.
+- Reused one fail-closed repository inspection across brain databases bound to the same canonical root, eliminating repeated health-scan Git subprocess amplification.
+- Hardened release privacy scanning for non-Git roots, links, nested or renamed ZIP containers, unsafe archive paths, aggregate work limits, and stable in-memory archive inspection.
+- Fail-closed governed MCP compilation now requires an exact process-scoped contract ID and digest; stored context chunks, dashboard result bindings, Git-status uncertainty, Windows archive paths, trusted Git resolution, immutable baselines, and extended UNC privacy detection have dedicated regression coverage.
+
+## [0.7.0-alpha] - Unreleased foundation
+
+- Added an append-only event-sourced bitemporal truth kernel with claim history, evidence links, contradictions, validators, abstentions, and as-of/commit-time queries.
+- Added canonical project-brain integrity enforcement across root identity, checkout identity, readiness, MCP startup, and dashboard discovery.
+
 ## [0.6.0-alpha] - 2026-08-21
 
 - Added bounded Codex `turn_context` rebinding so a task started elsewhere can be captured after it enters the canonical project, without importing the earlier foreign transcript.

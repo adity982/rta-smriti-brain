@@ -13,20 +13,39 @@ from pathlib import Path, PurePosixPath
 from statistics import median
 from time import perf_counter
 
-from .context import build_continuation_prompt
+from .context import build_context_pack, build_continuation_prompt, estimate_tokens
 from .db import (
-    connect, ingest_repo, init_project, reflect, remember, save_checkpoint, search,
-    stale_check, update_project_settings,
+    connect,
+    ingest_repo,
+    init_project,
+    reflect,
+    remember,
+    save_checkpoint,
+    search,
+    stale_check,
+    update_project_settings,
 )
 from .governance import create_policy, preflight
 from .privacy import redact_sensitive_text
-
+from .repository import run_git_inspection
 
 MAX_PUBLIC_BENCHMARK_BYTES = 2_000_000
 MAX_PUBLIC_DOCUMENTS = 5_000
 MAX_PUBLIC_QUERIES = 1_000
 MAX_BENCHMARK_HISTORY_BYTES = 1_000_000
 MAX_BENCHMARK_HISTORY_RUNS = 100
+
+_CONTEXT_COMPILER_FIXTURE = {
+    "schema_version": 1,
+    "name": "Rta-Smriti Context Compiler Continuation Fixture v1",
+    "task": "Resume the verified release candidate within its explicit controls.",
+    "controls": [
+        "Resume the verified release candidate.",
+        "Require the privacy proof receipt.",
+        "Stop if canonical identity is not exact.",
+        "Do not repeat the retired migration.",
+    ],
+}
 
 
 def _safe_public_label(value: object, *, fallback: str) -> str:
@@ -216,6 +235,178 @@ def _quality_gates() -> dict[str, float]:
     }
 
 
+def _stable_benchmark_context(text: str) -> str:
+    replacements = {
+        "Canonical repository root:": "Canonical repository root: <project-root>",
+        "Repository identity:": "Repository identity: <repository-id>",
+        "Git snapshot:": "Git snapshot: <git-snapshot>",
+    }
+    lines = []
+    for line in str(text).splitlines():
+        replacement = next(
+            (value for prefix, value in replacements.items() if line.startswith(prefix)),
+            None,
+        )
+        lines.append(replacement if replacement is not None else line)
+    return "\n".join(lines) + ("\n" if str(text).endswith("\n") else "")
+
+
+def _continuation_metrics(text: str, controls: list[str]) -> dict[str, float | int]:
+    text = _stable_benchmark_context(text)
+    normalized = " ".join(str(text).casefold().split())
+    recovered = sum(
+        " ".join(control.casefold().split()).rstrip(".") in normalized
+        for control in controls
+    )
+    used_tokens = max(1, estimate_tokens(text))
+    return {
+        "required_controls": len(controls),
+        "recovered_controls": recovered,
+        "used_tokens": used_tokens,
+        "continuation_success": round(recovered / len(controls), 6),
+        "context_efficiency": round(recovered * 1_000 / used_tokens, 6),
+    }
+
+
+def run_context_compiler_benchmark() -> dict:
+    """Compare the published v0.6 pack path with the governed v0.8 compiler."""
+    from .context_host import (
+        authorize_context_contract,
+        build_task_contract,
+        compile_context_for_agent,
+        ensure_context_agent_profile,
+    )
+
+    fixture = json.loads(json.dumps(_CONTEXT_COMPILER_FIXTURE))
+    fixture_digest = hashlib.sha256(
+        json.dumps(
+            fixture, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+    effective_budget = 1_024
+    with tempfile.TemporaryDirectory(prefix="rta-context-bench-") as tmp:
+        root = Path(tmp) / "repo"
+        root.mkdir()
+        for command in (
+            ("init", "--quiet"),
+            ("config", "user.email", "fixture@example.invalid"),
+            ("config", "user.name", "Fixture"),
+        ):
+            result = run_git_inspection(root, *command, max_output_bytes=1_048_576)
+            if result is None or result.returncode != 0:
+                raise RuntimeError("trusted Git could not prepare the context benchmark")
+        (root / "state.md").write_text(
+            "Synthetic release state for context compilation.\n", encoding="utf-8"
+        )
+        for command in (
+            ("add", "state.md"),
+            ("commit", "--quiet", "-m", "fixture"),
+        ):
+            result = run_git_inspection(root, *command, max_output_bytes=1_048_576)
+            if result is None or result.returncode != 0:
+                raise RuntimeError("trusted Git could not prepare the context benchmark")
+
+        database = Path(tmp) / "brain.sqlite"
+        conn = connect(database)
+        try:
+            init_project(conn, "context-benchmark", str(root))
+            ingest_repo(conn, root, project="context-benchmark")
+            save_checkpoint(
+                conn,
+                "context-benchmark",
+                fixture["controls"][0],
+                verified_evidence="Synthetic baseline verified.",
+                next_action="Inspect the next bounded task.",
+                prohibited_repetition="Do not repeat completed work.",
+            )
+            baseline_text = build_context_pack(
+                conn,
+                fixture["task"],
+                project="context-benchmark",
+                max_tokens=effective_budget,
+            )
+
+            reserved = 1_024 + 256 + 256 + 128
+            profile = ensure_context_agent_profile(
+                conn,
+                project="context-benchmark",
+                profile_id="benchmark-agent",
+                actor_id="benchmark-operator",
+                max_input_tokens=effective_budget + reserved,
+            )
+            contract = build_task_contract(
+                project="context-benchmark",
+                agent_profile_id="benchmark-agent",
+                objective=fixture["controls"][0],
+                actor_id="benchmark-operator",
+                max_input_tokens=effective_budget + reserved,
+            )
+            contract["acceptance_criteria"] = [fixture["controls"][1]]
+            contract["stop_conditions"] = [fixture["controls"][2]]
+            contract["prohibited_repetition"] = [fixture["controls"][3]]
+            contract.pop("control_index", None)
+            authorized = authorize_context_contract(
+                conn,
+                project="context-benchmark",
+                agent_profile_version_id=profile["agent_profile_version_id"],
+                contract=contract,
+                actor_id="benchmark-operator",
+            )
+            compiled = compile_context_for_agent(
+                conn,
+                db_path=database,
+                project="context-benchmark",
+                active_root=root,
+                task_contract_id=authorized["task_contract_id"],
+                principal_id="benchmark-agent",
+                session_id="benchmark-session",
+            )
+            if compiled.get("status") != "stable":
+                raise RuntimeError("synthetic context compilation was not stable")
+            candidate_text = compiled["context_pack"]["context_text"]
+        finally:
+            conn.close()
+
+    baseline = {
+        "implementation": "v0.6-context-pack",
+        **_continuation_metrics(baseline_text, fixture["controls"]),
+    }
+    candidate = {
+        "implementation": "v0.8-context-compiler",
+        **_continuation_metrics(candidate_text, fixture["controls"]),
+    }
+    continuation_delta = round(
+        candidate["continuation_success"] - baseline["continuation_success"], 6
+    )
+    efficiency_delta = round(
+        candidate["context_efficiency"] - baseline["context_efficiency"], 6
+    )
+    return {
+        "schema_version": 1,
+        "fixture": fixture["name"],
+        "fixture_digest": fixture_digest,
+        "synthetic": True,
+        "effective_budget_tokens": effective_budget,
+        "baseline": baseline,
+        "candidate": candidate,
+        "improvement": {
+            "continuation_success_delta": continuation_delta,
+            "context_efficiency_delta": efficiency_delta,
+        },
+        "gates": {
+            "continuation_improved": float(continuation_delta > 0),
+            "context_efficiency_improved": float(efficiency_delta > 0),
+        },
+        "limitations": {
+            "external_superiority_evidence": False,
+            "statement": (
+                "Synthetic regression evidence for explicit continuation controls; "
+                "not an external agent-success or market-superiority benchmark."
+            ),
+        },
+    }
+
+
 def run_public_benchmark(
     dataset: Path,
     *,
@@ -255,6 +446,7 @@ def run_public_benchmark(
         "corpus": {"documents": len(payload["documents"]), "queries": len(payload["queries"]), "synthetic": True},
         "modes": modes,
         "quality_gates": _quality_gates(),
+        "context_compiler": run_context_compiler_benchmark(),
     }
 
 
@@ -310,6 +502,37 @@ def benchmark_report_markdown(result: dict, *, history: dict | None = None) -> s
     ])
     for name in sorted(gates):
         lines.append(f"| {name} | {_metric(gates[name])} |")
+    compiler = result.get("context_compiler") or {}
+    if compiler:
+        baseline = compiler.get("baseline") or {}
+        candidate = compiler.get("candidate") or {}
+        lines.extend([
+            "",
+            "## Context Compiler Comparison",
+            "",
+            (
+                "The same synthetic project is measured at the same effective input budget. "
+                "Control density is recovered required controls per 1,000 estimated tokens."
+            ),
+            "",
+            "| Implementation | Controls recovered | Continuation success | Used tokens | Control density |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ])
+        for metrics in (baseline, candidate):
+            lines.append(
+                "| "
+                + " | ".join((
+                    str(metrics.get("implementation") or "unknown"),
+                    f"{int(metrics.get('recovered_controls') or 0)}/{int(metrics.get('required_controls') or 0)}",
+                    _metric(metrics.get("continuation_success")),
+                    str(int(metrics.get("used_tokens") or 0)),
+                    _metric(metrics.get("context_efficiency")),
+                ))
+                + " |"
+            )
+        limitation = (compiler.get("limitations") or {}).get("statement")
+        if limitation:
+            lines.extend(["", str(limitation)])
     lines.extend([
         "",
         "Optional Sentence Transformers comparison is reported only when explicitly requested and available locally.",

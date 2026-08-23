@@ -2,13 +2,15 @@
 
 **Category:** Open-source developer tool, local AI project memory
 
-**Current release:** [`v0.4.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.4.0-alpha)
+**Current candidate:** `v0.9.0-alpha`
 
-**Release state:** Published as a GitHub prerelease on August 16, 2026, with SHA-256 checksums, a wheel, and standalone Windows, Linux, and macOS artifacts.
+**Latest published release:** [`v0.6.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.6.0-alpha)
+
+**Release state:** v0.9 is under local qualification and is not yet published. Published releases provide SHA-256 checksums, a wheel, and standalone Windows, Linux, and macOS artifacts.
 
 **License:** MIT
 
-**Runtime:** Python 3.11+, SQLite/FTS5, zero Python runtime dependencies
+**Runtime:** Python 3.11+, SQLite/FTS5, Cryptography, and bundled Tree-sitter language packages; native artifacts package the runtime for operators who do not want to manage Python dependencies.
 
 **Interfaces:** CLI, stdio MCP server, packaged React operator console
 
@@ -20,4 +22,4 @@
 
 **Validation:** See [`docs/RELEASE_VERIFICATION.md`](../../docs/RELEASE_VERIFICATION.md) for current, reproducible checks and [`docs/PUBLIC_BENCHMARK.md`](../../docs/PUBLIC_BENCHMARK.md) for the privacy-safe synthetic benchmark. Historical test counts and private-project scale claims are intentionally excluded from this fact sheet.
 
-**Primary differentiator:** Repository evidence, durable human memory, session handoffs, evidence class, freshness, and agent-ready context are combined in one inspectable local layer.
+**Primary differentiator:** Repository evidence, bitemporal truth, durable human memory, session handoffs, evidence class, freshness, and governed agent-specific context are combined in one inspectable local layer.

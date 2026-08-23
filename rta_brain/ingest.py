@@ -98,12 +98,8 @@ MAX_REPO_TOTAL_BYTES = 2_000_000_000
 MAX_REPO_TRAVERSED_ENTRIES = 250_000
 
 CANONICAL_CONTROL_FILE_MAX_BYTES = 4_000_000
-CANONICAL_CONTROL_PATHS = {
-    "rta_net_live_context.md",
-    "00_source_of_truth/rta-net_ai_final_architecture_document_v1.0.md",
-    "00_source_of_truth/rta-net_ai_mathematical_appendix_v1.0.md",
-    "00_source_of_truth/rta-net_ai_complete_file_system_structure_v1.0.md",
-}
+CANONICAL_CONTROL_NAMES = {"live_context.md", "project_live_context.md", "active_context.md"}
+CANONICAL_CONTROL_DIRECTORIES = {"00_source_of_truth", "source_of_truth", "source-of-truth"}
 
 SYMBOL_PATTERNS = [
     re.compile(r"^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE),
@@ -152,13 +148,17 @@ def is_text_file(path: Path) -> bool:
 
 
 def effective_file_limit(root: Path, path: Path, default_limit: int) -> int:
-    """Allow a few canonical control files without widening the repo-wide cap."""
+    """Allow explicit, project-neutral control files without widening the repo-wide cap."""
 
     try:
         relative = path.resolve().relative_to(root.resolve()).as_posix().lower()
     except (OSError, ValueError):
         return int(default_limit)
-    if relative in CANONICAL_CONTROL_PATHS:
+    parts = relative.split("/")
+    name = parts[-1]
+    is_live_context = name in CANONICAL_CONTROL_NAMES or name.endswith("_live_context.md")
+    is_source_truth = len(parts) <= 3 and parts[0] in CANONICAL_CONTROL_DIRECTORIES
+    if is_live_context or is_source_truth:
         return max(int(default_limit), CANONICAL_CONTROL_FILE_MAX_BYTES)
     return int(default_limit)
 

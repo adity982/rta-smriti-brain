@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -7,11 +8,26 @@ from os import chdir, getcwd
 from pathlib import Path
 from unittest.mock import patch
 
+import rta_brain.repository as repository
 from rta_brain.cli import build_parser
-from rta_brain.console import ConsoleConfig, _trusted_git_candidates, create_dashboard_server, dashboard_snapshot, is_authorized_request, is_local_origin, publish_readiness, read_file_preview, read_file_tree, read_memories, resolve_brain_db, resolve_static_asset, run_dashboard, scan_brain_databases
+from rta_brain.console import (
+    ConsoleConfig,
+    _trusted_git_candidates,
+    create_dashboard_server,
+    dashboard_snapshot,
+    is_authorized_request,
+    is_local_origin,
+    publish_readiness,
+    read_file_preview,
+    read_file_tree,
+    read_memories,
+    resolve_brain_db,
+    resolve_static_asset,
+    run_dashboard,
+    scan_brain_databases,
+)
 from rta_brain.db import connect, graph, ingest_repo, init_project, remember
 from rta_brain.ingest import walk_repo
-
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "rta-brain.py"
@@ -69,9 +85,11 @@ class RtaBrainConsoleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             brain_dir = Path(tmp) / "brains"
             db = brain_dir / "demo.sqlite"
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
             conn = connect(db)
             try:
-                init_project(conn, "demo", str(Path(tmp) / "repo"))
+                init_project(conn, "demo", str(repo))
                 remember(conn, "Use the local dashboard before GitHub publish.", project="demo", memory_type="procedure", pramana="sabda")
             finally:
                 conn.close()
@@ -82,6 +100,55 @@ class RtaBrainConsoleTests(unittest.TestCase):
             self.assertTrue(projects[0]["ready"])
             self.assertEqual(projects[0]["memories"], 1)
             self.assertEqual(projects[0]["db_file"], "demo.sqlite")
+
+    def test_scan_brain_databases_fails_closed_when_bound_root_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            brain_dir = Path(tmp) / "brains"
+            database = brain_dir / "demo.sqlite"
+            missing = Path(tmp) / "missing-repo"
+            conn = connect(database)
+            try:
+                init_project(conn, "demo", str(missing))
+                remember(conn, "Memory remains available, but the claimed root is missing.", project="demo")
+            finally:
+                conn.close()
+
+            project_entry = scan_brain_databases(brain_dir)[0]
+            self.assertFalse(project_entry["ready"])
+            self.assertEqual(project_entry["integrity"]["binding"]["state"], "bound_root_missing")
+
+    def test_scan_brain_databases_reuses_repository_inspection_for_shared_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            brain_dir = root / "brains"
+            repo.mkdir()
+            brain_dir.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "operator@example.invalid"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Rta-Smriti Operator QA"], cwd=repo, check=True)
+            (repo / "README.md").write_text("# Shared project\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "fixture"], cwd=repo, check=True)
+
+            first = brain_dir / "brain-0.sqlite"
+            conn = connect(first)
+            try:
+                ingest_repo(conn, repo, project="demo")
+            finally:
+                conn.close()
+            shutil.copy2(first, brain_dir / "brain-1.sqlite")
+            shutil.copy2(first, brain_dir / "brain-2.sqlite")
+
+            with patch.object(
+                repository,
+                "run_git_inspection",
+                wraps=repository.run_git_inspection,
+            ) as run_git:
+                projects = scan_brain_databases(brain_dir)
+
+            self.assertEqual(len(projects), 3)
+            self.assertLessEqual(run_git.call_count, 4)
 
     def test_read_memories_filters_by_pramana_and_query(self):
         with tempfile.TemporaryDirectory() as tmp:

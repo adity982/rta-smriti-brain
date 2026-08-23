@@ -92,11 +92,11 @@ This creates:
 ## Check A Project Brain
 
 ```powershell
-& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json self-check --project project-name --check-files
+& $RtaBrain --db "$env:USERPROFILE\Documents\Rta-Smriti\brains\project-name.sqlite" --json self-check --project project-name --check-files --root C:\path\to\project
 ```
 
 ```bash
-"$RtaBrain" --db "$BrainDir/project-name.sqlite" --json self-check --project project-name --check-files
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" --json self-check --project project-name --check-files --root /path/to/project
 ```
 
 Look for:
@@ -105,6 +105,28 @@ Look for:
 - file counts greater than zero
 - memories greater than zero, if you have added decisions
 - low or zero stale files
+- `integrity.binding.state: exact`
+- `integrity.duplicate_root_count: 0`
+
+## Move A Brain To Another Checkout
+
+A clone or Git worktree is a distinct checkout even when it has the same repository history. Rta-Smriti never silently switches between them.
+
+Stop the managed workers and any agent host using this project's single-project MCP server, then create a separate SQLite backup through the explicit migration command:
+
+```powershell
+& $RtaBrain --db "$BrainDir\project-name.sqlite" watcher stop --project project-name
+& $RtaBrain --db "$BrainDir\project-name.sqlite" continuity stop --project project-name
+& $RtaBrain --db "$BrainDir\project-name.sqlite" --json root-rebind C:\new\project --project project-name --backup C:\backups\project-name-before-rebind.sqlite
+```
+
+```bash
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" watcher stop --project project-name
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" continuity stop --project project-name
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" --json root-rebind /new/project --project project-name --backup "$HOME/backups/project-name-before-rebind.sqlite"
+```
+
+The destination must be the same verified repository lineage, the backup path must not already exist, and any failed reindex leaves the original binding and index intact. A missing old folder never authorizes an implicit move. Active watcher, continuity, or MCP ownership blocks migration. Restart those processes only after `integrity-diagnostics --root <new-checkout>` reports `operationally_ready: true`.
 
 ## Generate Context Before A Task
 
@@ -126,6 +148,37 @@ prepare this repo for GitHub launch
 review auth boundaries before changing user roles
 continue the release hardening work from the previous thread
 ```
+
+### Compile A Governed Agent Context
+
+The legacy `context-pack` command is the quick copy-and-paste path. Use the
+`context` command family when the task needs an explicit agent profile, immutable
+acceptance and stop conditions, privacy scope, comparison variants, revocation,
+and durable explanation receipts.
+
+```powershell
+& $RtaBrain --db "$BrainDir\project-name.sqlite" --json context authority-status
+& $RtaBrain --db "$BrainDir\project-name.sqlite" context profile-register --help
+& $RtaBrain --db "$BrainDir\project-name.sqlite" context contract-authorize --help
+& $RtaBrain --db "$BrainDir\project-name.sqlite" context compile --help
+& $RtaBrain --db "$BrainDir\project-name.sqlite" context explain --help
+```
+
+```bash
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" --json context authority-status
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" context profile-register --help
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" context contract-authorize --help
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" context compile --help
+"$RtaBrain" --db "$BrainDir/project-name.sqlite" context explain --help
+```
+
+Profile and contract inputs are bounded JSON files read through stable unlinked
+descriptors. Authorization is an operator action. Compilation and explanation are
+bound to the named agent principal and session; capability secrets never appear in
+normal JSON output. Use `context audit` for metadata-only operator receipts,
+`context outcome` for an explicitly confirmed result, and `context revoke` to
+invalidate the exact compilation grant. These commands prepare and explain
+context; they do not execute the task.
 
 ## Use The Dashboard
 
@@ -191,12 +244,18 @@ OS-specific executable path by hand:
 Add the returned `mcpServers` entry to the agent host. It is bound to one project
 and read-only by default. To grant an advanced capability, append only the
 required server argument to the generated `args`: `--allow-memory-writes`,
-`--allow-repo-ingestion`, or `--allow-thread-ingestion` together with one or
+`--allow-repo-ingestion`, `--allow-continuity-control`, or
+`--allow-thread-ingestion` together with one or
 more `--allow-thread-root <absolute-path>` pairs. Repository ingestion still
 uses the brain's registered canonical root. Thread files are confined to the
 declared roots. Agent-authored memory remains unverified `anumana` with
 confidence capped at `0.75`; agents cannot create or retire governance policy,
 attest required checks, or override a block.
+
+Configuration generation fails closed unless the stored root, repository
+identity, and checkout identity are currently exact. The generated command
+always includes `--root`. Stop the MCP host before `root-rebind`; a live server
+holds a local lease specifically to prevent checkout changes during tool calls.
 
 Probe the exact generated server before editing the host configuration:
 
@@ -211,6 +270,21 @@ Probe the exact generated server before editing the host configuration:
 A `ready` result proves initialize, tools/list, and ping worked for that command.
 Copy the returned config into the host, then start a fresh agent task. Existing
 tasks cannot dynamically acquire newly registered MCP tools.
+
+Governed context compilation is a narrower, fail-closed delegation. After the
+operator authorizes a task contract, append its exact positive ID and SHA-256
+digest to a **single-project** server's generated `args`:
+
+```text
+--context-contract ID:DIGEST
+```
+
+The argument may be repeated for multiple explicitly authorized contracts.
+Without it, `brain_context_compile` and `brain_context_explain` are absent from
+the server's tool list; clients cannot enumerate contract IDs. The server
+rechecks the delegated digest against the selected project's stored contract on
+every compile or explanation request. Multi-project gateways do not accept
+contract delegations.
 
 ### Use Multi-Project Workspaces
 
@@ -451,7 +525,7 @@ For one native MCP registration across every brain, generate the gateway configu
 & $RtaBrain mcp-config --brain-dir "$env:USERPROFILE\Documents\Rta-Smriti\brains" --name rta-smriti
 ```
 
-Add the emitted configuration to the MCP host and start a new agent task. Existing tasks cannot dynamically acquire newly registered MCP tools. In multi-project mode every tool call must name a project, and duplicate project names fail closed.
+Add the emitted configuration to the MCP host and start a new agent task. Existing tasks cannot dynamically acquire newly registered MCP tools. In multi-project mode every tool call must name a project, duplicate project names fail closed, and only project-scoped read tools are exposed. Memories, checkpoints, ingestion, governance, continuity, temporal truth, capture mutation, and hash-cache refresh require a separately configured single-project MCP binding with explicit capabilities.
 
 ## Attach Claim Provenance
 

@@ -315,11 +315,19 @@ def _operational_preflight_matches(action: str, operational_context: dict | None
         ))
     git = context.get("git") if isinstance(context.get("git"), dict) else {}
     dirty_files = git.get("dirty_files")
-    try:
-        dirty_count = int(dirty_files) if dirty_files is not None else 0
-    except (TypeError, ValueError):
-        dirty_count = 0
-    if dirty_count > 0:
+    dirty_count = None
+    if dirty_files is not None:
+        try:
+            dirty_count = int(dirty_files)
+        except (TypeError, ValueError):
+            dirty_count = None
+    if git.get("is_git_repo") and dirty_count is None:
+        matches.append(_operational_match(
+            "git_state_unknown",
+            "Git worktree cleanliness could not be verified.",
+            "Git status could not be verified; inspect the worktree before acting.",
+        ))
+    elif dirty_count is not None and dirty_count > 0:
         branch = str(git.get("branch") or "unknown")
         head = str(git.get("head") or "unknown")
         matches.append(_operational_match(

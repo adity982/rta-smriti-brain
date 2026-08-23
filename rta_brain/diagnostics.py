@@ -99,6 +99,22 @@ def retrieval_diagnostics(conn, query: str, *, project: str = "default", limit: 
             },
             "selection_reasons": _selection_reasons(item, terms, result.get("retrieval", {}), freshness),
         })
+    truth_diagnostics = []
+    for index, item in enumerate(result.get("truth", []), start=1):
+        reasons = ["matched bounded temporal truth fields"]
+        if item.get("contradictions"):
+            reasons.append("claim is contradicted by an unresolved active branch")
+        if item.get("validator_failures"):
+            reasons.append("claim has a failed deterministic validator")
+        if item.get("effective_state") != item.get("epistemic_state"):
+            reasons.append(
+                f"effective state is {item.get('effective_state')} rather than recorded {item.get('epistemic_state')}"
+            )
+        truth_diagnostics.append({
+            **item,
+            "ranking": {"position": index, "temporal_score": item.get("score")},
+            "selection_reasons": reasons,
+        })
     return {
         "status": "ok",
         "project": project,
@@ -117,4 +133,5 @@ def retrieval_diagnostics(conn, query: str, *, project: str = "default", limit: 
         },
         "freshness": freshness,
         "results": diagnostics,
+        "truth_results": truth_diagnostics,
     }

@@ -1,25 +1,100 @@
 import argparse
 import asyncio
 import copy
+import hmac
 import json
+import re
+import secrets
 import stat
 import sys
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .binding_guard import McpBindingLease
+from .capture import (
+    bind_session as bind_capture_session,
+)
+from .capture import (
+    close_session_binding,
+    control_capture_retention,
+    delete_capture_content,
+    export_capture_events,
+    retire_capture_policy,
+    set_capture_source_state,
+)
+from .capture import (
+    register_policy as register_capture_policy,
+)
+from .capture_control import capture_diagnostics, capture_replay, capture_status_report
+from .capture_types import CapturePolicy
 from .context import build_context_pack, build_continuation_prompt
-from .continuity import append_event, ingest_codex_session, list_events, operational_readiness, reconcile_work_items, upsert_work_item
-from .continuity_daemon import continuity_status, start_continuity, stop_continuity, validate_codex_session_binding
+from .context_host import compile_context_for_agent, explain_context_for_agent
+from .continuity import (
+    append_event,
+    ingest_codex_session,
+    list_events,
+    operational_readiness,
+    reconcile_work_items,
+    upsert_work_item,
+)
+from .continuity_daemon import (
+    continuity_status,
+    public_continuity_status,
+    start_continuity,
+    stop_continuity,
+    validate_codex_session_binding,
+)
 from .db import (
-    connect, doctor, graph, graph_query, ingest_repo, ingest_thread, reflect, remember, remember_many,
-    save_checkpoint, search, stale_check,
+    connect,
+    doctor,
+    graph,
+    graph_query,
+    ingest_repo,
+    ingest_thread,
+    integrity_diagnostics,
+    project_binding_status,
+    reflect,
+    remember,
+    remember_many,
+    save_checkpoint,
+    search,
+    stale_check,
+)
+from .diagnostics import retrieval_diagnostics
+from .governance import (
+    build_operational_context,
+    create_policy,
+    list_policies,
+    list_receipts,
+    preflight,
+    retire_policy,
 )
 from .ingest import _lexical_root_for_candidate
-from .diagnostics import retrieval_diagnostics
-from .governance import build_operational_context, create_policy, list_policies, list_receipts, preflight, retire_policy
-from .workspaces import get_workspace, list_workspaces, search_workspace, workspace_health
+from .temporal import (
+    append_claim,
+    attach_evidence,
+    change_claim_state,
+    define_validator,
+    record_abstention,
+    redact_truth_for_operator,
+    relate_claims,
+    revise_claim,
+    run_validator,
+    truth_as_of,
+    truth_current,
+    truth_diff,
+    truth_explain,
+    truth_history,
+)
+from .workspaces import (
+    get_workspace,
+    list_workspaces,
+    search_workspace,
+    workspace_health,
+)
 
 
 def tool_schema(name: str, description: str, properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
@@ -70,6 +145,31 @@ TOOLS = [
             "max_tokens": {"type": "integer", "minimum": 256, "maximum": 100000, "default": 4000},
         },
         ["task"],
+    ),
+    tool_schema(
+        "brain_context_compile",
+        "Compile one operator-authorized context variant for this bound MCP session.",
+        {
+            "task_contract_id": {"type": "integer", "minimum": 1},
+            "variant": {
+                "type": "string",
+                "enum": [
+                    "primary",
+                    "mode:minimal",
+                    "mode:balanced",
+                    "mode:investigative",
+                    "mode:handoff",
+                ],
+                "default": "primary",
+            },
+        },
+        ["task_contract_id"],
+    ),
+    tool_schema(
+        "brain_context_explain",
+        "Explain one compilation bound to this MCP server principal and session.",
+        {"compilation_id": {"type": "string"}},
+        ["compilation_id"],
     ),
     tool_schema(
         "brain_remember",
@@ -140,6 +240,11 @@ TOOLS = [
         },
     ),
     tool_schema(
+        "brain_integrity_diagnostics",
+        "Report privacy-safe schema, canonical checkout, duplicate-root, and migration integrity evidence.",
+        {"project": {"type": "string", "description": "Project memory bank name."}},
+    ),
+    tool_schema(
         "brain_checkpoint",
         "Save a structured continuation checkpoint for the next agent task.",
         {
@@ -163,11 +268,11 @@ TOOLS = [
         "Append an immutable, provenance-bearing operational event.",
         {
             "project": {"type": "string"},
-            "session_id": {"type": "string"},
-            "cursor": {"type": "string"},
-            "event_type": {"type": "string"},
+            "session_id": {"type": "string", "maxLength": 512},
+            "cursor": {"type": "string", "maxLength": 1024},
+            "event_type": {"type": "string", "maxLength": 128},
             "payload": {"type": "object"},
-            "source": {"type": "string", "default": "agent"},
+            "source": {"type": "string", "maxLength": 128, "default": "agent"},
             "verification_status": {"type": "string", "enum": ["unverified", "verified", "failed", "stale"]},
         },
         ["session_id", "cursor", "event_type", "payload"],
@@ -175,7 +280,7 @@ TOOLS = [
     tool_schema(
         "brain_session_events",
         "Read append-only operational events for a project or session.",
-        {"project": {"type": "string"}, "session_id": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 500}},
+        {"project": {"type": "string"}, "session_id": {"type": "string", "maxLength": 512}, "limit": {"type": "integer", "minimum": 1, "maximum": 500}},
     ),
     tool_schema(
         "brain_ingest_codex_session",
@@ -307,6 +412,295 @@ TOOLS = [
         {"project": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 500}},
     ),
     tool_schema(
+        "brain_truth_current",
+        "Read one claim from the current bitemporal truth projection.",
+        {
+            "project": {"type": "string"},
+            "claim_id": {"type": "string"},
+            "valid_at": {"type": "string"},
+        },
+        ["claim_id"],
+    ),
+    tool_schema(
+        "brain_truth_as_of",
+        "Read one claim at valid time V as known at recorded sequence R.",
+        {
+            "project": {"type": "string"},
+            "claim_id": {"type": "string"},
+            "valid_at": {"type": "string"},
+            "recorded_sequence": {"type": "integer", "minimum": 1},
+        },
+        ["claim_id", "valid_at", "recorded_sequence"],
+    ),
+    tool_schema(
+        "brain_truth_history",
+        "Read bounded recorded-time history for one truth claim.",
+        {
+            "project": {"type": "string"},
+            "claim_id": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+        },
+        ["claim_id"],
+    ),
+    tool_schema(
+        "brain_truth_diff",
+        "Compare project truth between two recorded sequences at one valid time.",
+        {
+            "project": {"type": "string"},
+            "from_sequence": {"type": "integer", "minimum": 1},
+            "to_sequence": {"type": "integer", "minimum": 1},
+            "valid_at": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+        },
+        ["from_sequence", "to_sequence", "valid_at"],
+    ),
+    tool_schema(
+        "brain_truth_explain",
+        "Explain one current claim with typed relations and provenance-bearing evidence.",
+        {
+            "project": {"type": "string"},
+            "claim_id": {"type": "string"},
+            "valid_at": {"type": "string"},
+        },
+        ["claim_id"],
+    ),
+    tool_schema(
+        "brain_truth_assert",
+        "Append an agent-authored truth assertion. Agent claims remain hypothesis or observed and cannot self-accept.",
+        {
+            "project": {"type": "string"},
+            "claim_id": {"type": "string"},
+            "subject": {"type": "string"},
+            "predicate": {"type": "string"},
+            "value": {},
+            "idempotency_key": {"type": "string"},
+            "expected_version": {"type": "integer", "minimum": 0},
+            "valid_from": {"type": "string"},
+            "valid_to": {"type": "string"},
+            "expires_at": {"type": "string"},
+            "epistemic_state": {"type": "string", "enum": ["hypothesis", "observed"], "default": "observed"},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 0.75, "default": 0.75},
+        },
+        ["subject", "predicate", "value", "idempotency_key", "expected_version"],
+    ),
+    tool_schema(
+        "brain_truth_state",
+        "Append an agent-authorized epistemic state transition. Acceptance is owner-only.",
+        {
+            "project": {"type": "string"},
+            "claim_id": {"type": "string"},
+            "state": {
+                "type": "string",
+                "enum": ["observed", "corroborated", "disputed", "stale", "refuted", "superseded", "retracted"],
+            },
+            "reason": {"type": "string"},
+            "idempotency_key": {"type": "string"},
+            "expected_version": {"type": "integer", "minimum": 1},
+        },
+        ["claim_id", "state", "reason", "idempotency_key", "expected_version"],
+    ),
+    tool_schema(
+        "brain_truth_revise",
+        "Append an agent-authored correction while preserving prior recorded belief.",
+        {
+            "project": {"type": "string"}, "claim_id": {"type": "string"},
+            "value": {}, "reason": {"type": "string"},
+            "idempotency_key": {"type": "string"},
+            "expected_version": {"type": "integer", "minimum": 1},
+            "valid_from": {"type": "string"}, "valid_to": {"type": "string"},
+        },
+        ["claim_id", "value", "reason", "idempotency_key", "expected_version"],
+    ),
+    tool_schema(
+        "brain_truth_relate",
+        "Append a typed, unresolved relation between two current claims.",
+        {
+            "project": {"type": "string"}, "relation_id": {"type": "string"},
+            "from_claim_id": {"type": "string"},
+            "relation_type": {"type": "string", "enum": [
+                "supports", "contradicts", "supersedes", "retracts", "refutes",
+                "derived_from", "alternate_of", "specialization_of"
+            ]},
+            "to_claim_id": {"type": "string"},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 0.75, "default": 0.7},
+            "idempotency_key": {"type": "string"},
+            "expected_version": {"type": "integer", "minimum": 0},
+        },
+        ["from_claim_id", "relation_type", "to_claim_id", "idempotency_key", "expected_version"],
+    ),
+    tool_schema(
+        "brain_truth_evidence",
+        "Attach unverified, provenance-bearing agent evidence to a current claim.",
+        {
+            "project": {"type": "string"}, "claim_id": {"type": "string"},
+            "evidence_id": {"type": "string"}, "source_identifier": {"type": "string"},
+            "source_hash": {"type": "string"}, "method": {"type": "string"},
+            "polarity": {"type": "string", "enum": ["supporting", "weakening", "refuting"]},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 0.75},
+            "uncertainty": {"type": "string"}, "provenance": {"type": "object"},
+            "idempotency_key": {"type": "string"},
+            "expected_version": {"type": "integer", "minimum": 0},
+        },
+        ["claim_id", "evidence_id", "source_identifier", "method", "polarity", "confidence", "provenance", "idempotency_key", "expected_version"],
+    ),
+    tool_schema(
+        "brain_truth_abstain",
+        "Record why available evidence cannot support an answer without inventing a claim.",
+        {
+            "project": {"type": "string"}, "abstention_id": {"type": "string"},
+            "query_scope": {"type": "string"},
+            "missing_evidence": {"type": "array", "maxItems": 100, "items": {"type": "string"}},
+            "unresolved_conflicts": {"type": "array", "maxItems": 100, "items": {"type": "string"}},
+            "minimum_revalidation_action": {"type": "string"},
+            "idempotency_key": {"type": "string"},
+            "expected_version": {"type": "integer", "minimum": 0},
+        },
+        ["query_scope", "missing_evidence", "unresolved_conflicts", "minimum_revalidation_action", "idempotency_key", "expected_version"],
+    ),
+    tool_schema(
+        "brain_truth_validator_define",
+        "Define a bounded deterministic validator. Agent MCP cannot define command validators.",
+        {
+            "project": {"type": "string"}, "validator_id": {"type": "string"},
+            "validator_type": {"type": "string", "enum": [
+                "file_exists", "file_sha256", "json_pointer_equals", "sqlite_integrity",
+                "git_head_equals", "git_clean_state"
+            ]},
+            "claim_id": {"type": "string"}, "config": {"type": "object"},
+            "failure_effect": {"type": "string", "enum": ["disputed", "stale", "refuted"]},
+            "idempotency_key": {"type": "string"},
+            "expected_version": {"type": "integer", "minimum": 0},
+        },
+        ["validator_id", "validator_type", "claim_id", "config", "failure_effect", "idempotency_key", "expected_version"],
+    ),
+    tool_schema(
+        "brain_truth_validator_run",
+        "Run one deterministic registered validator. Command validators remain unavailable to agents.",
+        {
+            "project": {"type": "string"},
+            "validator_id": {"type": "string"},
+            "idempotency_key": {"type": "string"},
+            "expected_version": {"type": "integer", "minimum": 1},
+        },
+        ["validator_id", "idempotency_key", "expected_version"],
+    ),
+    tool_schema(
+        "brain_capture_status",
+        "Read bounded passive-capture daemon, source, policy, and queue status.",
+        {"project": {"type": "string"}},
+    ),
+    tool_schema(
+        "brain_capture_events",
+        "Read one redacted, payload-free page of capture observations.",
+        {
+            "project": {"type": "string"},
+            "after_sequence": {"type": "integer", "minimum": 0, "default": 0},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+            "privacy_ceiling": {
+                "type": "string", "enum": ["public", "internal"],
+                "default": "internal",
+            },
+        },
+    ),
+    tool_schema(
+        "brain_capture_replay",
+        "Reconstruct a bounded chronological or causal view without executing actions.",
+        {
+            "project": {"type": "string"},
+            "mode": {"type": "string", "enum": ["chronological", "causal"], "default": "chronological"},
+            "after_sequence": {"type": "integer", "minimum": 0, "default": 0},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+            "privacy_ceiling": {
+                "type": "string", "enum": ["public", "internal"],
+                "default": "internal",
+            },
+        },
+    ),
+    tool_schema(
+        "brain_capture_diagnostics",
+        "Verify the capture journal and return content-free lifecycle diagnostics.",
+        {"project": {"type": "string"}},
+    ),
+    tool_schema(
+        "brain_capture_policy_create",
+        "Register one immutable capture policy under an explicit capture-write grant.",
+        {
+            "project": {"type": "string"},
+            "policy_id": {"type": "string"},
+            "policy_version": {"type": "integer", "minimum": 1},
+            "profile": {"type": "string", "enum": ["metadata-only", "continuity", "forensic"]},
+        },
+        ["policy_id", "policy_version", "profile"],
+    ),
+    tool_schema(
+        "brain_capture_policy_retire",
+        "Retire one unused immutable capture policy under an explicit capture-write grant.",
+        {"project": {"type": "string"}, "policy_digest": {"type": "string"}},
+        ["policy_digest"],
+    ),
+    tool_schema(
+        "brain_capture_bind_session",
+        "Bind only future ordered events from one external session to this canonical project.",
+        {
+            "project": {"type": "string"}, "source_id": {"type": "string"},
+            "external_session_id": {"type": "string"},
+            "cursor_kind": {"type": "string", "enum": ["byte-offset", "sequence"]},
+            "start_cursor": {"type": "string"},
+        },
+        ["source_id", "external_session_id", "cursor_kind", "start_cursor"],
+    ),
+    tool_schema(
+        "brain_capture_close_binding",
+        "Close one explicit capture session binding receipt.",
+        {"project": {"type": "string"}, "binding_id": {"type": "string"}},
+        ["binding_id"],
+    ),
+    tool_schema(
+        "brain_capture_source_state",
+        "Pause or resume one registered capture source.",
+        {
+            "project": {"type": "string"}, "source_id": {"type": "string"},
+            "state": {"type": "string", "enum": ["active", "paused"]},
+        },
+        ["source_id", "state"],
+    ),
+    tool_schema(
+        "brain_capture_retain",
+        "Preview or confirm one bounded, resumable payload-retention batch.",
+        {
+            "project": {"type": "string"}, "policy_digest": {"type": "string"},
+            "run_id": {"type": "string"},
+            "batch_size": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100},
+            "confirm": {"type": "boolean", "default": False},
+            "confirmation_token": {"type": "string"},
+        },
+        ["policy_digest", "run_id"],
+    ),
+    tool_schema(
+        "brain_capture_redact",
+        "Preview or confirm logical redaction of capture content while preserving integrity metadata.",
+        {
+            "project": {"type": "string"},
+            "scope": {"type": "string", "enum": ["event-content", "session-content", "source-content", "project-content"]},
+            "scope_token": {"type": "string"}, "reason_class": {"type": "string"},
+            "policy_digest": {"type": "string"}, "confirm": {"type": "boolean", "default": False},
+            "confirmation_token": {"type": "string"},
+        },
+        ["scope", "scope_token", "reason_class", "policy_digest"],
+    ),
+    tool_schema(
+        "brain_capture_delete",
+        "Preview or confirm logical capture-content deletion; journal integrity metadata remains.",
+        {
+            "project": {"type": "string"},
+            "scope": {"type": "string", "enum": ["event-content", "session-content", "source-content", "project-content"]},
+            "scope_token": {"type": "string"}, "reason_class": {"type": "string"},
+            "policy_digest": {"type": "string"}, "confirm": {"type": "boolean", "default": False},
+            "confirmation_token": {"type": "string"},
+        },
+        ["scope", "scope_token", "reason_class", "policy_digest"],
+    ),
+    tool_schema(
         "brain_doctor",
         "Return Rta-Smriti brain health and count information.",
         {"project": {"type": "string", "description": "Also evaluate task continuation readiness."}},
@@ -315,19 +709,51 @@ TOOLS = [
 
 OWNER_ONLY_GOVERNANCE_TOOLS = {"brain_policy_add", "brain_policy_retire"}
 MEMORY_WRITE_TOOLS = {"brain_remember", "brain_remember_batch", "brain_checkpoint", "brain_reflect"}
+CONTINUITY_CONTROL_TOOLS = {"brain_continuity_control"}
 REPO_INGESTION_TOOLS = {"brain_ingest_repo"}
 THREAD_INGESTION_TOOLS = {"brain_ingest_thread"}
+TEMPORAL_READ_TOOLS = {
+    "brain_truth_current",
+    "brain_truth_as_of",
+    "brain_truth_history",
+    "brain_truth_diff",
+    "brain_truth_explain",
+}
+TEMPORAL_WRITE_TOOLS = {
+    "brain_truth_assert", "brain_truth_state", "brain_truth_revise",
+    "brain_truth_relate", "brain_truth_evidence", "brain_truth_abstain",
+    "brain_truth_validator_define",
+}
+TEMPORAL_VALIDATOR_RUN_TOOLS = {"brain_truth_validator_run"}
+CAPTURE_READ_TOOLS = {
+    "brain_capture_status", "brain_capture_events",
+    "brain_capture_replay", "brain_capture_diagnostics",
+}
+CAPTURE_WRITE_TOOLS = {
+    "brain_capture_policy_create", "brain_capture_policy_retire",
+    "brain_capture_bind_session", "brain_capture_close_binding",
+    "brain_capture_source_state",
+}
+CAPTURE_DESTRUCTIVE_TOOLS = {
+    "brain_capture_retain", "brain_capture_redact", "brain_capture_delete"
+}
+CONTEXT_DELEGATED_TOOLS = {"brain_context_compile", "brain_context_explain"}
 PROJECT_BOUND_READ_TOOLS = {
     "brain_search",
     "brain_context_pack",
+    "brain_context_compile",
+    "brain_context_explain",
     "brain_repo_map",
     "brain_stale_check",
+    "brain_integrity_diagnostics",
     "brain_continuation_prompt",
     "brain_graph_query",
     "brain_retrieval_diagnostics",
     "brain_policy_list",
     "brain_preflight",
     "brain_governance_receipts",
+    *CAPTURE_READ_TOOLS,
+    *TEMPORAL_READ_TOOLS,
 }
 TOOL_BY_NAME = {tool["name"]: tool for tool in TOOLS}
 
@@ -436,7 +862,7 @@ def _agent_memory_provenance(value: Any) -> dict[str, Any]:
 
 def _agent_memory_item(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ValueError("each memory batch item must be an object")
+        raise TypeError("each memory batch item must be an object")
     item = dict(value)
     item["pramana"] = "anumana"
     item["confidence"] = min(0.75, float(item.get("confidence", 0.75)))
@@ -488,6 +914,15 @@ def json_text(payload: Any) -> str:
     return json.dumps(payload, indent=2, sort_keys=True)
 
 
+def _capture_read_privacy_ceiling(args: dict[str, Any]) -> str:
+    ceiling = str(args.get("privacy_ceiling", "internal")).strip().lower()
+    if ceiling not in {"public", "internal"}:
+        raise PermissionError(
+            "MCP capture reads are limited to public or internal observations"
+        )
+    return ceiling
+
+
 class RtaBrainMcpServer:
     def __init__(
         self,
@@ -495,10 +930,17 @@ class RtaBrainMcpServer:
         default_project: str | None = None,
         *,
         brain_dir: Path | None = None,
+        expected_root: Path | None = None,
         allow_memory_writes: bool = False,
+        allow_continuity_control: bool = False,
         allow_repo_ingestion: bool = False,
         allow_thread_ingestion: bool = False,
+        allow_truth_writes: bool = False,
+        allow_validator_run: bool = False,
+        allow_capture_writes: bool = False,
+        allow_capture_destructive: bool = False,
         allowed_thread_roots: tuple[Path, ...] = (),
+        context_contract_delegations: dict[int, str] | None = None,
     ):
         if (db_path is None) == (brain_dir is None):
             raise ValueError("configure exactly one of db_path or brain_dir")
@@ -507,27 +949,115 @@ class RtaBrainMcpServer:
         self.default_project = str(default_project or "default").strip() if self.db_path else default_project
         if self.db_path is not None and not self.default_project:
             raise ValueError("default project must not be empty")
+        if expected_root is not None and self.db_path is None:
+            raise ValueError("an expected root is valid only in single-database MCP mode")
+        if context_contract_delegations and self.db_path is None:
+            raise ValueError("context contract delegation is valid only in single-database MCP mode")
+        self.context_contract_delegations: dict[int, str] = {}
+        for raw_id, raw_digest in (context_contract_delegations or {}).items():
+            if isinstance(raw_id, bool) or not isinstance(raw_id, int) or raw_id < 1:
+                raise ValueError("context contract delegation IDs must be positive integers")
+            digest = str(raw_digest).strip().casefold()
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ValueError("context contract delegation digests must be a 64-character SHA-256")
+            self.context_contract_delegations[raw_id] = digest
+        self.expected_root = expected_root.expanduser().resolve() if expected_root else None
+        self.context_principal_id = "mcp-agent"
+        self.context_session_id = f"mcp-{secrets.token_hex(16)}"
+        self.expected_binding_token: tuple[str, str, str] | None = None
+        if self.db_path is not None:
+            conn = connect(self.db_path)
+            try:
+                binding = project_binding_status(conn, self.default_project, self.expected_root)
+                row = conn.execute(
+                    "SELECT root_path, repository_identity, checkout_identity FROM projects WHERE name = ?",
+                    (self.default_project,),
+                ).fetchone()
+            finally:
+                conn.close()
+            if not binding["ready"] or not row or not all(
+                row[key] for key in ("root_path", "repository_identity", "checkout_identity")
+            ):
+                raise ValueError(
+                    f"active checkout mismatch ({binding['state']}); regenerate the MCP configuration after verifying the canonical root"
+                )
+            bound_root = Path(str(row["root_path"])).expanduser().resolve()
+            if self.expected_root is None:
+                self.expected_root = bound_root
+            self.expected_binding_token = (
+                str(bound_root), str(row["repository_identity"]), str(row["checkout_identity"]),
+            )
         self.allowed_thread_roots = tuple(_canonical_thread_root(root) for root in allowed_thread_roots)
         if allow_thread_ingestion and not self.allowed_thread_roots:
             raise ValueError("thread ingestion requires at least one configured thread root")
         if self.brain_dir is not None:
-            enabled = set(TOOL_BY_NAME)
+            enabled = set(PROJECT_BOUND_READ_TOOLS) - CONTEXT_DELEGATED_TOOLS
         else:
             enabled = set(PROJECT_BOUND_READ_TOOLS)
             enabled.update({"brain_session_events", "brain_reconcile", "brain_operational_readiness", "brain_continuity_status"})
+            if not self.context_contract_delegations:
+                enabled.difference_update(CONTEXT_DELEGATED_TOOLS)
         if allow_memory_writes:
             enabled.update(MEMORY_WRITE_TOOLS)
-            enabled.update({"brain_session_event", "brain_work_item", "brain_continuity_control"})
+            enabled.update({"brain_session_event", "brain_work_item"})
+        if allow_continuity_control:
+            if self.db_path is None:
+                raise ValueError("continuity control requires a single-project MCP binding")
+            enabled.update(CONTINUITY_CONTROL_TOOLS)
         if allow_repo_ingestion:
             enabled.update(REPO_INGESTION_TOOLS)
         if allow_thread_ingestion:
             enabled.update(THREAD_INGESTION_TOOLS)
             enabled.add("brain_ingest_codex_session")
+        if allow_truth_writes:
+            enabled.update(TEMPORAL_WRITE_TOOLS)
+        if allow_validator_run:
+            if not allow_truth_writes:
+                raise ValueError("validator execution requires truth writes to be enabled")
+            enabled.update(TEMPORAL_VALIDATOR_RUN_TOOLS)
+        if allow_capture_writes:
+            if self.db_path is None:
+                raise ValueError("capture writes require a single-project MCP binding")
+            enabled.update(CAPTURE_WRITE_TOOLS)
+        if allow_capture_destructive:
+            if self.db_path is None:
+                raise ValueError("destructive capture controls require a single-project MCP binding")
+            enabled.update(CAPTURE_DESTRUCTIVE_TOOLS)
         self.enabled_tools = frozenset(enabled)
         self.agent_tools = [
             (copy.deepcopy(TOOL_BY_NAME[name]) if self.brain_dir is not None else _agent_tool_schema(TOOL_BY_NAME[name]))
             for name in TOOL_BY_NAME if name in enabled
         ]
+
+    def _require_context_contract_delegation(self, conn, task_contract_id: int) -> None:
+        delegated_digest = self.context_contract_delegations.get(int(task_contract_id))
+        if delegated_digest is None:
+            raise PermissionError("context contract is not delegated to this MCP server process")
+        row = conn.execute(
+            """
+            SELECT tc.digest
+            FROM task_contracts tc
+            JOIN projects p ON p.id = tc.project_id
+            WHERE tc.id = ? AND p.name = ? AND tc.authorization_state = 'operator_authorized'
+            """,
+            (int(task_contract_id), self.default_project),
+        ).fetchone()
+        if row is None or not hmac.compare_digest(str(row["digest"]), delegated_digest):
+            raise PermissionError("delegated context contract does not match the authorized project contract")
+
+    def _context_compilation_contract_id(self, conn, compilation_id: str) -> int:
+        row = conn.execute(
+            """
+            SELECT c.task_contract_id
+            FROM context_compilations c
+            JOIN projects p ON p.id = c.project_id
+            WHERE c.compilation_id = ? AND p.name = ?
+            """,
+            (str(compilation_id).strip(), self.default_project),
+        ).fetchone()
+        if row is None:
+            raise ValueError("unknown project context compilation")
+        return int(row["task_contract_id"])
 
     def _bound_project(self, args: dict[str, Any]) -> str:
         requested = args.get("project")
@@ -563,7 +1093,23 @@ class RtaBrainMcpServer:
                 raise ValueError(
                     f"MCP server is bound to project '{self.default_project}'; client project overrides are rejected"
                 )
-            return connect(self.db_path), self.db_path, self.default_project
+            conn = connect(self.db_path)
+            binding = project_binding_status(conn, self.default_project, self.expected_root)
+            row = conn.execute(
+                "SELECT root_path, repository_identity, checkout_identity FROM projects WHERE name = ?",
+                (self.default_project,),
+            ).fetchone()
+            token = (
+                str(Path(str(row["root_path"])).expanduser().resolve()),
+                str(row["repository_identity"]),
+                str(row["checkout_identity"]),
+            ) if row and all(row[key] for key in ("root_path", "repository_identity", "checkout_identity")) else None
+            if not binding["ready"] or token != self.expected_binding_token:
+                conn.close()
+                raise ValueError(
+                    f"active checkout mismatch ({binding['state']}); regenerate the MCP configuration after verifying the canonical root"
+                )
+            return conn, self.db_path, self.default_project
         if not project:
             raise ValueError("project is required when using the multi-project brain gateway")
         if not self.brain_dir or not self.brain_dir.is_dir() or self.brain_dir.is_symlink():
@@ -597,11 +1143,16 @@ class RtaBrainMcpServer:
             raise KeyError(f"unknown tool: {name}")
         if name not in self.enabled_tools:
             raise ValueError(f"MCP tool '{name}' is not enabled by server startup capabilities")
-        conn, db_path, project = self._open_project(args.get("project") or self.default_project)
-        try:
-            return self._call_tool_with_connection(conn, name, args, db_path=db_path, resolved_project=project)
-        finally:
-            conn.close()
+        guard = (
+            McpBindingLease(self.db_path, self.default_project)
+            if self.db_path is not None else nullcontext()
+        )
+        with guard:
+            conn, db_path, project = self._open_project(args.get("project") or self.default_project)
+            try:
+                return self._call_tool_with_connection(conn, name, args, db_path=db_path, resolved_project=project)
+            finally:
+                conn.close()
 
     def _call_tool_with_connection(
         self, conn, name: str, args: dict[str, Any], *, db_path: Path, resolved_project: str
@@ -622,6 +1173,34 @@ class RtaBrainMcpServer:
                 max_tokens=int(args.get("max_tokens", 4_000)),
             )
             return text_result(text)
+        if name == "brain_context_compile":
+            task_contract_id = int(args["task_contract_id"])
+            self._require_context_contract_delegation(conn, task_contract_id)
+            payload = compile_context_for_agent(
+                conn,
+                db_path=db_path,
+                project=project,
+                active_root=self._bound_repository_root(conn, {}, project),
+                task_contract_id=task_contract_id,
+                principal_id=self.context_principal_id,
+                session_id=self.context_session_id,
+                variant_id=str(args.get("variant", "primary")),
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_context_explain":
+            self._require_context_contract_delegation(
+                conn,
+                self._context_compilation_contract_id(conn, str(args["compilation_id"])),
+            )
+            payload = explain_context_for_agent(
+                conn,
+                db_path=db_path,
+                project=project,
+                compilation_id=str(args["compilation_id"]),
+                principal_id=self.context_principal_id,
+                session_id=self.context_session_id,
+            )
+            return text_result(json_text(payload), payload)
         if name == "brain_remember":
             payload = remember(
                 conn,
@@ -706,6 +1285,10 @@ class RtaBrainMcpServer:
             payload = workspace_health(conn, str(args["workspace"]))
             return text_result(json_text(payload), payload)
         if name == "brain_stale_check":
+            if self.brain_dir is not None and bool(args.get("rehash", False)):
+                raise ValueError(
+                    "hash-cache mutation is disabled in the read-only gateway"
+                )
             payload = stale_check(
                 conn,
                 project=project,
@@ -713,6 +1296,11 @@ class RtaBrainMcpServer:
                 refresh_hashes=bool(args.get("rehash", False)),
                 detail_limit=int(args.get("detail_limit", 50)),
                 include_fresh_details=bool(args.get("include_fresh_details", False)),
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_integrity_diagnostics":
+            payload = integrity_diagnostics(
+                conn, project=project, active_root=self.expected_root,
             )
             return text_result(json_text(payload), payload)
         if name == "brain_checkpoint":
@@ -725,6 +1313,8 @@ class RtaBrainMcpServer:
                 next_action=str(args.get("next_action", "")),
                 prohibited_repetition=str(args.get("prohibited_repetition", "")),
                 expected_version=args.get("expected_version"),
+                source="agent",
+                trigger="mcp",
             )
             return text_result(json_text(payload), payload)
         if name == "brain_continuation_prompt":
@@ -767,10 +1357,14 @@ class RtaBrainMcpServer:
             payload = reconcile_work_items(conn, project)
             return text_result(json_text(payload), payload)
         if name == "brain_operational_readiness":
-            payload = operational_readiness(conn, project, lifecycle=continuity_status(db_path, project))
+            lifecycle = public_continuity_status(continuity_status(db_path, project))
+            payload = operational_readiness(
+                conn, project, lifecycle=lifecycle,
+                active_root=self.expected_root,
+            )
             return text_result(json_text(payload), payload)
         if name == "brain_continuity_status":
-            payload = continuity_status(db_path, project)
+            payload = public_continuity_status(continuity_status(db_path, project))
             return text_result(json_text(payload), payload)
         if name == "brain_continuity_control":
             action = str(args["action"])
@@ -790,6 +1384,7 @@ class RtaBrainMcpServer:
                 )
             else:
                 raise ValueError("continuity action must be start or stop")
+            payload = public_continuity_status(payload)
             return text_result(json_text(payload), payload)
         if name == "brain_reflect":
             payload = reflect(conn, project=project)
@@ -837,11 +1432,312 @@ class RtaBrainMcpServer:
         if name == "brain_governance_receipts":
             payload = list_receipts(conn, project=project, limit=int(args.get("limit", 100)))
             return text_result(json_text(payload), payload)
+        if name in CAPTURE_READ_TOOLS | CAPTURE_WRITE_TOOLS | CAPTURE_DESTRUCTIVE_TOOLS:
+            active_root = self._bound_repository_root(conn, {}, project)
+        if name == "brain_capture_status":
+            payload = capture_status_report(
+                conn, database=db_path, project=project,
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_events":
+            payload = export_capture_events(
+                conn, project=project, active_root=active_root,
+                after_sequence=int(args.get("after_sequence", 0)),
+                limit=int(args.get("limit", 100)),
+                privacy_ceiling=_capture_read_privacy_ceiling(args),
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_replay":
+            payload = capture_replay(
+                conn, project=project, active_root=active_root,
+                mode=str(args.get("mode", "chronological")),
+                after_sequence=int(args.get("after_sequence", 0)),
+                limit=int(args.get("limit", 100)),
+                privacy_ceiling=_capture_read_privacy_ceiling(args),
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_diagnostics":
+            payload = capture_diagnostics(
+                conn, database=db_path, project=project, active_root=active_root,
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_policy_create":
+            profile = str(args["profile"])
+            policy = (
+                CapturePolicy.metadata_only()
+                if profile == "metadata-only"
+                else CapturePolicy.continuity()
+                if profile == "continuity"
+                else CapturePolicy(profile="forensic")
+            )
+            payload = register_capture_policy(
+                conn, project=project, active_root=active_root,
+                policy_id=str(args["policy_id"]),
+                policy_version=int(args["policy_version"]), policy=policy,
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_policy_retire":
+            payload = retire_capture_policy(
+                conn, project=project, active_root=active_root,
+                policy_digest=str(args["policy_digest"]),
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_bind_session":
+            payload = bind_capture_session(
+                conn, database=db_path, project=project, active_root=active_root,
+                source_id=str(args["source_id"]),
+                external_session_id=str(args["external_session_id"]),
+                cursor_kind=str(args["cursor_kind"]),
+                start_cursor=str(args["start_cursor"]),
+                operator_id="mcp-delegated-operator",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_close_binding":
+            payload = close_session_binding(
+                conn, database=db_path, project=project, active_root=active_root,
+                binding_id=str(args["binding_id"]),
+                operator_id="mcp-delegated-operator",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_source_state":
+            selected_state = str(args["state"]).lower()
+            if selected_state not in {"active", "paused"}:
+                raise ValueError("MCP capture sources can only be active or paused")
+            payload = set_capture_source_state(
+                conn, project=project, active_root=active_root,
+                source_id=str(args["source_id"]), state=selected_state,
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_capture_retain":
+            payload = control_capture_retention(
+                conn, project=project, active_root=active_root,
+                policy_digest=str(args["policy_digest"]), run_id=str(args["run_id"]),
+                batch_size=int(args.get("batch_size", 100)),
+                actor_id="mcp-delegated-operator",
+                confirm=bool(args.get("confirm", False)),
+                confirmation_token=args.get("confirmation_token"),
+            )
+            return text_result(json_text(payload), payload)
+        if name in {"brain_capture_redact", "brain_capture_delete"}:
+            payload = delete_capture_content(
+                conn, project=project, active_root=active_root,
+                scope=str(args["scope"]), scope_token=str(args["scope_token"]),
+                reason_class=str(args["reason_class"]),
+                actor_id="mcp-delegated-operator",
+                policy_digest=str(args["policy_digest"]),
+                confirm=bool(args.get("confirm", False)),
+                confirmation_token=args.get("confirmation_token"),
+                secure_compact=False,
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_current":
+            payload = redact_truth_for_operator(truth_current(
+                conn,
+                project=project,
+                claim_id=str(args["claim_id"]),
+                valid_at=args.get("valid_at"),
+            ))
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_as_of":
+            payload = redact_truth_for_operator(truth_as_of(
+                conn,
+                project=project,
+                claim_id=str(args["claim_id"]),
+                valid_at=str(args["valid_at"]),
+                recorded_sequence=int(args["recorded_sequence"]),
+            ))
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_history":
+            payload = redact_truth_for_operator(truth_history(
+                conn,
+                project=project,
+                claim_id=str(args["claim_id"]),
+                limit=int(args.get("limit", 100)),
+            ))
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_diff":
+            payload = redact_truth_for_operator(truth_diff(
+                conn,
+                project=project,
+                from_sequence=int(args["from_sequence"]),
+                to_sequence=int(args["to_sequence"]),
+                valid_at=str(args["valid_at"]),
+                limit=int(args.get("limit", 100)),
+            ))
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_explain":
+            payload = redact_truth_for_operator(truth_explain(
+                conn,
+                project=project,
+                claim_id=str(args["claim_id"]),
+                valid_at=args.get("valid_at"),
+            ))
+            return text_result(json_text(payload), payload)
+        if (
+            name in TEMPORAL_WRITE_TOOLS | TEMPORAL_VALIDATOR_RUN_TOOLS
+            and self.expected_root is None
+        ):
+            raise ValueError("temporal writes require a single-project canonical root binding")
+        if name == "brain_truth_assert":
+            selected_state = str(args.get("epistemic_state", "observed")).strip().lower()
+            if selected_state not in {"hypothesis", "observed"}:
+                raise ValueError("agent truth assertions may only be hypothesis or observed, never accepted")
+            payload = append_claim(
+                conn,
+                project=project,
+                active_root=self.expected_root,
+                claim_id=args.get("claim_id"),
+                subject=str(args["subject"]),
+                predicate=str(args["predicate"]),
+                value=args["value"],
+                idempotency_key=str(args["idempotency_key"]),
+                expected_stream_version=int(args["expected_version"]),
+                valid_from=args.get("valid_from"),
+                valid_to=args.get("valid_to"),
+                expires_at=args.get("expires_at"),
+                epistemic_state=selected_state,
+                authority_class="agent-proposal",
+                confidence=min(0.75, float(args.get("confidence", 0.75))),
+                verification_status="unverified",
+                actor_type="agent",
+                actor_id="mcp-agent",
+                source="mcp",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_state":
+            selected_state = str(args["state"]).strip().lower()
+            if selected_state == "accepted":
+                raise ValueError("accepted truth requires an owner-controlled CLI or dashboard session")
+            payload = change_claim_state(
+                conn,
+                project=project,
+                active_root=self.expected_root,
+                claim_id=str(args["claim_id"]),
+                new_state=selected_state,
+                reason=str(args["reason"]),
+                idempotency_key=str(args["idempotency_key"]),
+                expected_stream_version=int(args["expected_version"]),
+                actor_type="agent",
+                actor_id="mcp-agent",
+                source="mcp",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_revise":
+            payload = revise_claim(
+                conn,
+                project=project,
+                active_root=self.expected_root,
+                claim_id=str(args["claim_id"]),
+                value=args["value"],
+                reason=str(args["reason"]),
+                idempotency_key=str(args["idempotency_key"]),
+                expected_stream_version=int(args["expected_version"]),
+                valid_from=args.get("valid_from"),
+                valid_to=args.get("valid_to"),
+                actor_type="agent",
+                actor_id="mcp-agent",
+                source="mcp",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_relate":
+            payload = relate_claims(
+                conn,
+                project=project,
+                active_root=self.expected_root,
+                relation_id=args.get("relation_id"),
+                from_claim_id=str(args["from_claim_id"]),
+                relation_type=str(args["relation_type"]),
+                to_claim_id=str(args["to_claim_id"]),
+                confidence=min(0.75, float(args.get("confidence", 0.7))),
+                idempotency_key=str(args["idempotency_key"]),
+                expected_stream_version=int(args["expected_version"]),
+                actor_type="agent",
+                actor_id="mcp-agent",
+                source="mcp",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_evidence":
+            payload = attach_evidence(
+                conn,
+                project=project,
+                active_root=self.expected_root,
+                claim_id=str(args["claim_id"]),
+                evidence_id=str(args["evidence_id"]),
+                source_identifier=str(args["source_identifier"]),
+                source_hash=args.get("source_hash"),
+                method=str(args["method"]),
+                polarity=str(args["polarity"]),
+                authority_class="agent-observation",
+                confidence=min(0.75, float(args["confidence"])),
+                uncertainty=str(args.get("uncertainty", "")),
+                provenance=dict(args["provenance"]),
+                idempotency_key=str(args["idempotency_key"]),
+                expected_stream_version=int(args["expected_version"]),
+                verification_status="unverified",
+                actor_type="agent",
+                actor_id="mcp-agent",
+                source="mcp",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_abstain":
+            payload = record_abstention(
+                conn,
+                project=project,
+                active_root=self.expected_root,
+                abstention_id=args.get("abstention_id"),
+                query_scope=str(args["query_scope"]),
+                missing_evidence=list(args["missing_evidence"]),
+                unresolved_conflicts=list(args["unresolved_conflicts"]),
+                minimum_revalidation_action=str(args["minimum_revalidation_action"]),
+                idempotency_key=str(args["idempotency_key"]),
+                expected_stream_version=int(args["expected_version"]),
+                actor_type="agent",
+                actor_id="mcp-agent",
+                source="mcp",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_validator_define":
+            selected_type = str(args["validator_type"]).strip().lower()
+            if selected_type == "command_exit":
+                raise ValueError("agents cannot define command validators")
+            payload = define_validator(
+                conn,
+                project=project,
+                active_root=self.expected_root,
+                validator_id=str(args["validator_id"]),
+                validator_type=selected_type,
+                claim_id=str(args["claim_id"]),
+                config=dict(args["config"]),
+                failure_effect=str(args["failure_effect"]),
+                idempotency_key=str(args["idempotency_key"]),
+                expected_stream_version=int(args["expected_version"]),
+                actor_type="agent",
+                actor_id="mcp-agent",
+                source="mcp",
+            )
+            return text_result(json_text(payload), payload)
+        if name == "brain_truth_validator_run":
+            payload = run_validator(
+                conn,
+                project=project,
+                active_root=self.expected_root,
+                validator_id=str(args["validator_id"]),
+                idempotency_key=str(args["idempotency_key"]),
+                expected_stream_version=int(args["expected_version"]),
+                allow_command=False,
+                trusted_executables=(),
+                actor_type="agent",
+                actor_id="mcp-agent",
+                source="mcp",
+            )
+            return text_result(json_text(payload), payload)
         if name == "brain_doctor":
             payload = doctor(conn)
             if project:
+                lifecycle = public_continuity_status(continuity_status(db_path, project))
                 payload["operational"] = operational_readiness(
-                    conn, project, lifecycle=continuity_status(db_path, project),
+                    conn, project, lifecycle=lifecycle,
+                    active_root=self.expected_root,
                 )
             return text_result(json_text(payload), payload)
         raise KeyError(f"unknown tool: {name}")
@@ -891,7 +1787,7 @@ class RtaBrainMcpServer:
             return respond(self.error(request_id, -32601, f"method not found: {method}"))
         except KeyError as exc:
             return respond(self.error(request_id, -32601, str(exc).strip("'")))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - JSON-RPC boundary serializes tool failures
             return respond(self.error(request_id, -32000, str(exc), {"type": exc.__class__.__name__}))
 
     async def handle_async(self, request: dict[str, Any]) -> dict[str, Any] | None:
@@ -919,6 +1815,12 @@ MUTATING_TOOLS = {
     "brain_work_item",
     "brain_continuity_control",
     "brain_reflect",
+    "brain_context_compile",
+    "brain_context_explain",
+    *CAPTURE_WRITE_TOOLS,
+    *CAPTURE_DESTRUCTIVE_TOOLS,
+    *TEMPORAL_WRITE_TOOLS,
+    *TEMPORAL_VALIDATOR_RUN_TOOLS,
 }
 
 
@@ -1008,19 +1910,33 @@ async def serve_stdio_async(
     default_project: str | None,
     *,
     brain_dir: Path | None = None,
+    expected_root: Path | None = None,
     allow_memory_writes: bool = False,
+    allow_continuity_control: bool = False,
     allow_repo_ingestion: bool = False,
     allow_thread_ingestion: bool = False,
+    allow_truth_writes: bool = False,
+    allow_validator_run: bool = False,
+    allow_capture_writes: bool = False,
+    allow_capture_destructive: bool = False,
     allowed_thread_roots: tuple[Path, ...] = (),
+    context_contract_delegations: dict[int, str] | None = None,
 ) -> int:
     server = RtaBrainMcpServer(
         db_path=db_path,
         default_project=default_project,
         brain_dir=brain_dir,
+        expected_root=expected_root,
         allow_memory_writes=allow_memory_writes,
+        allow_continuity_control=allow_continuity_control,
         allow_repo_ingestion=allow_repo_ingestion,
         allow_thread_ingestion=allow_thread_ingestion,
+        allow_truth_writes=allow_truth_writes,
+        allow_validator_run=allow_validator_run,
+        allow_capture_writes=allow_capture_writes,
+        allow_capture_destructive=allow_capture_destructive,
         allowed_thread_roots=allowed_thread_roots,
+        context_contract_delegations=context_contract_delegations,
     )
     stream = sys.stdin.buffer
     write_lock = asyncio.Lock()
@@ -1031,26 +1947,31 @@ async def serve_stdio_async(
 
     scheduler = McpRequestScheduler(server, emit, max_concurrency=4)
 
-    while True:
-        line = await asyncio.to_thread(stream.readline, MAX_MCP_FRAME_BYTES + 1)
-        if not line:
-            break
-        if len(line) > MAX_MCP_FRAME_BYTES:
-            while line and not line.endswith(b"\n"):
-                line = await asyncio.to_thread(stream.readline, MAX_MCP_FRAME_BYTES + 1)
-            response = RtaBrainMcpServer.error(None, -32600, f"request frame exceeds {MAX_MCP_FRAME_BYTES} bytes")
-            await emit(response)
-            continue
-        if not line.strip():
-            continue
-        try:
-            request = parse_request_frame(line)
-        except (json.JSONDecodeError, UnicodeDecodeError, ValueError, RecursionError, MemoryError) as exc:
-            response = RtaBrainMcpServer.error(None, -32700, f"parse error: {exc}")
-            await emit(response)
-        else:
-            await scheduler.submit(request, frame_bytes=len(line))
-    await scheduler.close()
+    lease = McpBindingLease(server.db_path, server.default_project) if server.db_path is not None else nullcontext()
+    with lease:
+        if server.db_path is not None:
+            startup_conn, _startup_path, _startup_project = server._open_project(server.default_project)
+            startup_conn.close()
+        while True:
+            line = await asyncio.to_thread(stream.readline, MAX_MCP_FRAME_BYTES + 1)
+            if not line:
+                break
+            if len(line) > MAX_MCP_FRAME_BYTES:
+                while line and not line.endswith(b"\n"):
+                    line = await asyncio.to_thread(stream.readline, MAX_MCP_FRAME_BYTES + 1)
+                response = RtaBrainMcpServer.error(None, -32600, f"request frame exceeds {MAX_MCP_FRAME_BYTES} bytes")
+                await emit(response)
+                continue
+            if not line.strip():
+                continue
+            try:
+                request = parse_request_frame(line)
+            except (json.JSONDecodeError, UnicodeDecodeError, ValueError, RecursionError, MemoryError) as exc:
+                response = RtaBrainMcpServer.error(None, -32700, f"parse error: {exc}")
+                await emit(response)
+            else:
+                await scheduler.submit(request, frame_bytes=len(line))
+        await scheduler.close()
     return 0
 
 
@@ -1059,19 +1980,33 @@ def serve_stdio(
     default_project: str | None,
     *,
     brain_dir: Path | None = None,
+    expected_root: Path | None = None,
     allow_memory_writes: bool = False,
+    allow_continuity_control: bool = False,
     allow_repo_ingestion: bool = False,
     allow_thread_ingestion: bool = False,
+    allow_truth_writes: bool = False,
+    allow_validator_run: bool = False,
+    allow_capture_writes: bool = False,
+    allow_capture_destructive: bool = False,
     allowed_thread_roots: tuple[Path, ...] = (),
+    context_contract_delegations: dict[int, str] | None = None,
 ) -> int:
     return asyncio.run(serve_stdio_async(
         db_path,
         default_project,
         brain_dir=brain_dir,
+        expected_root=expected_root,
         allow_memory_writes=allow_memory_writes,
+        allow_continuity_control=allow_continuity_control,
         allow_repo_ingestion=allow_repo_ingestion,
         allow_thread_ingestion=allow_thread_ingestion,
+        allow_truth_writes=allow_truth_writes,
+        allow_validator_run=allow_validator_run,
+        allow_capture_writes=allow_capture_writes,
+        allow_capture_destructive=allow_capture_destructive,
         allowed_thread_roots=allowed_thread_roots,
+        context_contract_delegations=context_contract_delegations,
     ))
 
 
@@ -1081,9 +2016,14 @@ def build_parser() -> argparse.ArgumentParser:
     source.add_argument("--db", help="Path to one SQLite brain file")
     source.add_argument("--brain-dir", help="Directory of project-scoped SQLite brain files")
     parser.add_argument("--project", default="default", help="Default project memory bank for single-database mode")
+    parser.add_argument("--root", help="Expected canonical checkout root pinned by the generated MCP configuration")
     parser.add_argument(
         "--allow-memory-writes", action="store_true",
         help="Allow agent-authored memories, checkpoints, and reflection (disabled by default)",
+    )
+    parser.add_argument(
+        "--allow-continuity-control", action="store_true",
+        help="Allow starting and stopping the project continuity worker (disabled by default)",
     )
     parser.add_argument(
         "--allow-repo-ingestion", action="store_true",
@@ -1097,24 +2037,68 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-thread-root", action="append", default=[], metavar="PATH",
         help="Canonical directory allowed for thread ingestion; may be repeated",
     )
+    parser.add_argument(
+        "--allow-truth-writes", action="store_true",
+        help="Allow agent-authored hypothesis/observed temporal truth events (disabled by default)",
+    )
+    parser.add_argument(
+        "--allow-validator-run", action="store_true",
+        help="Allow deterministic non-command truth validators; requires --allow-truth-writes",
+    )
+    parser.add_argument(
+        "--allow-capture-writes", action="store_true",
+        help="Allow delegated capture policy, binding, lifecycle, and retention controls",
+    )
+    parser.add_argument(
+        "--allow-capture-destructive", action="store_true",
+        help="Allow preview-bound capture retention, redaction, and deletion controls",
+    )
+    parser.add_argument(
+        "--context-contract", action="append", default=[], metavar="ID:DIGEST",
+        help="Delegate one operator-authorized context contract to this MCP process; may be repeated",
+    )
     return parser
 
 
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.brain_dir and (args.allow_memory_writes or args.allow_repo_ingestion or args.allow_thread_ingestion or args.allow_thread_root):
-        parser.error("capability flags are only valid with --db single-project mode")
+    if args.brain_dir and (
+        args.root or args.allow_memory_writes or args.allow_continuity_control
+        or args.allow_repo_ingestion
+        or args.allow_thread_ingestion or args.allow_thread_root
+        or args.allow_truth_writes or args.allow_validator_run or args.context_contract
+        or args.allow_capture_writes or args.allow_capture_destructive
+    ):
+        parser.error("root and capability flags are only valid with --db single-project mode")
     if args.allow_thread_ingestion and not args.allow_thread_root:
         parser.error("--allow-thread-ingestion requires at least one --allow-thread-root")
+    if args.allow_validator_run and not args.allow_truth_writes:
+        parser.error("--allow-validator-run requires --allow-truth-writes")
+    context_contract_delegations: dict[int, str] = {}
+    for value in args.context_contract:
+        match = re.fullmatch(r"([1-9][0-9]*):([0-9A-Fa-f]{64})", str(value).strip())
+        if match is None:
+            parser.error("--context-contract must use ID:DIGEST with a positive ID and 64-character SHA-256")
+        contract_id = int(match.group(1))
+        if contract_id in context_contract_delegations:
+            parser.error(f"--context-contract ID {contract_id} is duplicated")
+        context_contract_delegations[contract_id] = match.group(2).casefold()
     return serve_stdio(
         Path(args.db) if args.db else None,
         args.project,
         brain_dir=Path(args.brain_dir) if args.brain_dir else None,
+        expected_root=Path(args.root) if args.root else None,
         allow_memory_writes=args.allow_memory_writes,
+        allow_continuity_control=args.allow_continuity_control,
         allow_repo_ingestion=args.allow_repo_ingestion,
         allow_thread_ingestion=args.allow_thread_ingestion,
+        allow_truth_writes=args.allow_truth_writes,
+        allow_validator_run=args.allow_validator_run,
+        allow_capture_writes=args.allow_capture_writes,
+        allow_capture_destructive=args.allow_capture_destructive,
         allowed_thread_roots=tuple(Path(root) for root in args.allow_thread_root),
+        context_contract_delegations=context_contract_delegations,
     )
 
 

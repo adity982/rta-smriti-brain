@@ -1,8 +1,11 @@
+import hashlib
 import json
 import os
 import re
 import sqlite3
+import stat
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,10 +21,19 @@ from .ingest import (
     walk_repo,
 )
 from .parsers import ParserRegistry
-from .repository import canonical_root, repository_identity, same_root, stable_git_identity
-
+from .repository import (
+    RepositoryInspection,
+    canonical_root,
+    canonical_root_key,
+    checkout_identity,
+    repository_identity,
+    repository_state,
+    same_root,
+    stable_git_identity,
+)
 
 VALID_PRAMANA = {"pratyaksha", "sabda", "anumana", "smriti", "kalpana"}
+SCHEMA_VERSION = 10
 MAX_THREAD_BYTES = 10 * 1024 * 1024
 MAX_THREAD_PROMOTIONS = 100
 MAX_SEARCH_LIMIT = 50
@@ -40,6 +52,7 @@ DEFAULT_PROJECT_SETTINGS = {
     "compaction_endpoint": "http://127.0.0.1:11434",
     "compaction_timeout_seconds": 20.0,
 }
+_ROOT_REBIND_CAPABILITY = object()
 
 
 def _repository_identities_match(
@@ -74,6 +87,85 @@ def _is_reparse_point(path: Path) -> bool:
     return bool(attributes & 0x400)
 
 
+def _ensure_windows_private(path: Path) -> None:
+    if os.name != "nt":
+        return
+    from .capture_spool import (
+        SpoolError,
+        ensure_windows_path_private,
+        windows_path_privacy_failure,
+    )
+
+    try:
+        ensure_windows_path_private(path)
+        failure = windows_path_privacy_failure(path)
+        if failure is not None:
+            raise PermissionError(
+                f"brain database path ACL is not private ({failure}): {path}"
+            )
+    except SpoolError as exc:
+        raise PermissionError(f"cannot enforce private brain database ACL: {path}") from exc
+
+
+def _validate_windows_private(path: Path) -> None:
+    if os.name != "nt":
+        return
+    from .capture_spool import SpoolError, windows_path_privacy_failure
+
+    try:
+        failure = windows_path_privacy_failure(path)
+        if failure is not None:
+            raise PermissionError(
+                f"brain database path ACL is not private ({failure}): {path}"
+            )
+    except SpoolError as exc:
+        raise PermissionError(f"cannot validate private brain database ACL: {path}") from exc
+
+
+def _database_parent_is_dedicated(parent: Path, database: Path) -> bool:
+    """Return true when an existing directory contains only this SQLite store."""
+
+    allowed = {
+        database.name,
+        f"{database.name}-journal",
+        f"{database.name}-shm",
+        f"{database.name}-wal",
+    }
+    with os.scandir(parent) as entries:
+        return all(entry.name in allowed for entry in entries)
+
+
+def _database_identity(path: Path) -> tuple[int, int, int]:
+    info = path.lstat()
+    return int(info.st_dev), int(info.st_ino), int(info.st_nlink)
+
+
+def _validate_database_sidecars(database: Path, *, harden: bool) -> None:
+    for sidecar in (Path(f"{database}-wal"), Path(f"{database}-shm")):
+        try:
+            info = sidecar.lstat()
+        except FileNotFoundError:
+            continue
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or sidecar.is_symlink()
+            or _is_reparse_point(sidecar)
+            or info.st_nlink != 1
+        ):
+            raise PermissionError(
+                f"brain database sidecar is not a safe regular file: {sidecar}"
+            )
+        if os.name != "nt":
+            if info.st_uid != os.getuid():
+                raise PermissionError(
+                    f"brain database sidecar is owned by another user: {sidecar}"
+                )
+            if harden:
+                sidecar.chmod(0o600)
+        elif harden:
+            _ensure_windows_private(sidecar)
+
+
 def _prepare_database_path(db_path: Path) -> Path:
     requested = Path(db_path).expanduser()
     if requested.is_symlink():
@@ -84,8 +176,29 @@ def _prepare_database_path(db_path: Path) -> Path:
     parent.mkdir(parents=True, exist_ok=True)
     if parent.is_symlink() or _is_reparse_point(parent) or not parent.is_dir():
         raise ValueError(f"brain database directory is not a safe directory: {parent}")
-    if os.name != "nt" and not parent_existed:
-        parent.chmod(0o700)
+    if os.name == "nt":
+        if parent_existed:
+            try:
+                _validate_windows_private(parent)
+            except PermissionError:
+                if not _database_parent_is_dedicated(parent, resolved):
+                    raise PermissionError(
+                        "brain database directory is shared and its ACL is not private; "
+                        "choose a dedicated brain directory"
+                    )
+                _ensure_windows_private(parent)
+        else:
+            _ensure_windows_private(parent)
+    else:
+        parent_info = parent.stat()
+        if parent_info.st_uid != os.getuid() or stat.S_IMODE(parent_info.st_mode) & 0o022:
+            raise PermissionError(
+                "brain database directory must be owner-controlled and not peer-writable"
+            )
+        if not parent_existed:
+            parent.chmod(0o700)
+
+    _validate_database_sidecars(resolved, harden=False)
 
     if not resolved.exists():
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
@@ -98,59 +211,164 @@ def _prepare_database_path(db_path: Path) -> Path:
         else:
             os.close(descriptor)
     try:
-        stat = resolved.lstat()
+        database_info = resolved.lstat()
     except OSError as exc:
         raise ValueError(f"brain database is not accessible: {resolved}") from exc
     if (
         not resolved.is_file()
         or resolved.is_symlink()
         or _is_reparse_point(resolved)
-        or stat.st_nlink != 1
+        or database_info.st_nlink != 1
     ):
         raise ValueError(f"brain database must be an existing unlinked regular file: {resolved}")
     if os.name != "nt":
         resolved.chmod(0o600)
+    else:
+        _ensure_windows_private(resolved)
     return resolved
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
     database = _prepare_database_path(db_path)
+    identity_before_open = _database_identity(database)
+    _validate_database_sidecars(database, harden=False)
     conn = sqlite3.connect(str(database))
     try:
+        if _database_identity(database) != identity_before_open:
+            raise ValueError("brain database changed identity while it was being opened")
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA foreign_keys = ON")
-        for attempt in range(50):
-            try:
-                conn.execute("PRAGMA journal_mode = WAL")
-                break
-            except sqlite3.OperationalError as exc:
-                if "locked" not in str(exc).lower() or attempt == 49:
-                    raise
-                time.sleep(0.02)
+        conn.execute("PRAGMA recursive_triggers = ON")
+        schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if schema_version > SCHEMA_VERSION:
+            raise ValueError(
+                "brain database uses newer schema version "
+                f"{schema_version}; this runtime supports up to {SCHEMA_VERSION}"
+            )
+        journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        if journal_mode != "wal":
+            for attempt in range(50):
+                try:
+                    conn.execute("PRAGMA journal_mode = WAL")
+                    break
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc).lower() or attempt == 49:
+                        raise
+                    time.sleep(0.02)
         conn.execute("PRAGMA synchronous = NORMAL")
         conn.execute("PRAGMA trusted_schema = OFF")
+        if _database_identity(database) != identity_before_open:
+            raise ValueError("brain database changed identity during initialization")
     except Exception:
         conn.close()
         raise
-    if os.name != "nt":
+    if os.name == "nt":
+        try:
+            _ensure_windows_private(database)
+            _validate_database_sidecars(database, harden=True)
+        except Exception:
+            conn.close()
+            raise
+    else:
         if database.stat().st_uid != os.getuid():
             conn.close()
             raise PermissionError(f"brain database is owned by another user: {database}")
-        for sidecar in (database, Path(f"{database}-wal"), Path(f"{database}-shm")):
-            if sidecar.exists() and sidecar.is_file() and not sidecar.is_symlink() and sidecar.stat().st_uid == os.getuid():
-                os.chmod(sidecar, 0o600)
+        database.chmod(0o600)
+        _validate_database_sidecars(database, harden=True)
     return conn
 
 
+def _execute_schema_statements(conn: sqlite3.Connection, script: str) -> None:
+    statement = ""
+    for line in script.splitlines(keepends=True):
+        statement += line
+        if sqlite3.complete_statement(statement):
+            sql = statement.strip()
+            if sql:
+                conn.execute(sql)
+            statement = ""
+    if statement.strip():
+        raise ValueError("incomplete internal schema statement")
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA recursive_triggers = ON")
+    if int(conn.execute("PRAGMA foreign_keys").fetchone()[0]) != 1:
+        raise RuntimeError(
+            "foreign key enforcement must be enabled before schema initialization"
+        )
+    observed_schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    if observed_schema_version > SCHEMA_VERSION:
+        raise ValueError(
+            "brain database uses newer schema version "
+            f"{observed_schema_version}; this runtime supports up to {SCHEMA_VERSION}"
+        )
+    if observed_schema_version == SCHEMA_VERSION:
+        from .capture_schema import (
+            capture_schema_v10_patch_required,
+            upgrade_capture_schema_v10_patch,
+            validate_capture_schema_v10,
+        )
+        from .context_schema import validate_context_schema_v9
+
+        validate_context_schema_v9(conn)
+        if capture_schema_v10_patch_required(conn):
+            owns_transaction = not conn.in_transaction
+            migration_savepoint = "rta_capture_v10_patch"
+            try:
+                if owns_transaction:
+                    conn.execute("BEGIN IMMEDIATE")
+                else:
+                    conn.execute(f"SAVEPOINT {migration_savepoint}")
+                upgrade_capture_schema_v10_patch(conn)
+                if owns_transaction:
+                    conn.commit()
+                else:
+                    conn.execute(f"RELEASE SAVEPOINT {migration_savepoint}")
+            except BaseException:
+                if owns_transaction:
+                    conn.rollback()
+                else:
+                    conn.execute(f"ROLLBACK TO SAVEPOINT {migration_savepoint}")
+                    conn.execute(f"RELEASE SAVEPOINT {migration_savepoint}")
+                raise
+        validate_capture_schema_v10(conn)
+        return
+    owns_transaction = not conn.in_transaction
+    migration_savepoint = "rta_schema_migration"
+    try:
+        if owns_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+        else:
+            conn.execute(f"SAVEPOINT {migration_savepoint}")
+        starting_schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if starting_schema_version > SCHEMA_VERSION:
+            raise ValueError(
+                "brain database uses newer schema version "
+                f"{starting_schema_version}; this runtime supports up to {SCHEMA_VERSION}"
+            )
+        if starting_schema_version == SCHEMA_VERSION:
+            from .capture_schema import validate_capture_schema_v10
+            from .context_schema import validate_context_schema_v9
+
+            validate_context_schema_v9(conn)
+            validate_capture_schema_v10(conn)
+            if owns_transaction:
+                conn.commit()
+            else:
+                conn.execute(f"RELEASE SAVEPOINT {migration_savepoint}")
+            return
+        _execute_schema_statements(
+            conn,
         """
         CREATE TABLE IF NOT EXISTS projects (
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
             root_path TEXT,
             repository_identity TEXT,
+            checkout_identity TEXT,
             created_at TEXT NOT NULL
         );
 
@@ -200,6 +418,195 @@ def init_schema(conn: sqlite3.Connection) -> None:
             metadata_json TEXT NOT NULL DEFAULT '{}'
         );
 
+        CREATE TABLE IF NOT EXISTS truth_events (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+            project_sequence INTEGER NOT NULL CHECK(project_sequence > 0),
+            event_id TEXT NOT NULL,
+            stream_id TEXT NOT NULL,
+            stream_version INTEGER NOT NULL CHECK(stream_version > 0),
+            event_type TEXT NOT NULL,
+            event_schema INTEGER NOT NULL DEFAULT 1 CHECK(event_schema > 0),
+            idempotency_key TEXT NOT NULL,
+            payload_json TEXT NOT NULL CHECK(length(payload_json) <= 262144),
+            payload_sha256 TEXT NOT NULL,
+            previous_event_hash TEXT,
+            event_hash TEXT NOT NULL,
+            actor_type TEXT NOT NULL,
+            actor_id TEXT NOT NULL,
+            source TEXT NOT NULL,
+            verification_status TEXT NOT NULL,
+            repository_identity TEXT,
+            checkout_identity TEXT,
+            repository_ref TEXT,
+            repository_commit TEXT,
+            dirty_digest TEXT,
+            occurred_at TEXT,
+            recorded_at TEXT NOT NULL,
+            privacy_class TEXT NOT NULL DEFAULT 'internal',
+            UNIQUE(project_id, project_sequence),
+            UNIQUE(project_id, event_id),
+            UNIQUE(project_id, stream_id, stream_version),
+            UNIQUE(project_id, idempotency_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS truth_claim_versions (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            claim_id TEXT NOT NULL,
+            subject_key TEXT NOT NULL,
+            subject_display TEXT NOT NULL,
+            predicate TEXT NOT NULL,
+            object_json TEXT NOT NULL,
+            polarity TEXT NOT NULL CHECK(polarity IN ('for', 'against', 'unknown')),
+            epistemic_state TEXT NOT NULL,
+            state_reason TEXT NOT NULL DEFAULT '',
+            authority_class TEXT NOT NULL,
+            confidence REAL NOT NULL CHECK(confidence >= 0.0 AND confidence <= 1.0),
+            verification_status TEXT NOT NULL,
+            valid_from TEXT NOT NULL,
+            valid_to TEXT,
+            recorded_from_sequence INTEGER NOT NULL,
+            recorded_to_sequence INTEGER,
+            opened_by_event_id TEXT NOT NULL,
+            closed_by_event_id TEXT,
+            repository_anchor_event_id TEXT,
+            provenance_json TEXT NOT NULL DEFAULT '{}',
+            revalidate_at TEXT,
+            expires_at TEXT,
+            privacy_class TEXT NOT NULL DEFAULT 'internal',
+            sharing_policy TEXT NOT NULL DEFAULT 'local-only',
+            legacy_memory_id INTEGER REFERENCES memories(id) ON DELETE SET NULL,
+            UNIQUE(project_id, claim_id, recorded_from_sequence)
+        );
+
+        CREATE TABLE IF NOT EXISTS truth_relations (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            relation_id TEXT NOT NULL,
+            from_claim_id TEXT NOT NULL,
+            relation_type TEXT NOT NULL,
+            to_claim_id TEXT NOT NULL,
+            authority_class TEXT NOT NULL,
+            confidence REAL NOT NULL CHECK(confidence >= 0.0 AND confidence <= 1.0),
+            valid_from TEXT NOT NULL,
+            valid_to TEXT,
+            recorded_from_sequence INTEGER NOT NULL,
+            recorded_to_sequence INTEGER,
+            opened_by_event_id TEXT NOT NULL,
+            closed_by_event_id TEXT,
+            UNIQUE(project_id, relation_id, recorded_from_sequence)
+        );
+
+        CREATE TABLE IF NOT EXISTS truth_evidence (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            evidence_id TEXT NOT NULL,
+            claim_id TEXT NOT NULL,
+            source_identifier TEXT NOT NULL,
+            source_hash TEXT,
+            method TEXT NOT NULL,
+            actor_type TEXT NOT NULL,
+            actor_id TEXT NOT NULL,
+            authority_class TEXT NOT NULL,
+            confidence REAL NOT NULL CHECK(confidence >= 0.0 AND confidence <= 1.0),
+            uncertainty TEXT NOT NULL DEFAULT '',
+            polarity TEXT NOT NULL CHECK(polarity IN ('supporting', 'weakening', 'refuting')),
+            validator_id TEXT,
+            valid_from TEXT NOT NULL,
+            valid_to TEXT,
+            recorded_from_sequence INTEGER NOT NULL,
+            recorded_to_sequence INTEGER,
+            opened_by_event_id TEXT NOT NULL,
+            closed_by_event_id TEXT,
+            provenance_json TEXT NOT NULL DEFAULT '{}',
+            privacy_class TEXT NOT NULL DEFAULT 'internal',
+            sharing_policy TEXT NOT NULL DEFAULT 'local-only',
+            UNIQUE(project_id, evidence_id, recorded_from_sequence)
+        );
+
+        CREATE TABLE IF NOT EXISTS truth_abstentions (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            abstention_id TEXT NOT NULL,
+            query_scope TEXT NOT NULL,
+            missing_evidence_json TEXT NOT NULL,
+            unresolved_conflicts_json TEXT NOT NULL,
+            minimum_revalidation_action TEXT NOT NULL,
+            recorded_sequence INTEGER NOT NULL,
+            event_id TEXT NOT NULL,
+            recorded_at TEXT NOT NULL,
+            privacy_class TEXT NOT NULL DEFAULT 'internal',
+            UNIQUE(project_id, abstention_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS truth_validators (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            validator_id TEXT NOT NULL,
+            validator_type TEXT NOT NULL,
+            claim_id TEXT NOT NULL,
+            config_json TEXT NOT NULL,
+            failure_effect TEXT NOT NULL CHECK(failure_effect IN ('disputed', 'stale', 'refuted')),
+            status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'retired')),
+            defined_sequence INTEGER NOT NULL,
+            defined_by_event_id TEXT NOT NULL,
+            privacy_class TEXT NOT NULL DEFAULT 'internal',
+            UNIQUE(project_id, validator_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS truth_validator_results (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            validator_id TEXT NOT NULL,
+            claim_id TEXT NOT NULL,
+            outcome TEXT NOT NULL CHECK(outcome IN ('pass', 'fail', 'unavailable', 'error')),
+            details_json TEXT NOT NULL,
+            evaluated_sequence INTEGER NOT NULL,
+            event_id TEXT NOT NULL,
+            evaluated_at TEXT NOT NULL,
+            UNIQUE(project_id, validator_id, evaluated_sequence)
+        );
+
+        CREATE TABLE IF NOT EXISTS truth_repository_anchors (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            anchor_id TEXT NOT NULL,
+            repository_identity TEXT NOT NULL,
+            checkout_identity TEXT NOT NULL,
+            repository_ref TEXT,
+            repository_commit TEXT NOT NULL,
+            dirty_digest TEXT NOT NULL,
+            recorded_sequence INTEGER NOT NULL,
+            event_id TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            UNIQUE(project_id, anchor_id),
+            UNIQUE(project_id, checkout_identity, repository_commit, recorded_sequence)
+        );
+
+        CREATE TABLE IF NOT EXISTS truth_projection_state (
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            projection_name TEXT NOT NULL,
+            schema_version INTEGER NOT NULL,
+            last_event_sequence INTEGER NOT NULL DEFAULT 0,
+            event_chain_hash TEXT,
+            projection_digest TEXT NOT NULL,
+            rebuilt_at TEXT NOT NULL,
+            PRIMARY KEY(project_id, projection_name)
+        );
+
+        CREATE TRIGGER IF NOT EXISTS truth_events_no_update
+        BEFORE UPDATE ON truth_events
+        BEGIN
+            SELECT RAISE(ABORT, 'truth events are immutable');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS truth_events_no_delete
+        BEFORE DELETE ON truth_events
+        BEGIN
+            SELECT RAISE(ABORT, 'truth events are immutable');
+        END;
+
         CREATE TABLE IF NOT EXISTS checkpoints (
             id INTEGER PRIMARY KEY,
             project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -215,6 +622,25 @@ def init_schema(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS checkpoint_capture_fences (
+            checkpoint_id INTEGER PRIMARY KEY REFERENCES checkpoints(id) ON DELETE CASCADE,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            fence_sequence INTEGER NOT NULL CHECK(fence_sequence >= 0),
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TRIGGER IF NOT EXISTS checkpoint_capture_fences_no_update
+        BEFORE UPDATE ON checkpoint_capture_fences
+        BEGIN
+            SELECT RAISE(ABORT, 'checkpoint capture fences are immutable');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS checkpoint_capture_fences_no_delete
+        BEFORE DELETE ON checkpoint_capture_fences
+        BEGIN
+            SELECT RAISE(ABORT, 'checkpoint capture fences are immutable');
+        END;
 
         CREATE TABLE IF NOT EXISTS governance_policies (
             id INTEGER PRIMARY KEY,
@@ -360,6 +786,17 @@ def init_schema(conn: sqlite3.Connection) -> None:
             PRIMARY KEY(project_id, path)
         );
 
+        CREATE TABLE IF NOT EXISTS project_root_migrations (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            previous_root_fingerprint TEXT NOT NULL,
+            new_root_fingerprint TEXT NOT NULL,
+            previous_checkout_fingerprint TEXT,
+            new_checkout_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS chunk_embeddings (
             project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
             chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
@@ -401,15 +838,37 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_governance_receipts_project_created ON governance_receipts(project_id, created_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_governance_decisions_project_created ON governance_decisions(project_id, created_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_memory_feedback_memory_created ON memory_feedback(memory_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_project_root_migrations_project_created
+            ON project_root_migrations(project_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_truth_events_project_sequence
+            ON truth_events(project_id, project_sequence);
+        CREATE INDEX IF NOT EXISTS idx_truth_events_project_stream
+            ON truth_events(project_id, stream_id, stream_version);
+        CREATE INDEX IF NOT EXISTS idx_truth_claim_versions_current
+            ON truth_claim_versions(project_id, claim_id, recorded_to_sequence, valid_from, valid_to);
+        CREATE INDEX IF NOT EXISTS idx_truth_claim_versions_lookup
+            ON truth_claim_versions(project_id, subject_key, predicate, recorded_from_sequence);
+        CREATE INDEX IF NOT EXISTS idx_truth_relations_claims
+            ON truth_relations(project_id, from_claim_id, to_claim_id, recorded_to_sequence);
+        CREATE INDEX IF NOT EXISTS idx_truth_evidence_claim
+            ON truth_evidence(project_id, claim_id, recorded_to_sequence);
+        CREATE INDEX IF NOT EXISTS idx_truth_abstentions_project_sequence
+            ON truth_abstentions(project_id, recorded_sequence DESC);
+        CREATE INDEX IF NOT EXISTS idx_truth_validators_claim
+            ON truth_validators(project_id, claim_id, status);
+        CREATE INDEX IF NOT EXISTS idx_truth_validator_results_latest
+            ON truth_validator_results(project_id, validator_id, evaluated_sequence DESC);
+        CREATE INDEX IF NOT EXISTS idx_truth_repository_anchors_commit
+            ON truth_repository_anchors(project_id, repository_commit, recorded_sequence DESC);
         """
-    )
-    try:
+        )
         # Serialize introspection and ALTER statements across dashboard, MCP, and
         # daemon connections opening an older brain at the same time.
-        conn.execute("BEGIN IMMEDIATE")
         project_columns = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
         if "repository_identity" not in project_columns:
             conn.execute("ALTER TABLE projects ADD COLUMN repository_identity TEXT")
+        if "checkout_identity" not in project_columns:
+            conn.execute("ALTER TABLE projects ADD COLUMN checkout_identity TEXT")
         checkpoint_columns = {row["name"] for row in conn.execute("PRAGMA table_info(checkpoints)")}
         if "version" not in checkpoint_columns:
             conn.execute("ALTER TABLE checkpoints ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
@@ -425,10 +884,146 @@ def init_schema(conn: sqlite3.Connection) -> None:
             SELECT id, created_at, 'unverified', '{}' FROM memories
             """
         )
-        conn.commit()
-    except Exception:
-        conn.rollback()
+        if starting_schema_version < 8:
+            from .temporal import migrate_legacy_memories
+
+            migrate_legacy_memories(conn)
+        if starting_schema_version < 9:
+            from .context_schema import migrate_context_schema_v9
+
+            migrate_context_schema_v9(conn)
+        if starting_schema_version < 10:
+            from .capture_schema import migrate_capture_schema_v10
+
+            migrate_capture_schema_v10(conn)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        if owns_transaction:
+            conn.commit()
+        else:
+            conn.execute(f"RELEASE SAVEPOINT {migration_savepoint}")
+    except BaseException:
+        if owns_transaction:
+            conn.rollback()
+        else:
+            conn.execute(f"ROLLBACK TO SAVEPOINT {migration_savepoint}")
+            conn.execute(f"RELEASE SAVEPOINT {migration_savepoint}")
         raise
+
+
+def _fingerprint(value: str | Path | None) -> str | None:
+    if value is None:
+        return None
+    return hashlib.sha256(str(value).encode("utf-8", errors="strict")).hexdigest()[:16]
+
+
+def _root_fingerprint(value: str | Path | None) -> str | None:
+    return _fingerprint(canonical_root_key(value)) if value else None
+
+
+def _identity_fingerprint(value: str | None) -> str | None:
+    return _fingerprint(value)
+
+
+def _inspect_repository_identity(root: Path) -> str | None:
+    try:
+        return repository_identity(root, create_marker=False)
+    except ValueError:
+        return None
+
+
+def _inspect_checkout_identity(root: Path) -> str | None:
+    try:
+        return checkout_identity(root, create_marker=False)
+    except ValueError:
+        return None
+
+
+def project_binding_status(
+    conn: sqlite3.Connection,
+    project: str,
+    active_root: str | Path | None = None,
+    repository_inspection: RepositoryInspection | None = None,
+) -> dict:
+    """Compare the stored project binding with its current and operator-active checkout."""
+    init_schema(conn)
+    row = conn.execute(
+        "SELECT id, root_path, repository_identity, checkout_identity FROM projects WHERE name = ?",
+        (project,),
+    ).fetchone()
+    if not row:
+        return {
+            "state": "unknown_project", "ready": False, "root_fingerprint": None,
+            "repository_fingerprint": None, "checkout_fingerprint": None,
+            "repository_match": False, "checkout_match": False, "root_match": False,
+        }
+    stored_root = row["root_path"]
+    stored_repository = row["repository_identity"]
+    stored_checkout = row["checkout_identity"]
+    bound_exists = bool(stored_root and Path(stored_root).is_dir())
+    if repository_inspection is not None and stored_root:
+        if repository_inspection.root_key != canonical_root_key(stored_root):
+            raise ValueError("repository inspection root does not match the stored project root")
+        bound_repository = repository_inspection.repository_identity if bound_exists else None
+        bound_checkout = repository_inspection.checkout_identity if bound_exists else None
+    else:
+        bound_repository = _inspect_repository_identity(Path(stored_root)) if bound_exists else None
+        bound_checkout = _inspect_checkout_identity(Path(stored_root)) if bound_exists else None
+    bound_repository_match = bool(
+        stored_repository and bound_repository
+        and _repository_identities_match(stored_repository, bound_repository, stored_root)
+    )
+    bound_checkout_match = bool(stored_checkout and bound_checkout == stored_checkout)
+
+    if active_root is None:
+        state = "exact" if bound_exists and bound_repository_match and bound_checkout_match else (
+            "bound_root_missing" if not bound_exists else "binding_drift"
+        )
+        return {
+            "state": state,
+            "ready": state == "exact",
+            "root_fingerprint": _root_fingerprint(stored_root),
+            "repository_fingerprint": _identity_fingerprint(stored_repository),
+            "checkout_fingerprint": _identity_fingerprint(stored_checkout),
+            "repository_match": bound_repository_match,
+            "checkout_match": bound_checkout_match,
+            "root_match": bound_exists,
+        }
+
+    requested = canonical_root(active_root)
+    requested_exists = Path(requested).is_dir()
+    if repository_inspection is not None and repository_inspection.root_key == canonical_root_key(requested):
+        requested_repository = repository_inspection.repository_identity if requested_exists else None
+        requested_checkout = repository_inspection.checkout_identity if requested_exists else None
+    else:
+        requested_repository = _inspect_repository_identity(Path(requested)) if requested_exists else None
+        requested_checkout = _inspect_checkout_identity(Path(requested)) if requested_exists else None
+    root_match = bool(stored_root and same_root(stored_root, requested))
+    repository_match = bool(
+        stored_repository and requested_repository
+        and _repository_identities_match(stored_repository, requested_repository, requested)
+    )
+    checkout_match = bool(stored_checkout and requested_checkout == stored_checkout)
+    if not requested_exists:
+        state = "active_root_missing"
+    elif not repository_match:
+        state = "identity_mismatch"
+    elif root_match and checkout_match:
+        state = "exact"
+    elif repository_match and not checkout_match:
+        state = "wrong_checkout"
+    else:
+        state = "wrong_root"
+    return {
+        "state": state,
+        "ready": state == "exact",
+        "root_fingerprint": _root_fingerprint(stored_root),
+        "active_root_fingerprint": _root_fingerprint(requested),
+        "repository_fingerprint": _identity_fingerprint(stored_repository),
+        "checkout_fingerprint": _identity_fingerprint(stored_checkout),
+        "repository_match": repository_match,
+        "checkout_match": checkout_match,
+        "root_match": root_match,
+    }
 
 
 def ensure_project(
@@ -436,17 +1031,20 @@ def ensure_project(
     name: str,
     root_path: str | None = None,
     allow_root_rebind: bool = False,
+    _commit: bool = True,
 ) -> int:
     init_schema(conn)
     row = conn.execute(
-        "SELECT id, root_path, repository_identity FROM projects WHERE name = ?", (name,)
+        "SELECT id, root_path, repository_identity, checkout_identity FROM projects WHERE name = ?", (name,)
     ).fetchone()
     if row:
         if root_path:
             requested = canonical_root(root_path)
             requested_identity = repository_identity(Path(requested)) if Path(requested).is_dir() else None
+            requested_checkout = checkout_identity(Path(requested)) if Path(requested).is_dir() else None
             stored = row["root_path"]
             stored_identity = row["repository_identity"]
+            stored_checkout = row["checkout_identity"]
             if (
                 stored_identity
                 and requested_identity
@@ -457,46 +1055,58 @@ def ensure_project(
                     "does not match the brain's bound repository"
                 )
             if stored and not same_root(stored, requested):
-                old_root_exists = Path(stored).exists()
-                if old_root_exists and not allow_root_rebind:
-                    raise ValueError(
-                        f"canonical root mismatch for project '{name}': brain is bound to '{stored}', "
-                        f"but '{requested}' was requested; use an explicit root rebind only after verifying the checkout"
-                    )
-                conn.execute(
-                    "UPDATE projects SET root_path = ?, repository_identity = ? WHERE id = ?",
-                    (requested, requested_identity, row["id"]),
+                message = (
+                    "direct project initialization cannot migrate a canonical binding; use root-rebind so a backup "
+                    "and atomic reindex are required"
                 )
-                conn.execute("DELETE FROM repo_manifests WHERE project_id = ?", (row["id"],))
-                conn.execute("DELETE FROM file_hash_cache WHERE project_id = ?", (row["id"],))
-                conn.commit()
+                if not allow_root_rebind:
+                    message = (
+                        f"canonical root mismatch for project '{name}'; use an explicit root-rebind only after "
+                        "verifying the checkout"
+                    )
+                raise ValueError(message)
             elif not stored:
                 conn.execute(
-                    "UPDATE projects SET root_path = ?, repository_identity = ? WHERE id = ?",
-                    (requested, requested_identity, row["id"]),
+                    "UPDATE projects SET root_path = ?, repository_identity = ?, checkout_identity = ? WHERE id = ?",
+                    (requested, requested_identity, requested_checkout, row["id"]),
                 )
-                conn.commit()
+                if _commit:
+                    conn.commit()
             elif not stored_identity:
                 conn.execute(
-                    "UPDATE projects SET repository_identity = ? WHERE id = ?",
-                    (requested_identity, row["id"]),
+                    "UPDATE projects SET repository_identity = ?, checkout_identity = ? WHERE id = ?",
+                    (requested_identity, requested_checkout, row["id"]),
                 )
-                conn.commit()
+                if _commit:
+                    conn.commit()
+            elif not stored_checkout:
+                conn.execute(
+                    "UPDATE projects SET checkout_identity = ? WHERE id = ?",
+                    (requested_checkout, row["id"]),
+                )
+                if _commit:
+                    conn.commit()
+            elif requested_checkout != stored_checkout:
+                raise ValueError(
+                    f"checkout identity mismatch for project '{name}': the canonical path now resolves to a different checkout"
+                )
         return int(row["id"])
     canonical = canonical_root(root_path) if root_path else None
     identity = repository_identity(Path(canonical)) if canonical and Path(canonical).is_dir() else None
+    checkout = checkout_identity(Path(canonical)) if canonical and Path(canonical).is_dir() else None
     cur = conn.execute(
-        "INSERT INTO projects(name, root_path, repository_identity, created_at) VALUES (?, ?, ?, ?)",
-        (name, canonical, identity, now_iso()),
+        "INSERT INTO projects(name, root_path, repository_identity, checkout_identity, created_at) VALUES (?, ?, ?, ?, ?)",
+        (name, canonical, identity, checkout, now_iso()),
     )
-    conn.commit()
+    if _commit:
+        conn.commit()
     return int(cur.lastrowid)
 
 
 def init_project(conn: sqlite3.Connection, name: str, root_path: str, allow_root_rebind: bool = False) -> dict:
     project_id = ensure_project(conn, name, root_path, allow_root_rebind=allow_root_rebind)
     row = conn.execute(
-        "SELECT root_path, repository_identity FROM projects WHERE id = ?", (project_id,)
+        "SELECT root_path, repository_identity, checkout_identity FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
     return {
         "status": "ok",
@@ -505,6 +1115,7 @@ def init_project(conn: sqlite3.Connection, name: str, root_path: str, allow_root
             "name": name,
             "root_path": row["root_path"],
             "repository_identity": row["repository_identity"],
+            "checkout_identity": row["checkout_identity"],
         },
     }
 
@@ -647,6 +1258,30 @@ def add_edge(
     memory_id: int | None = None,
     confidence: float = 1.0,
 ) -> bool:
+    endpoint_rows = conn.execute(
+        "SELECT id, project_id FROM entities WHERE id IN (?, ?)",
+        (from_id, to_id),
+    ).fetchall()
+    endpoint_projects = {int(row["id"]): int(row["project_id"]) for row in endpoint_rows}
+    if (
+        from_id not in endpoint_projects
+        or to_id not in endpoint_projects
+        or endpoint_projects[from_id] != project_id
+        or endpoint_projects[to_id] != project_id
+    ):
+        raise ValueError("edge endpoints must belong to the same project")
+    for table, reference_id, label in (
+        ("sources", source_id, "source"),
+        ("memories", memory_id, "memory"),
+    ):
+        if reference_id is None:
+            continue
+        owner = conn.execute(
+            f"SELECT project_id FROM {table} WHERE id = ?",
+            (reference_id,),
+        ).fetchone()
+        if owner is None or int(owner["project_id"]) != project_id:
+            raise ValueError(f"edge {label} must belong to the same project")
     before = conn.total_changes
     conn.execute(
         """
@@ -864,12 +1499,17 @@ def save_checkpoint(
     for key, value in values.items():
         if len(value) > 20_000:
             raise ValueError(f"checkpoint {key} exceeds the 20,000 character limit")
-    project_id = ensure_project(conn, project)
     source = str(source).strip() or "operator"
     trigger = str(trigger).strip() or "manual"
     session_id = str(session_id).strip() if session_id else None
+    owns_transaction = not conn.in_transaction
+    checkpoint_savepoint = "rta_save_checkpoint"
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        if owns_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+        else:
+            conn.execute(f"SAVEPOINT {checkpoint_savepoint}")
+        project_id = ensure_project(conn, project, _commit=False)
         current = conn.execute(
             "SELECT version FROM checkpoints WHERE project_id = ? ORDER BY version DESC, id DESC LIMIT 1",
             (project_id,),
@@ -881,6 +1521,17 @@ def save_checkpoint(
             )
         version = current_version + 1
         timestamp = now_iso()
+        capture_fence = 0
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'capture_events'"
+        ).fetchone() is not None:
+            capture_fence = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(project_sequence), 0) FROM capture_events "
+                    "WHERE project_id = ?",
+                    (project_id,),
+                ).fetchone()[0]
+            )
         cursor = conn.execute(
             """
             INSERT INTO checkpoints(
@@ -894,10 +1545,22 @@ def save_checkpoint(
                 version, timestamp, timestamp,
             ),
         )
-        if _commit:
+        conn.execute(
+            "INSERT INTO checkpoint_capture_fences("
+            "checkpoint_id, project_id, fence_sequence, created_at"
+            ") VALUES (?, ?, ?, ?)",
+            (int(cursor.lastrowid), project_id, capture_fence, timestamp),
+        )
+        if owns_transaction and _commit:
             conn.commit()
-    except Exception:
-        conn.rollback()
+        elif not owns_transaction:
+            conn.execute(f"RELEASE SAVEPOINT {checkpoint_savepoint}")
+    except BaseException:
+        if owns_transaction:
+            conn.rollback()
+        else:
+            conn.execute(f"ROLLBACK TO SAVEPOINT {checkpoint_savepoint}")
+            conn.execute(f"RELEASE SAVEPOINT {checkpoint_savepoint}")
         raise
     return {
         "status": "ok",
@@ -1179,6 +1842,7 @@ def _ingest_repo_impl(
     force: bool = False,
     repair_deep_stale: bool = False,
     allow_root_rebind: bool = False,
+    root_rebind_capability=None,
     changed_paths=None,
 ) -> dict:
     init_schema(conn)
@@ -1187,7 +1851,39 @@ def _ingest_repo_impl(
         raise ValueError(f"repo path does not exist or is not a directory: {root}")
     if force and repair_deep_stale:
         raise ValueError("force and repair_deep_stale are mutually exclusive")
-    project_id = ensure_project(conn, project, str(root), allow_root_rebind=allow_root_rebind)
+    existing_project = conn.execute(
+        "SELECT id, root_path, repository_identity, checkout_identity FROM projects WHERE name = ?",
+        (project,),
+    ).fetchone()
+    pending_rebind = False
+    requested_repository_identity = repository_identity(root)
+    requested_checkout_identity = checkout_identity(root)
+    if existing_project and existing_project["root_path"] and not same_root(existing_project["root_path"], root):
+        stored_repository_identity = existing_project["repository_identity"]
+        if (
+            stored_repository_identity
+            and not _repository_identities_match(stored_repository_identity, requested_repository_identity, root)
+        ):
+            raise ValueError(
+                f"canonical root mismatch; repository identity mismatch for project '{project}': the requested checkout "
+                "does not match the brain's bound repository"
+            )
+        if not allow_root_rebind or root_rebind_capability is not _ROOT_REBIND_CAPABILITY:
+            raise ValueError(
+                f"canonical root mismatch for project '{project}'; use root-rebind so a backup and atomic reindex "
+                "are required"
+            )
+        project_id = int(existing_project["id"])
+        pending_rebind = True
+    else:
+        project_id = ensure_project(conn, project, str(root), allow_root_rebind=allow_root_rebind)
+    scan_binding_row = conn.execute(
+        "SELECT id, root_path, repository_identity, checkout_identity FROM projects WHERE id = ?",
+        (project_id,),
+    ).fetchone()
+    scan_binding_token = tuple(scan_binding_row[key] for key in (
+        "id", "root_path", "repository_identity", "checkout_identity",
+    ))
     changed_path_keys = _changed_path_keys(root, changed_paths)
     settings = get_project_settings(conn, project)
     max_file_bytes = int(settings["max_file_bytes"])
@@ -1222,7 +1918,7 @@ def _ingest_repo_impl(
         ).fetchone()["count"])
         embedding_index_ready = expected == actual
     if (
-        not force and not repair_deep_stale and not changed_path_keys and embedding_index_ready and prior_manifest
+        not pending_rebind and not force and not repair_deep_stale and not changed_path_keys and embedding_index_ready and prior_manifest
         and prior_manifest["digest"] == manifest_digest and int(prior_manifest["file_count"]) == managed_file_count
     ):
         return {
@@ -1237,6 +1933,33 @@ def _ingest_repo_impl(
             "parser_warnings": [], "manifest_unchanged": True,
         }
     conn.execute("BEGIN IMMEDIATE")
+    current_binding_row = conn.execute(
+        "SELECT id, root_path, repository_identity, checkout_identity FROM projects WHERE id = ?",
+        (project_id,),
+    ).fetchone()
+    current_binding_token = tuple(current_binding_row[key] for key in (
+        "id", "root_path", "repository_identity", "checkout_identity",
+    )) if current_binding_row else None
+    if current_binding_token != scan_binding_token:
+        raise ValueError("project binding changed during repository scan; retry against the current canonical root")
+    if pending_rebind:
+        previous_root = str(existing_project["root_path"])
+        previous_checkout = existing_project["checkout_identity"]
+        conn.execute(
+            "UPDATE projects SET root_path = ?, repository_identity = ?, checkout_identity = ? WHERE id = ?",
+            (str(root), requested_repository_identity, requested_checkout_identity, project_id),
+        )
+        conn.execute("DELETE FROM repo_manifests WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM file_hash_cache WHERE project_id = ?", (project_id,))
+        conn.execute(
+            "INSERT INTO project_root_migrations(project_id, previous_root_fingerprint, new_root_fingerprint, "
+            "previous_checkout_fingerprint, new_checkout_fingerprint, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, 'completed', ?)",
+            (
+                project_id, _root_fingerprint(previous_root), _root_fingerprint(root),
+                _identity_fingerprint(previous_checkout), _identity_fingerprint(requested_checkout_identity), now_iso(),
+            ),
+        )
     existing = {str(row["path"]): dict(row) for row in conn.execute(
         "SELECT id, path, title, hash, metadata_json, updated_at FROM sources WHERE project_id = ? AND kind = 'file'",
         (project_id,),
@@ -1476,8 +2199,11 @@ def ingest_repo(
     repair_deep_stale: bool = False,
     allow_root_rebind: bool = False,
     changed_paths=None,
+    _root_rebind_capability=None,
 ) -> dict:
     """Refresh a repository atomically so failed parses never leak a partial index."""
+    if allow_root_rebind and _root_rebind_capability is not _ROOT_REBIND_CAPABILITY:
+        raise ValueError("direct repository ingestion cannot rebind a project; use root-rebind with a backup path")
     try:
         return _ingest_repo_impl(
             conn,
@@ -1486,11 +2212,224 @@ def ingest_repo(
             force=force,
             repair_deep_stale=repair_deep_stale,
             allow_root_rebind=allow_root_rebind,
+            root_rebind_capability=_root_rebind_capability,
             changed_paths=changed_paths,
         )
     except Exception:
         conn.rollback()
         raise
+
+
+def _sha256_regular_file(path: Path) -> str:
+    before = path.lstat()
+    if (
+        not stat.S_ISREG(before.st_mode) or path.is_symlink() or _is_reparse_point(path)
+        or int(getattr(before, "st_nlink", 1)) != 1
+    ):
+        raise ValueError("backup is not an unlinked regular file")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            raise ValueError("backup changed while it was opened")
+        while True:
+            chunk = stream.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    after = path.lstat()
+    if (after.st_dev, after.st_ino, after.st_size) != (before.st_dev, before.st_ino, before.st_size):
+        raise ValueError("backup changed while it was hashed")
+    return digest.hexdigest()
+
+
+def backup_brain_database(conn: sqlite3.Connection, destination: Path) -> dict:
+    """Create one no-clobber SQLite backup before a root migration."""
+    target = Path(destination).expanduser().resolve()
+    source_row = next((row for row in conn.execute("PRAGMA database_list") if row[1] == "main"), None)
+    if not source_row or not source_row[2]:
+        raise ValueError("brain database path is unavailable")
+    source = Path(source_row[2]).resolve()
+    if target == source:
+        raise ValueError("backup destination must differ from the active brain database")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.parent.is_symlink() or _is_reparse_point(target.parent) or not target.parent.is_dir():
+        raise ValueError("backup destination directory is not a safe directory")
+    if target.exists() or target.is_symlink():
+        raise FileExistsError(f"backup destination already exists: {target}")
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    descriptor = os.open(temporary, flags, 0o600)
+    created_stat = os.fstat(descriptor)
+    os.close(descriptor)
+    destination_conn = None
+    published = False
+    published_identity = None
+    try:
+        destination_conn = sqlite3.connect(temporary)
+        conn.backup(destination_conn)
+        check = destination_conn.execute("PRAGMA integrity_check").fetchone()[0]
+        if check != "ok":
+            raise sqlite3.DatabaseError("backup integrity check failed")
+        destination_conn.close()
+        destination_conn = None
+        written_stat = temporary.lstat()
+        if (written_stat.st_dev, written_stat.st_ino) != (created_stat.st_dev, created_stat.st_ino):
+            raise ValueError("backup temporary file changed identity while SQLite wrote it")
+        if os.name != "nt":
+            temporary.chmod(0o600)
+        os.link(temporary, target)
+        published = True
+        if not os.path.samefile(temporary, target):
+            raise ValueError("backup publication did not preserve file identity")
+        target_stat = target.lstat()
+        published_identity = (target_stat.st_dev, target_stat.st_ino)
+        temporary.unlink()
+        return {
+            "status": "created",
+            "bytes": target.stat().st_size,
+            "sha256": _sha256_regular_file(target),
+        }
+    except Exception:
+        if destination_conn is not None:
+            destination_conn.close()
+        if published:
+            try:
+                target_stat = target.lstat()
+                if published_identity == (target_stat.st_dev, target_stat.st_ino):
+                    target.unlink()
+            except OSError:
+                pass
+        raise
+    finally:
+        if destination_conn is not None:
+            destination_conn.close()
+        temporary.unlink(missing_ok=True)
+
+
+def rebind_project_root(
+    conn: sqlite3.Connection,
+    root: Path,
+    *,
+    project: str = "default",
+    backup_path: Path,
+) -> dict:
+    """Back up, verify, and atomically reindex one project at a new checkout root."""
+    target = Path(root).expanduser().resolve()
+    binding = project_binding_status(conn, project, target)
+    if binding["state"] == "exact":
+        raise ValueError("project is already bound to the requested checkout")
+    if binding["state"] not in {"wrong_checkout", "wrong_root"} or not binding["repository_match"]:
+        raise ValueError("root rebind requires a checkout from the same verified repository lineage")
+    source_row = next((row for row in conn.execute("PRAGMA database_list") if row[1] == "main"), None)
+    if not source_row or not source_row[2]:
+        raise ValueError("brain database path is unavailable")
+    database = Path(source_row[2]).resolve()
+    # A worker retains the old checkout in its process arguments. Require an
+    # explicit stop/rebind/restart sequence so it cannot repopulate stale data.
+    from .continuity_daemon import continuity_status
+    from .watch_daemon import watcher_status
+
+    active_workers = [
+        name
+        for name, state in (
+            ("watcher", watcher_status(database, project).get("state")),
+            ("continuity", continuity_status(database, project).get("state")),
+        )
+        if state in {"starting", "running", "stopping"}
+    ]
+    if active_workers:
+        raise ValueError(
+            "stop managed workers before root rebind: " + ", ".join(active_workers)
+        )
+    from .binding_guard import rebind_guard
+
+    with rebind_guard(database, project):
+        backup = backup_brain_database(conn, backup_path)
+        ingest = ingest_repo(
+            conn, target, project=project, force=True, allow_root_rebind=True,
+            _root_rebind_capability=_ROOT_REBIND_CAPABILITY,
+        )
+    project_id = conn.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()["id"]
+    migration_row = conn.execute(
+        "SELECT id, status, created_at, previous_root_fingerprint, new_root_fingerprint "
+        "FROM project_root_migrations WHERE project_id = ? ORDER BY id DESC LIMIT 1",
+        (project_id,),
+    ).fetchone()
+    return {
+        "status": "ok",
+        "project_fingerprint": _fingerprint(project),
+        "backup": backup,
+        "migration": dict(migration_row) if migration_row else {"status": "missing"},
+        "ingest": {
+            "indexed_files": ingest["indexed_files"],
+            "updated_files": ingest["updated_files"],
+            "removed_files": ingest["removed_files"],
+        },
+    }
+
+
+def integrity_diagnostics(
+    conn: sqlite3.Connection,
+    *,
+    project: str = "default",
+    active_root: str | Path | None = None,
+    repository_inspection: RepositoryInspection | None = None,
+) -> dict:
+    """Return bounded integrity evidence without raw project names or filesystem paths."""
+    init_schema(conn)
+    binding = project_binding_status(
+        conn,
+        project,
+        active_root,
+        repository_inspection=repository_inspection,
+    )
+    project_row = conn.execute("SELECT id, root_path FROM projects WHERE name = ?", (project,)).fetchone()
+    duplicate_root_count = 0
+    latest_migration = None
+    if project_row:
+        root_key = canonical_root_key(project_row["root_path"]) if project_row["root_path"] else None
+        if root_key:
+            for row in conn.execute("SELECT id, root_path FROM projects WHERE id != ?", (project_row["id"],)):
+                if row["root_path"] and canonical_root_key(row["root_path"]) == root_key:
+                    duplicate_root_count += 1
+        migration = conn.execute(
+            "SELECT id, status, created_at FROM project_root_migrations "
+            "WHERE project_id = ? ORDER BY id DESC LIMIT 1",
+            (project_row["id"],),
+        ).fetchone()
+        latest_migration = dict(migration) if migration else None
+    quick_check = conn.execute("PRAGMA quick_check").fetchone()[0]
+    schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    git_state = (
+        repository_inspection.state()
+        if project_row and repository_inspection is not None
+        else repository_state(project_row["root_path"], include_worktree=True) if project_row else {}
+    )
+    privacy_safe_repository_state = {
+        "is_git_repo": bool(git_state.get("is_git_repo")),
+        "branch_fingerprint": _fingerprint(git_state.get("branch")),
+        "head": git_state.get("head"),
+        "dirty_files": git_state.get("dirty_files"),
+    }
+    operationally_ready = bool(
+        quick_check == "ok" and schema_version == SCHEMA_VERSION
+        and binding["ready"] and duplicate_root_count == 0
+    )
+    return {
+        "status": "ok" if operationally_ready else "attention_required",
+        "operationally_ready": operationally_ready,
+        "project_fingerprint": _fingerprint(project),
+        "schema_version": schema_version,
+        "schema_current": schema_version == SCHEMA_VERSION,
+        "sqlite_quick_check": quick_check,
+        "binding": binding,
+        "repository_state": privacy_safe_repository_state,
+        "duplicate_root_count": duplicate_root_count,
+        "latest_migration": latest_migration,
+    }
 
 
 def query_to_fts(query: str) -> str:
@@ -1614,7 +2553,7 @@ def search(
         row = conn.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()
         if not row:
             return {
-                "status": "ok", "query": query, "memories": [], "chunks": [],
+                "status": "ok", "query": query, "memories": [], "chunks": [], "truth": [],
                 "retrieval": {"mode": "fts", "provider": "none"},
             }
         project_id = int(row["id"])
@@ -1805,14 +2744,31 @@ def search(
             "mode": "hybrid", "provider": provider.name, "model": provider.model,
             "semantic_weight": semantic_weight, "candidates": len(merged),
         }
-    selected = {"memories": [item["id"] for item in memories], "chunks": [item["id"] for item in chunks]}
+    truth = []
+    truth_schema_available = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'truth_claim_versions'"
+    ).fetchone()
+    if project and truth_schema_available:
+        from .temporal import search_truth
+
+        truth = search_truth(
+            conn, query, project=project, limit=limit, _initialize=False
+        )
+    selected = {
+        "memories": [item["id"] for item in memories],
+        "chunks": [item["id"] for item in chunks],
+        "truth": [item["claim_id"] for item in truth],
+    }
     if record_recall:
         conn.execute(
             "INSERT INTO recall_logs(project_id, query, selected_json, created_at) VALUES (?, ?, ?, ?)",
             (project_id, query, json.dumps(selected), now_iso()),
         )
         conn.commit()
-    return {"status": "ok", "query": query, "memories": memories, "chunks": chunks, "retrieval": retrieval}
+    return {
+        "status": "ok", "query": query, "memories": memories,
+        "chunks": chunks, "truth": truth, "retrieval": retrieval,
+    }
 
 
 def _memory_norm(text: str) -> str:
@@ -2142,6 +3098,7 @@ def stale_check(
     refresh_hashes: bool = False,
     detail_limit: int = 50,
     include_fresh_details: bool = False,
+    active_root: str | Path | None = None,
 ) -> dict:
     init_schema(conn)
     detail_limit = max(0, min(500, int(detail_limit)))
@@ -2152,6 +3109,16 @@ def stale_check(
             "state": "unknown", "fresh": 0, "changed": 0, "missing": 0, "added": 0,
             "metadata_only": 0, "hash_cache_hits": 0, "hash_cache_misses": 0, "details": [],
             "details_total": 0, "details_truncated": False, "fresh_details_omitted": 0,
+        }
+    binding = project_binding_status(conn, project, active_root)
+    if not binding["ready"]:
+        return {
+            "status": "blocked", "project": project, "mode": "sha256" if deep else "stat-manifest",
+            "state": "wrong_root", "fresh": 0, "changed": 0, "missing": 0, "added": 0,
+            "metadata_only": 0, "uninspectable": 0,
+            "hash_cache_hits": 0, "hash_cache_misses": 0, "details": [],
+            "details_total": 0, "details_truncated": False, "fresh_details_omitted": 0,
+            "binding": binding,
         }
     settings = get_project_settings(conn, project)
     details = []
@@ -2322,6 +3289,11 @@ def stale_check(
 def doctor(conn: sqlite3.Connection) -> dict:
     init_schema(conn)
     fts_enabled = bool(conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_fts'").fetchone())
+    from .temporal import temporal_readiness
+
+    temporal_projects = []
+    for row in conn.execute("SELECT name FROM projects ORDER BY name"):
+        temporal_projects.append(temporal_readiness(conn, project=str(row["name"])))
     return {
         "status": "ok",
         "sqlite_version": sqlite3.sqlite_version,
@@ -2329,4 +3301,16 @@ def doctor(conn: sqlite3.Connection) -> dict:
         "projects": conn.execute("SELECT COUNT(*) AS c FROM projects").fetchone()["c"],
         "memories": conn.execute("SELECT COUNT(*) AS c FROM memories").fetchone()["c"],
         "sources": conn.execute("SELECT COUNT(*) AS c FROM sources").fetchone()["c"],
+        "temporal": {
+            "truth_events": conn.execute("SELECT COUNT(*) AS c FROM truth_events").fetchone()["c"],
+            "current_claims": conn.execute(
+                "SELECT COUNT(*) AS c FROM truth_claim_versions WHERE recorded_to_sequence IS NULL"
+            ).fetchone()["c"],
+            "all_ledgers_intact": all(
+                item["ledger_intact"] for item in temporal_projects
+            ),
+            "projects_with_truth_risk": sum(
+                1 for item in temporal_projects if not item["operationally_ready"]
+            ),
+        },
     }

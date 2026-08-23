@@ -101,11 +101,19 @@ class RtaBrainV2Tests(unittest.TestCase):
     def test_mcp_config_and_v2_tools(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "brain.sqlite"
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            initialized = run_cli(
+                "--db", str(db), "--json", "init", "--project", "demo", "--root", str(repo),
+            )
+            self.assertEqual(initialized.returncode, 0, initialized.stderr)
             config = run_cli("--db", str(db), "--json", "mcp-config", "--project", "demo", "--name", "rta-smriti-demo")
             self.assertEqual(config.returncode, 0, config.stderr)
             payload = json.loads(config.stdout)
             self.assertIn("mcpServers", payload["config"])
-            self.assertEqual(payload["config"]["mcpServers"]["rta-smriti-demo"]["args"][-1], "demo")
+            args = payload["config"]["mcpServers"]["rta-smriti-demo"]["args"]
+            self.assertEqual(args[args.index("--project") + 1], "demo")
+            self.assertEqual(Path(args[args.index("--root") + 1]), repo.resolve())
 
             thread = Path(tmp) / "thread.txt"
             thread.write_text("Decision: Codex should retrieve local brain context before broad scans.", encoding="utf-8")

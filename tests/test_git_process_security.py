@@ -1,9 +1,11 @@
+import os
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import chdir
 from pathlib import Path
 from unittest.mock import patch
 
@@ -83,6 +85,118 @@ class GitProcessSecurityTests(unittest.TestCase):
             self._init_repository(root)
             with patch("rta_brain.repository._configured_command_keys", return_value=None):
                 self.assertIsNone(repository.run_git_inspection(root, "status", "--short"))
+
+    def test_repository_views_do_not_report_a_failed_status_probe_as_clean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            self._init_repository(root)
+
+            with patch("rta_brain.repository._git", return_value=None):
+                state = repository.repository_state(root)
+                inspection = repository.inspect_repository(root)
+
+            self.assertTrue(state["is_git_repo"])
+            self.assertIsNone(state["dirty_files"])
+            self.assertTrue(inspection.is_git_repo)
+            self.assertIsNone(inspection.dirty_files)
+
+    def test_git_clean_validator_is_unavailable_when_status_is_unknown(self):
+        from rta_brain.temporal_validators import evaluate_validator
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch(
+                "rta_brain.temporal_validators.git_anchor_state",
+                return_value={"commit": "a" * 40, "dirty_files": None},
+            ):
+                outcome, evidence = evaluate_validator(
+                    "git_clean_state",
+                    {"clean": True},
+                    active_root=Path(tmp),
+                    allow_command=False,
+                    trusted_executables=[],
+                )
+
+        self.assertEqual(outcome, "unavailable")
+        self.assertEqual(evidence["reason"], "git_status_unknown")
+
+    def test_git_inspection_stops_a_process_when_combined_output_exceeds_the_cap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            marker = root / "chunks-written.txt"
+            producer = root / "produce_output.py"
+            producer.write_text(
+                "import os\n"
+                "import sys\n"
+                "import time\n"
+                "from pathlib import Path\n"
+                "marker = Path(sys.argv[1])\n"
+                "for index in range(4):\n"
+                "    os.write(1, b'x' * 4096)\n"
+                "    marker.write_text(str(index + 1), encoding='utf-8')\n"
+                "    time.sleep(0.25)\n",
+                encoding="utf-8",
+            )
+            command = [sys.executable, str(producer), str(marker)]
+            with (
+                patch(
+                    "rta_brain.repository.trusted_git_candidates",
+                    return_value=[Path(sys.executable)],
+                ),
+                patch("rta_brain.repository._git_command", return_value=command),
+            ):
+                result = repository.run_git_inspection(
+                    root, "status", max_output_bytes=1_024
+                )
+
+            self.assertIsNone(result)
+            self.assertTrue(marker.exists())
+            written = marker.read_text(encoding="utf-8").strip()
+            self.assertLess(
+                int(written) if written else 0,
+                4,
+                "bounded Git inspection consumed the complete oversized stream",
+            )
+
+    def test_executable_config_inspection_does_not_use_unbounded_run_capture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch(
+                "rta_brain.repository.subprocess.run",
+                side_effect=AssertionError("unbounded capture was used"),
+            ):
+                result = repository._configured_command_keys(
+                    Path(sys.executable), Path(tmp), os.environ.copy()
+                )
+        self.assertIsNone(result)
+
+    def test_executable_config_inspection_fails_closed_on_oversized_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch(
+                "rta_brain.repository._run_bounded_capture", return_value=None
+            ):
+                result = repository._configured_command_keys(
+                    Path(sys.executable), Path(tmp), os.environ.copy()
+                )
+        self.assertIsNone(result)
+
+    @unittest.skipUnless(repository.trusted_git_candidates(), "Trusted Git is required")
+    def test_context_benchmark_ignores_project_local_git_shadow(self):
+        from rta_brain.benchmark import run_context_compiler_benchmark
+
+        with tempfile.TemporaryDirectory() as tmp:
+            hostile_root = Path(tmp)
+            if sys.platform == "win32":
+                shutil.copy2(sys.executable, hostile_root / "git.exe")
+            else:
+                shadow = hostile_root / "git"
+                shadow.write_text("#!/bin/sh\nexit 91\n", encoding="utf-8")
+                shadow.chmod(0o755)
+            hostile_path = f"{hostile_root}{os.pathsep}{os.environ.get('PATH', '')}"
+            with patch.dict(os.environ, {"PATH": hostile_path}), chdir(hostile_root):
+                result = run_context_compiler_benchmark()
+
+        self.assertEqual(result["schema_version"], 1)
+        self.assertEqual(result["candidate"]["continuation_success"], 1.0)
 
     def test_hook_cli_resolution_ignores_project_local_shadow_package(self):
         with tempfile.TemporaryDirectory() as tmp:

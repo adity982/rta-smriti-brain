@@ -126,8 +126,16 @@ class RtaBrainBlueprintHardeningTests(unittest.TestCase):
                 identity = conn.execute("SELECT repository_identity FROM projects WHERE name = 'demo'").fetchone()[0]
                 moved = Path(tmp) / "after"
                 shutil.move(str(root), moved)
-                payload = db.init_project(conn, "demo", str(moved))
-                self.assertEqual(payload["project"]["repository_identity"], identity)
+                with self.assertRaisesRegex(ValueError, "root-rebind"):
+                    db.init_project(conn, "demo", str(moved))
+                payload = db.rebind_project_root(
+                    conn, moved, project="demo", backup_path=Path(tmp) / "before-rebind.sqlite",
+                )
+                rebound_identity = conn.execute(
+                    "SELECT repository_identity FROM projects WHERE name = 'demo'"
+                ).fetchone()[0]
+                self.assertEqual(rebound_identity, identity)
+                self.assertEqual(payload["migration"]["status"], "completed")
 
                 other = Path(tmp) / "other"
                 other.mkdir()
@@ -239,7 +247,7 @@ class RtaBrainBlueprintHardeningTests(unittest.TestCase):
             root = Path(tmp) / "repo"
             (root / "00_Source_of_Truth").mkdir(parents=True)
             (root / "03_Tests" / "unit").mkdir(parents=True)
-            goal = root / "00_Source_of_Truth" / "RTA_NET_ACTIVE_GOAL_v004.md"
+            goal = root / "00_Source_of_Truth" / "PROJECT_ACTIVE_GOAL_v004.md"
             goal.write_text(
                 "# Active goal\n\nThe strict current count is 9/12. "
                 "Benchmark breadth and launch qualification remain incomplete.\n",
@@ -249,7 +257,7 @@ class RtaBrainBlueprintHardeningTests(unittest.TestCase):
                 "The active goal remains incomplete at 2/11 requirements.\n" * 20,
                 encoding="utf-8",
             )
-            (root / "00_Source_of_Truth" / "RTA_NET_ACTIVE_GOAL_v003.md").write_text(
+            (root / "00_Source_of_Truth" / "PROJECT_ACTIVE_GOAL_v003.md").write_text(
                 "# Superseded goal\n\nThe strict historical count is 9/11.\n",
                 encoding="utf-8",
             )
@@ -261,7 +269,7 @@ class RtaBrainBlueprintHardeningTests(unittest.TestCase):
                 self.assertTrue(result["retrieval"]["canonical_source_reranking"])
                 self.assertEqual(
                     result["chunks"][0]["path"],
-                    "00_Source_of_Truth/RTA_NET_ACTIVE_GOAL_v004.md",
+                    "00_Source_of_Truth/PROJECT_ACTIVE_GOAL_v004.md",
                 )
                 self.assertGreaterEqual(
                     result["chunks"][0]["source_authority_score"], 60
@@ -269,10 +277,10 @@ class RtaBrainBlueprintHardeningTests(unittest.TestCase):
                 pack = build_context_pack(
                     conn, query, project="demo", limit=2, max_tokens=1200
                 )
-                self.assertIn("RTA_NET_ACTIVE_GOAL_v004.md", pack)
+                self.assertIn("PROJECT_ACTIVE_GOAL_v004.md", pack)
                 if "test_old_goal.py" in pack:
                     self.assertLess(
-                        pack.index("RTA_NET_ACTIVE_GOAL_v004.md"),
+                        pack.index("PROJECT_ACTIVE_GOAL_v004.md"),
                         pack.index("test_old_goal.py"),
                     )
                 self.assertIn("canonical-source candidate", pack)
@@ -315,7 +323,7 @@ class RtaBrainBlueprintHardeningTests(unittest.TestCase):
             root = Path(tmp) / "repo"
             source_truth = root / "00_Source_of_Truth"
             source_truth.mkdir(parents=True)
-            canonical = root / "RTA_NET_LIVE_CONTEXT.md"
+            canonical = root / "PROJECT_LIVE_CONTEXT.md"
             canonical.write_text("latest active status\n" + ("evidence " * 90_000), encoding="utf-8")
             ordinary = root / "ordinary_large_log.md"
             ordinary.write_text("historical log\n" + ("noise " * 120_000), encoding="utf-8")
@@ -329,12 +337,21 @@ class RtaBrainBlueprintHardeningTests(unittest.TestCase):
 
     def test_mcp_heavy_calls_can_run_concurrently(self):
         class SlowServer(RtaBrainMcpServer):
-            def call_tool(self, name, arguments):
+            def _call_tool_with_connection(self, conn, name, args, *, db_path, resolved_project):
                 time.sleep(0.20)
                 return {"name": name}
 
         with tempfile.TemporaryDirectory() as tmp:
-            server = SlowServer(Path(tmp) / "brain.sqlite", "demo")
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            database = root / "brain.sqlite"
+            conn = db.connect(database)
+            try:
+                db.init_project(conn, "demo", str(repo))
+            finally:
+                conn.close()
+            server = SlowServer(database, "demo")
             requests = [
                 {"jsonrpc": "2.0", "id": index, "method": "tools/call", "params": {"name": "brain_doctor", "arguments": {}}}
                 for index in range(2)

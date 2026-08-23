@@ -15,30 +15,126 @@ from pathlib import Path
 from socketserver import TCPServer
 from urllib.parse import parse_qs, urlparse
 
+from .capture import (
+    bind_session,
+    close_session_binding,
+    control_capture_retention,
+    delete_capture_content,
+    export_capture_events,
+    list_capture_policies,
+    list_capture_sources,
+    register_policy,
+    retire_capture_policy,
+    set_capture_source_state,
+)
+from .capture_control import (
+    capture_diagnostics,
+    capture_replay,
+    capture_status_report,
+)
+from .capture_daemon import start_capture, stop_capture
+from .capture_types import CapturePolicy
 from .context import build_context_pack, build_continuation_prompt
+from .context_host import (
+    audit_context_for_operator,
+    authorize_context_contract,
+    build_task_contract,
+    compile_context_for_agent,
+    ensure_context_agent_profile,
+    explain_context_for_agent,
+    record_context_outcome_for_operator,
+    revoke_context_compilation_grant,
+)
+from .continuity import operational_readiness
+from .continuity_daemon import continuity_status, start_continuity, stop_continuity
 from .db import (
-    attach_memory_provenance, connect, get_project_settings, graph, graph_query, ingest_repo, init_schema,
-    latest_checkpoint, reflect, remember, save_checkpoint, search, stale_check, update_project_settings,
+    attach_memory_provenance,
+    connect,
+    get_project_settings,
+    graph,
+    graph_query,
+    ingest_repo,
+    init_schema,
+    integrity_diagnostics,
+    latest_checkpoint,
+    reflect,
+    remember,
+    save_checkpoint,
+    search,
+    stale_check,
+    update_project_settings,
 )
 from .diagnostics import retrieval_diagnostics
-from .parsers import ParserRegistry
-from .project import mcp_config_payload, mcp_doctor, runtime_shell, shell_cli_command, projects_list, self_check
-from .repository import canonical_root, canonical_root_key, repository_state, trusted_git_candidates
-from .governance import build_operational_context, create_policy, list_policies, list_receipts, preflight, retire_policy
+from .governance import (
+    build_operational_context,
+    create_policy,
+    list_policies,
+    list_receipts,
+    preflight,
+    retire_policy,
+)
 from .hooks import install_git_hooks, uninstall_git_hooks
 from .lifecycle import apply_memory_feedback, run_conservative_decay
+from .parsers import ParserRegistry
 from .portability import (
-    export_bundle, import_bundle, inspect_bundle, snapshot_create, snapshot_create_encrypted,
-    snapshot_keygen, snapshot_passphrase_keygen, snapshot_restore_encrypted, snapshot_verify,
+    export_bundle,
+    import_bundle,
+    inspect_bundle,
+    snapshot_create,
+    snapshot_create_encrypted,
+    snapshot_keygen,
+    snapshot_passphrase_keygen,
+    snapshot_restore_encrypted,
+    snapshot_verify,
     snapshot_verify_encrypted,
+)
+from .project import (
+    mcp_config_payload,
+    mcp_doctor,
+    projects_list,
+    runtime_shell,
+    self_check,
+    shell_cli_command,
+)
+from .repository import (
+    canonical_root,
+    canonical_root_key,
+    inspect_repository,
+    trusted_git_candidates,
+)
+from .temporal import (
+    append_claim,
+    attach_evidence,
+    change_claim_state,
+    define_validator,
+    observe_repository_anchor,
+    rebuild_projections,
+    record_abstention,
+    redact_truth_for_operator,
+    relate_claims,
+    revise_claim,
+    run_validator,
+    truth_as_of,
+    truth_at_commit,
+    truth_current,
+    truth_diff,
+    truth_explain,
+    truth_history,
+    truth_overview,
+    validator_history,
+    verify_ledger,
 )
 from .watch_daemon import start_watcher, stop_watcher, watcher_status
 from .workspaces import (
-    add_project_to_workspace, create_workspace, delete_workspace, get_workspace, list_workspaces,
-    remove_project_from_workspace, search_workspace, workspace_health,
+    add_project_to_workspace,
+    create_workspace,
+    delete_workspace,
+    get_workspace,
+    list_workspaces,
+    remove_project_from_workspace,
+    search_workspace,
+    workspace_health,
 )
-from .continuity_daemon import continuity_status, start_continuity, stop_continuity
-from .continuity import operational_readiness
 
 
 @dataclass(frozen=True)
@@ -54,6 +150,32 @@ class ConsoleConfig:
 MAX_REQUEST_BYTES = 1_048_576
 MAX_TREE_ITEMS = 500
 MAX_FILE_PREVIEW_CHARS = 20_000
+
+
+def _capture_policy_from_payload(payload: dict) -> CapturePolicy:
+    profile = str(payload.get("profile", "continuity")).strip().lower()
+    if profile == "metadata-only":
+        base = CapturePolicy.metadata_only()
+    elif profile == "continuity":
+        base = CapturePolicy.continuity()
+    elif profile == "forensic":
+        base = CapturePolicy(profile="forensic", retain_payloads=True)
+    else:
+        raise ValueError("capture policy profile must be metadata-only, continuity, or forensic")
+    retain_payloads = payload.get("retain_payloads", base.retain_payloads)
+    if type(retain_payloads) is not bool:
+        raise ValueError("retain_payloads must be a boolean")
+    return CapturePolicy(
+        profile=base.profile,
+        enabled_event_names=base.enabled_event_names,
+        field_allowlist=base.field_allowlist,
+        privacy_ceiling=str(payload.get("privacy_ceiling", base.privacy_ceiling)),
+        retain_payloads=retain_payloads,
+        retention_seconds=int(payload.get("retention_seconds", base.retention_seconds)),
+        max_event_bytes=int(payload.get("max_event_bytes", base.max_event_bytes)),
+        max_field_chars=int(payload.get("max_field_chars", base.max_field_chars)),
+        max_collection_items=int(payload.get("max_collection_items", base.max_collection_items)),
+    )
 
 
 def _trusted_git_candidates() -> list[Path]:
@@ -93,11 +215,21 @@ def _open_db(db_path: str | Path) -> sqlite3.Connection:
     return connect(Path(db_path).expanduser().resolve())
 
 
+def _project_root(conn: sqlite3.Connection, project: str) -> Path:
+    row = conn.execute(
+        "SELECT root_path FROM projects WHERE name = ?", (str(project).strip(),)
+    ).fetchone()
+    if not row or not row["root_path"]:
+        raise ValueError("temporal truth mutation requires a canonical project root")
+    return Path(str(row["root_path"])).expanduser().resolve()
+
+
 def scan_brain_databases(brain_dir: Path) -> list[dict]:
     brain_dir = brain_dir.expanduser().resolve()
     if not brain_dir.exists():
         return []
     entries: list[dict] = []
+    repository_inspections = {}
     for db_path in sorted(brain_dir.glob("*.sqlite")):
         conn = None
         try:
@@ -107,9 +239,22 @@ def scan_brain_databases(brain_dir: Path) -> list[dict]:
             init_schema(conn)
             payload = projects_list(conn)
             for project in payload["projects"]:
-                health = self_check(conn, project=project["name"], check_files=False)
+                root_path = project.get("root_path")
+                root_key = canonical_root_key(root_path) if root_path else ""
+                inspection = repository_inspections.get(root_key)
+                if inspection is None:
+                    inspection = inspect_repository(root_path)
+                    repository_inspections[root_key] = inspection
+                health = self_check(
+                    conn,
+                    project=project["name"],
+                    check_files=False,
+                    active_root=root_path if root_path and Path(root_path).is_dir() else None,
+                    repository_inspection=inspection,
+                )
                 project_id = int(project["id"])
-                git = repository_state(project.get("root_path"))
+                git = inspection.state()
+                integrity = health["integrity"]
                 entries.append(
                     {
                         "status": "ok",
@@ -121,7 +266,8 @@ def scan_brain_databases(brain_dir: Path) -> list[dict]:
                         "canonical_root": canonical_root(project["root_path"]) if project.get("root_path") else None,
                         "git": git,
                         "created_at": project.get("created_at"),
-                        "ready": bool(health["ready"]),
+                        "ready": bool(health["ready"] and integrity["operationally_ready"]),
+                        "integrity": integrity,
                         "sources": int(health["sources"]),
                         "memories": int(health["memories"]),
                         "entities": int(health["entities"]),
@@ -145,14 +291,19 @@ def scan_brain_databases(brain_dir: Path) -> list[dict]:
             if conn is not None:
                 conn.close()
     roots_by_project: dict[str, dict[str, str]] = {}
+    projects_by_root: dict[str, list[dict]] = {}
     for entry in entries:
         if entry.get("status") != "ok" or not entry.get("canonical_root"):
             continue
         root = str(entry["canonical_root"])
         roots_by_project.setdefault(str(entry["project"]).casefold(), {})[canonical_root_key(root)] = root
+        projects_by_root.setdefault(canonical_root_key(root), []).append(entry)
     for entry in entries:
         roots = roots_by_project.get(str(entry.get("project", "")).casefold(), {})
         entry["root_conflict"] = len(roots) > 1
+        root_owners = projects_by_root.get(canonical_root_key(entry["canonical_root"]), []) if entry.get("canonical_root") else []
+        entry["root_duplicate"] = len(root_owners) > 1
+        entry["ready"] = bool(entry.get("ready") and not entry["root_conflict"] and not entry["root_duplicate"])
         if len(roots) > 1:
             entry["root_conflict_roots"] = sorted(roots.values())
     return entries
@@ -757,6 +908,14 @@ def make_handler(config: ConsoleConfig):
                     finally:
                         conn.close()
                     return
+                if parsed.path == "/api/integrity":
+                    q = _query(self)
+                    conn = _open_db(resolve_brain_db(config, q["db_path"]))
+                    try:
+                        self._json(integrity_diagnostics(conn, project=q["project"]))
+                    finally:
+                        conn.close()
+                    return
                 if parsed.path == "/api/workspace-health":
                     q = _query(self)
                     conn = _open_db(resolve_brain_db(config, q["db_path"]))
@@ -799,6 +958,112 @@ def make_handler(config: ConsoleConfig):
                     finally:
                         conn.close()
                     return
+                if parsed.path == "/api/truth":
+                    q = _query(self)
+                    conn = _open_db(resolve_brain_db(config, q["db_path"]))
+                    try:
+                        mode = q.get("mode", "overview")
+                        if mode == "overview":
+                            result = truth_overview(
+                                conn, project=q["project"],
+                                limit=int(q.get("limit", "100")),
+                            )
+                        elif mode == "current":
+                            result = truth_current(
+                                conn, project=q["project"], claim_id=q["claim_id"],
+                                valid_at=q.get("valid_at"),
+                            )
+                        elif mode == "history":
+                            result = truth_history(
+                                conn, project=q["project"], claim_id=q["claim_id"],
+                                limit=int(q.get("limit", "100")),
+                            )
+                        elif mode == "explain":
+                            result = truth_explain(
+                                conn, project=q["project"], claim_id=q["claim_id"],
+                                valid_at=q.get("valid_at"),
+                            )
+                        elif mode == "as-of":
+                            result = truth_as_of(
+                                conn, project=q["project"], claim_id=q["claim_id"],
+                                valid_at=q["valid_at"],
+                                recorded_sequence=int(q["recorded_sequence"]),
+                            )
+                        elif mode == "diff":
+                            result = truth_diff(
+                                conn, project=q["project"],
+                                from_sequence=int(q["from_sequence"]),
+                                to_sequence=int(q["to_sequence"]),
+                                valid_at=q["valid_at"],
+                                limit=int(q.get("limit", "100")),
+                            )
+                        elif mode == "at-commit":
+                            result = truth_at_commit(
+                                conn, project=q["project"], claim_id=q["claim_id"],
+                                commit=q["commit"], valid_at=q["valid_at"],
+                            )
+                        elif mode == "validator-history":
+                            result = validator_history(
+                                conn, project=q["project"],
+                                validator_id=q["validator_id"],
+                                limit=int(q.get("limit", "100")),
+                            )
+                        elif mode == "ledger":
+                            result = verify_ledger(conn, project=q["project"])
+                        else:
+                            raise ValueError(f"unsupported truth query mode: {mode}")
+                        self._json(redact_truth_for_operator(result))
+                    finally:
+                        conn.close()
+                    return
+                if parsed.path == "/api/capture":
+                    q = _query(self)
+                    database = resolve_brain_db(config, q["db_path"])
+                    conn = _open_db(database)
+                    try:
+                        project = q["project"]
+                        mode = str(q.get("mode", "overview")).strip().lower()
+                        root = _project_root(conn, project)
+                        if mode == "overview":
+                            result = capture_status_report(
+                                conn, database=database, project=project,
+                            )
+                        elif mode == "sources":
+                            result = list_capture_sources(conn, project=project)
+                        elif mode == "policies":
+                            result = list_capture_policies(
+                                conn,
+                                project=project,
+                                include_retired=q.get("include_retired", "").lower()
+                                in {"1", "true", "yes"},
+                            )
+                        elif mode in {"timeline", "replay"}:
+                            replay_mode = (
+                                "chronological" if mode == "timeline"
+                                else str(q.get("replay_mode", "chronological"))
+                            )
+                            result = capture_replay(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                mode=replay_mode,
+                                after_sequence=int(q.get("after_sequence", "0")),
+                                limit=int(q.get("limit", "100")),
+                                privacy_ceiling=q.get("privacy_ceiling", "internal"),
+                            )
+                        elif mode == "diagnostics":
+                            result = capture_diagnostics(
+                                conn,
+                                database=database,
+                                project=project,
+                                active_root=root,
+                            )
+                        else:
+                            raise ValueError("capture mode must be overview, sources, policies, timeline, replay, or diagnostics")
+                        self._json(result)
+                    finally:
+                        conn.close()
+                    return
                 if parsed.path == "/api/publish-readiness":
                     self._json(publish_readiness(config.tool_root))
                     return
@@ -811,7 +1076,7 @@ def make_handler(config: ConsoleConfig):
                     self.send_error(404)
                     return
                 self._file(asset)
-            except (KeyError, ValueError, json.JSONDecodeError) as exc:
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 self._json({"status": "error", "error": {"type": exc.__class__.__name__, "message": str(exc)}}, status=400)
             except Exception as exc:
                 self._json({"status": "error", "error": {"type": exc.__class__.__name__, "message": "request could not be completed"}}, status=500)
@@ -825,6 +1090,104 @@ def make_handler(config: ConsoleConfig):
                     self._json({"status": "error", "error": {"type": "UnsupportedMediaType", "message": "application/json is required"}}, status=415)
                     return
                 payload = _read_body(self)
+                if self.path == "/api/context-compiler":
+                    database = resolve_brain_db(config, payload["db_path"])
+                    conn = _open_db(database)
+                    try:
+                        project = str(payload["project"])
+                        action = str(payload["action"])
+                        if action == "authorize-and-compile":
+                            profile = ensure_context_agent_profile(
+                                conn,
+                                project=project,
+                                profile_id=str(payload["profile_id"]),
+                                actor_id="dashboard-operator",
+                                max_input_tokens=int(payload["max_input_tokens"]),
+                                privacy_ceiling=str(
+                                    payload.get("privacy_ceiling", "internal")
+                                ),
+                            )
+                            contract = build_task_contract(
+                                project=project,
+                                agent_profile_id=str(payload["profile_id"]),
+                                objective=str(payload["objective"]),
+                                actor_id="dashboard-operator",
+                                comparison_modes=list(payload.get("comparison_modes", [])),
+                                compiler_mode=str(payload.get("compiler_mode", "balanced")),
+                                max_input_tokens=int(payload["max_input_tokens"]),
+                                privacy_ceiling=str(
+                                    payload.get("privacy_ceiling", "internal")
+                                ),
+                            )
+                            authorized = authorize_context_contract(
+                                conn,
+                                project=project,
+                                agent_profile_version_id=profile[
+                                    "agent_profile_version_id"
+                                ],
+                                contract=contract,
+                                actor_id="dashboard-operator",
+                            )
+                            result = compile_context_for_agent(
+                                conn,
+                                db_path=database,
+                                project=project,
+                                active_root=_project_root(conn, project),
+                                task_contract_id=authorized["task_contract_id"],
+                                principal_id=str(payload["principal_id"]),
+                                session_id=str(payload["session_id"]),
+                                variant_id=str(payload.get("variant", "primary")),
+                            )
+                            result["authorization"] = {
+                                "task_contract_id": authorized["task_contract_id"],
+                                "contract_id": authorized["contract_id"],
+                                "agent_profile_version_id": profile[
+                                    "agent_profile_version_id"
+                                ],
+                            }
+                        elif action == "explain":
+                            result = explain_context_for_agent(
+                                conn,
+                                db_path=database,
+                                project=project,
+                                compilation_id=str(payload["compilation_id"]),
+                                principal_id=str(payload["principal_id"]),
+                                session_id=str(payload["session_id"]),
+                            )
+                        elif action == "audit":
+                            result = audit_context_for_operator(
+                                conn,
+                                db_path=database,
+                                project=project,
+                                compilation_id=str(payload["compilation_id"]),
+                                operator_id="dashboard-operator",
+                                session_id=str(payload["session_id"]),
+                            )
+                        elif action == "outcome":
+                            result = record_context_outcome_for_operator(
+                                conn,
+                                db_path=database,
+                                project=project,
+                                compilation_id=str(payload["compilation_id"]),
+                                operator_id="dashboard-operator",
+                                session_id=str(payload["session_id"]),
+                                outcome=dict(payload["outcome"]),
+                            )
+                        elif action == "revoke":
+                            result = revoke_context_compilation_grant(
+                                conn,
+                                db_path=database,
+                                project=project,
+                                compilation_id=str(payload["compilation_id"]),
+                                operator_id="dashboard-operator",
+                                reason=str(payload["reason"]),
+                            )
+                        else:
+                            raise ValueError("unknown context compiler action")
+                        self._json(result)
+                    finally:
+                        conn.close()
+                    return
                 if self.path == "/api/context-pack":
                     conn = _open_db(resolve_brain_db(config, payload["db_path"]))
                     try:
@@ -847,6 +1210,131 @@ def make_handler(config: ConsoleConfig):
                     conn = _open_db(resolve_brain_db(config, payload["db_path"]))
                     try:
                         self._json(search(conn, payload["query"], project=payload.get("project"), limit=int(payload.get("limit", 8))))
+                    finally:
+                        conn.close()
+                    return
+                if self.path == "/api/truth":
+                    conn = _open_db(resolve_brain_db(config, payload["db_path"]))
+                    try:
+                        project = str(payload["project"])
+                        root = _project_root(conn, project)
+                        action = str(payload["action"])
+                        common = {
+                            "project": project,
+                            "active_root": root,
+                            "actor_type": "operator",
+                            "actor_id": "dashboard-operator",
+                            "source": "dashboard",
+                        }
+                        if action == "assert":
+                            result = append_claim(
+                                conn, **common,
+                                claim_id=payload.get("claim_id"),
+                                subject=str(payload["subject"]),
+                                predicate=str(payload["predicate"]),
+                                value=payload["value"],
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                                valid_from=payload.get("valid_from"),
+                                valid_to=payload.get("valid_to"),
+                                expires_at=payload.get("expires_at"),
+                                epistemic_state=str(payload.get("state", "observed")),
+                                state_reason=str(payload.get("reason", "")),
+                                authority_class="operator",
+                                confidence=float(payload.get("confidence", 1.0)),
+                                verification_status=str(payload.get("verification_status", "unverified")),
+                                privacy_class=str(payload.get("privacy_class", "internal")),
+                            )
+                        elif action == "revise":
+                            result = revise_claim(
+                                conn, **common, claim_id=str(payload["claim_id"]),
+                                value=payload["value"], reason=str(payload["reason"]),
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                                valid_from=payload.get("valid_from"),
+                                valid_to=payload.get("valid_to"),
+                            )
+                        elif action == "state":
+                            result = change_claim_state(
+                                conn, **common, claim_id=str(payload["claim_id"]),
+                                new_state=str(payload["state"]), reason=str(payload["reason"]),
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                            )
+                        elif action == "relate":
+                            result = relate_claims(
+                                conn, **common, relation_id=payload.get("relation_id"),
+                                from_claim_id=str(payload["from_claim_id"]),
+                                relation_type=str(payload["relation_type"]),
+                                to_claim_id=str(payload["to_claim_id"]),
+                                confidence=float(payload.get("confidence", 0.7)),
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                            )
+                        elif action == "evidence":
+                            provenance = payload.get("provenance", {})
+                            if not isinstance(provenance, dict):
+                                raise ValueError("truth evidence provenance must be an object")
+                            result = attach_evidence(
+                                conn, **common, claim_id=str(payload["claim_id"]),
+                                evidence_id=str(payload["evidence_id"]),
+                                source_identifier=str(payload["source_identifier"]),
+                                source_hash=payload.get("source_hash"),
+                                method=str(payload["method"]),
+                                polarity=str(payload["polarity"]),
+                                authority_class="operator",
+                                confidence=float(payload.get("confidence", 1.0)),
+                                uncertainty=str(payload.get("uncertainty", "")),
+                                provenance=provenance,
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                                verification_status=str(payload.get("verification_status", "unverified")),
+                                privacy_class=str(payload.get("privacy_class", "internal")),
+                            )
+                        elif action == "abstain":
+                            result = record_abstention(
+                                conn, **common, abstention_id=payload.get("abstention_id"),
+                                query_scope=str(payload["query_scope"]),
+                                missing_evidence=list(payload.get("missing_evidence", [])),
+                                unresolved_conflicts=list(payload.get("unresolved_conflicts", [])),
+                                minimum_revalidation_action=str(payload["minimum_revalidation_action"]),
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                            )
+                        elif action == "validator-add":
+                            validator_type = str(payload["validator_type"])
+                            if validator_type == "command_exit":
+                                raise ValueError("command validators must be defined and run from the owner CLI")
+                            config_payload = payload.get("config", {})
+                            if not isinstance(config_payload, dict):
+                                raise ValueError("validator config must be an object")
+                            result = define_validator(
+                                conn, **common, validator_id=str(payload["validator_id"]),
+                                validator_type=validator_type, claim_id=str(payload["claim_id"]),
+                                config=config_payload, failure_effect=str(payload["failure_effect"]),
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                            )
+                        elif action == "validator-run":
+                            result = run_validator(
+                                conn, **common, validator_id=str(payload["validator_id"]),
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                                allow_command=False, trusted_executables=(),
+                            )
+                        elif action == "anchor":
+                            result = observe_repository_anchor(
+                                conn, **common, anchor_id=str(payload["anchor_id"]),
+                                idempotency_key=str(payload["idempotency_key"]),
+                                expected_stream_version=int(payload["expected_version"]),
+                            )
+                        elif action == "rebuild":
+                            result = rebuild_projections(
+                                conn, project=project, active_root=root,
+                            )
+                        else:
+                            raise ValueError(f"unsupported truth action: {action}")
+                        self._json(redact_truth_for_operator(result))
                     finally:
                         conn.close()
                     return
@@ -974,6 +1462,138 @@ def make_handler(config: ConsoleConfig):
                             inactivity_seconds=float(payload.get("inactivity", 900.0)),
                         )
                     )
+                    return
+                if self.path == "/api/capture":
+                    database = resolve_brain_db(config, payload["db_path"])
+                    project = str(payload["project"])
+                    action = str(payload.get("action", "status")).strip().lower()
+                    if action == "daemon-start":
+                        conn = _open_db(database)
+                        try:
+                            _project_root(conn, project)
+                        finally:
+                            conn.close()
+                        self._json(start_capture(
+                            database,
+                            interval_seconds=float(payload.get("interval", 1.0)),
+                            batch_size=int(payload.get("batch_size", 100)),
+                        ))
+                        return
+                    if action == "daemon-stop":
+                        conn = _open_db(database)
+                        try:
+                            _project_root(conn, project)
+                        finally:
+                            conn.close()
+                        self._json(stop_capture(
+                            database, timeout=float(payload.get("timeout", 10.0)),
+                        ))
+                        return
+                    conn = _open_db(database)
+                    try:
+                        root = _project_root(conn, project)
+                        if action == "policy-preview":
+                            policy = _capture_policy_from_payload(payload)
+                            result = {
+                                "status": "ok",
+                                "policy": policy.as_dict(),
+                                "policy_digest": policy.digest,
+                                "writes_state": False,
+                            }
+                        elif action == "policy-register":
+                            policy = _capture_policy_from_payload(payload)
+                            result = register_policy(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                policy_id=payload.get("policy_id", policy.profile),
+                                policy_version=int(payload.get("policy_version", 1)),
+                                policy=policy,
+                            )
+                        elif action == "policy-retire":
+                            result = retire_capture_policy(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                policy_digest=payload["policy_digest"],
+                            )
+                        elif action == "source-state":
+                            result = set_capture_source_state(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                source_id=payload["source_id"],
+                                state=payload["state"],
+                            )
+                        elif action == "bind-session":
+                            result = bind_session(
+                                conn,
+                                database=database,
+                                project=project,
+                                active_root=root,
+                                source_id=payload["source_id"],
+                                external_session_id=payload["external_session_id"],
+                                cursor_kind=payload.get("cursor_kind", "sequence"),
+                                start_cursor=str(payload.get("start_cursor", "0")),
+                                operator_id="dashboard-operator",
+                            )
+                        elif action == "close-session":
+                            result = close_session_binding(
+                                conn,
+                                database=database,
+                                project=project,
+                                active_root=root,
+                                binding_id=payload["binding_id"],
+                                operator_id="dashboard-operator",
+                            )
+                        elif action in {"retention-preview", "retention-confirm"}:
+                            result = control_capture_retention(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                policy_digest=payload["policy_digest"],
+                                run_id=payload["run_id"],
+                                actor_id="dashboard-operator",
+                                batch_size=int(payload.get("batch_size", 100)),
+                                confirm=action == "retention-confirm",
+                                confirmation_token=payload.get("confirmation_token"),
+                            )
+                        elif action in {"redaction-preview", "export"}:
+                            result = export_capture_events(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                after_sequence=int(payload.get("after_sequence", 0)),
+                                limit=int(payload.get("limit", 100)),
+                                privacy_ceiling=payload.get("privacy_ceiling", "internal"),
+                                max_bytes=int(payload.get("max_bytes", 2_000_000)),
+                            )
+                            if action == "redaction-preview":
+                                result = {**result, "operation": "redaction-preview", "writes_state": False}
+                        elif action in {"deletion-preview", "deletion-confirm"}:
+                            result = delete_capture_content(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                scope=payload["scope"],
+                                scope_token=payload["scope_token"],
+                                reason_class=payload.get("reason_class", "operator-request"),
+                                actor_id="dashboard-operator",
+                                policy_digest=payload["policy_digest"],
+                                confirm=action == "deletion-confirm",
+                                confirmation_token=payload.get("confirmation_token"),
+                                secure_compact=payload.get("secure_compact", False),
+                            )
+                        else:
+                            raise ValueError(
+                                "capture action must be policy-preview, policy-register, policy-retire, "
+                                "source-state, bind-session, close-session, retention-preview, "
+                                "retention-confirm, redaction-preview, "
+                                "deletion-preview, deletion-confirm, export, daemon-start, or daemon-stop"
+                            )
+                        self._json(result)
+                    finally:
+                        conn.close()
                     return
                 if self.path == "/api/preflight":
                     conn = _open_db(resolve_brain_db(config, payload["db_path"]))
@@ -1186,7 +1806,7 @@ def make_handler(config: ConsoleConfig):
                     )
                     return
                 self._json({"status": "error", "error": {"type": "NotFound", "message": self.path}}, status=404)
-            except (KeyError, ValueError, json.JSONDecodeError) as exc:
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 self._json({"status": "error", "error": {"type": exc.__class__.__name__, "message": str(exc)}}, status=400)
             except Exception as exc:
                 self._json({"status": "error", "error": {"type": exc.__class__.__name__, "message": "request could not be completed"}}, status=500)

@@ -9,6 +9,8 @@
 
 **A local project brain for AI coding agents. `v0.6.0-alpha` is now published with lower-friction indexing, safer continuity, encrypted snapshots, and multi-project operation.**
 
+The current development line has completed the canonical-identity, temporal-truth, and governed-context kernels and is qualifying an uncommitted `v0.9.0-alpha` universal-capture candidate. The latest public prerelease remains `v0.6.0-alpha`; no later candidate is represented as published until its exact diff, cross-platform evidence, privacy review, and owner approval are complete.
+
 [Latest prerelease assets](https://github.com/sulabhdubey/rta-smriti-brain/releases) · [Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second product demo](launch-assets/product-hunt/rta-smriti-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Public benchmark](docs/PUBLIC_BENCHMARK.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
 
 Rta-Smriti Brain turns a project repository, long agent threads, durable decisions, and evidence into a small local memory graph that Codex, Claude Code, Cursor, or any MCP-capable agent can reuse before doing work.
@@ -44,11 +46,14 @@ and resilient multi-project workspaces.
 - Indexes your repo into local SQLite: files, chunks, symbols, imports, and graph edges.
 - Stores durable memories: decisions, constraints, procedures, facts, and hypotheses.
 - Binds every project brain to one canonical root and refuses silent checkout switching.
+- Distinguishes clones and Git worktrees with a per-checkout identity, reports privacy-safe root/repository/checkout fingerprints, and revalidates every MCP call.
+- Requires explicit, backup-first root rebinding even when an old folder disappeared; repository scans recheck the binding inside their write transaction before committing.
 - Records structured checkpoints: objective, verified evidence, remaining gaps, next action, and prohibited repetition.
 - Attaches source path, hash, verification command, timestamp, and verification status to remembered claims.
 - Ingests long threads or handoff notes as explicitly unverified prior memory so useful context survives compaction without self-assigning trust.
 - Incrementally captures matching local Codex sessions with resumable byte cursors, bounded/redacted event payloads, and conservative interruption checkpoints.
 - Builds a focused **context pack** for the next agent task.
+- Compiles governed agent-specific context from immutable task contracts, explicit acceptance and stop conditions, privacy grants, and explainable selection receipts.
 - Enforces a hard context token budget and keeps direct evidence ahead of low-trust historical memory.
 - Runs a local operator console with graph, canvas, typed bases, context-pack receipts, memory ledger, freshness checks, and bootstrap flow.
 - Exposes a dependency-light stdio MCP server for agent integrations.
@@ -147,6 +152,26 @@ $BrainDir = "$env:USERPROFILE\Documents\Rta-Smriti\brains"
 BrainDir="$HOME/.local/share/rta-smriti/brains"
 "$RtaBrain" start /path/to/my-project --project my-project --brain-dir "$BrainDir" --write-agents
 ```
+
+Verify that commands are operating on the intended checkout by passing its root:
+
+```powershell
+& $RtaBrain --db "$BrainDir\my-project.sqlite" --json self-check --project my-project --check-files --root C:\path\to\my-project
+```
+
+```bash
+"$RtaBrain" --db "$BrainDir/my-project.sqlite" --json self-check --project my-project --check-files --root /path/to/my-project
+```
+
+If a project intentionally moves to another clone or worktree of the same repository, stop its watcher and continuity worker, create a no-clobber backup, rebind, then restart the workers. Rta-Smriti refuses cross-repository rebinding and rolls back the binding and index if reindexing fails:
+
+```powershell
+& $RtaBrain --db "$BrainDir\my-project.sqlite" watcher stop --project my-project
+& $RtaBrain --db "$BrainDir\my-project.sqlite" continuity stop --project my-project
+& $RtaBrain --db "$BrainDir\my-project.sqlite" --json root-rebind C:\new\checkout --project my-project --backup C:\backups\my-project-before-rebind.sqlite
+```
+
+Use `integrity-diagnostics --root <checkout>` for a bounded report safe to share: it contains fingerprints and counts, not raw project names or filesystem paths.
 
 ## Dashboard
 
@@ -255,11 +280,14 @@ ingest-repo       Index a repository or folder
 watch-repo        Continuously refresh a repository using incremental indexing
 watcher           Start, inspect, or stop managed background repository sync
 continuity        Start, inspect, or stop managed Codex transcript capture
+capture           Operate the governed universal capture journal
 settings          Read or update a project's indexing and retrieval policy
 ingest-thread     Index a long thread, transcript, or handoff file
 search            Search memories and indexed files
 graph             Read the local entity graph
 graph-query       Traverse a bounded dependency, dependent, impact, evidence, or relevance subgraph
+truth             Query the bitemporal truth ledger and validator history
+context           Govern and compile agent-specific context
 retrieval-diagnostics Explain retrieval mode, coverage, rank components, freshness, and evidence
 benchmark         Run the packaged reproducible public benchmark
 workspace         Create, inspect, and search an isolated multi-brain workspace
@@ -303,16 +331,22 @@ Python environment; do not hand-edit a Windows path into a macOS or Linux host.
 The generated server is project-bound and read-only by default. Memory writes,
 canonical-repository ingestion, and thread ingestion require explicit startup
 capabilities: `--allow-memory-writes`, `--allow-repo-ingestion`, and
-`--allow-thread-ingestion`. Thread ingestion also requires one or more
+`--allow-thread-ingestion`. Starting or stopping the continuity worker is a
+separate process-control grant, `--allow-continuity-control`. Thread ingestion also requires one or more
 `--allow-thread-root` values; the selected file is consumed through the same
 descriptor-bound root check. Agent-authored memories are always stored as
 unverified `anumana` with confidence capped at `0.75`. Owner-only governance
 mutation, required-check attestation, and overrides are never exposed to MCP.
+Single-project configuration is emitted only for an exact, healthy canonical
+binding and always pins `--root`. A live stdio server holds a local process
+lease, so `root-rebind` refuses to move its project until the MCP host stops.
 
 Tools exposed:
 
 - `brain_search`
 - `brain_context_pack`
+- `brain_context_compile`
+- `brain_context_explain`
 - `brain_remember`
 - `brain_remember_batch`
 - `brain_ingest_repo`
@@ -340,6 +374,12 @@ Tools exposed:
 - `brain_preflight` (agents cannot attest checks or override)
 - `brain_governance_receipts`
 - `brain_doctor`
+
+`brain_context_compile` and `brain_context_explain` are fail-closed MCP tools.
+They are exposed only when the operator starts a single-project MCP server with
+`--context-contract ID:DIGEST` for an authorized task contract. A plain
+generated MCP configuration keeps search, context packs, repository maps, and
+truth reads available without granting governed compilation rights.
 
 ## Real-World Use Cases
 

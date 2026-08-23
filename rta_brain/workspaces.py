@@ -239,7 +239,8 @@ def search_workspace(conn, *, workspace: str, query: str, limit_per_project: int
             continue
         results.append({
             "project": item["project"], "role": item["role"],
-            "retrieval": result["retrieval"], "memories": result["memories"], "chunks": result["chunks"],
+            "retrieval": result["retrieval"], "memories": result["memories"],
+            "chunks": result["chunks"], "truth": result.get("truth", []),
         })
     return {
         "status": "degraded" if errors else "ok",

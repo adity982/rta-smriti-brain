@@ -37,9 +37,16 @@ Run the bundled scan over every tracked or unignored public candidate. Add each 
 ```powershell
 python scripts/privacy_scan.py
 python scripts/privacy_scan.py --deny-term '<replace-with-private-name>'
+python scripts/privacy_scan.py --root '<release-artifact-directory>'
 ```
 
 The bundled check covers credential signatures, Windows/POSIX/UNC user paths, forbidden release files, static bundles, and media bytes up to 25 MB. It never prints a matched secret value.
+Artifact-directory mode does not require Git metadata. It rejects missing, empty,
+linked, reparse-point, special-file, and unreadable roots; scans standalone files
+plus bounded members inside wheel, ZIP, nested ZIP, and renamed ZIP containers;
+parses archives from the descriptor-bound bytes already inspected; applies
+platform-neutral member-path rules; and enforces scan-wide file, byte, expanded
+byte, archive-entry, nesting, and time budgets.
 
 Also run a maintained secret scanner over Git history and the current release candidates. Install Gitleaks from its official release, then run:
 
