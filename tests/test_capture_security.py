@@ -55,8 +55,8 @@ class BrainDatabaseBoundaryTests(unittest.TestCase):
                     side_effect=lambda path: hardened.append(Path(path)),
                 ),
                 mock.patch(
-                    "rta_brain.capture_spool.windows_path_is_private",
-                    return_value=True,
+                    "rta_brain.capture_spool.windows_path_privacy_failure",
+                    return_value=None,
                 ),
             ):
                 conn = db.connect(database)
@@ -105,8 +105,8 @@ class BrainDatabaseBoundaryTests(unittest.TestCase):
                     side_effect=lambda path: hardened.append(Path(path)),
                 ),
                 mock.patch(
-                    "rta_brain.capture_spool.windows_path_is_private",
-                    return_value=True,
+                    "rta_brain.capture_spool.windows_path_privacy_failure",
+                    return_value=None,
                 ) as private,
             ):
                 conn = db.connect(database)
@@ -129,8 +129,8 @@ class BrainDatabaseBoundaryTests(unittest.TestCase):
                     "rta_brain.capture_spool.ensure_windows_path_private"
                 ) as harden,
                 mock.patch(
-                    "rta_brain.capture_spool.windows_path_is_private",
-                    return_value=False,
+                    "rta_brain.capture_spool.windows_path_privacy_failure",
+                    return_value="foreign_allow_principal",
                 ),
                 self.assertRaisesRegex(PermissionError, "shared.*not private"),
             ):

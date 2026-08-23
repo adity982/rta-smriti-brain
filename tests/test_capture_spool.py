@@ -750,6 +750,18 @@ class CaptureSpoolTests(unittest.TestCase):
                 )
             self.assertEqual(state["schema"], "rta-smriti.capture-usage/v1")
 
+    def test_windows_sddl_accepts_administrators_as_private_owner(self):
+        from rta_brain.capture_spool import _windows_sddl_is_private
+
+        sid = "S-1-5-21-1000"
+        alias_owner = f"O:BAD:P(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FA;;;BA)"
+        canonical_owner = (
+            "O:S-1-5-32-544D:P"
+            f"(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FA;;;BA)"
+        )
+        self.assertTrue(_windows_sddl_is_private(alias_owner, sid))
+        self.assertTrue(_windows_sddl_is_private(canonical_owner, sid))
+
     def test_windows_sddl_rejects_unrecognized_allow_ace_types(self):
         from rta_brain.capture_spool import _windows_sddl_is_private
 

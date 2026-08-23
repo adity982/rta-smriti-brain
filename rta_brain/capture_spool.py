@@ -427,15 +427,20 @@ def _windows_sddl_privacy_failure(sddl: str, current_sid: str) -> str | None:
     if owner is None:
         return "owner_missing"
     owner_principal = owner.group(1)
-    if owner_principal != current_sid:
-        if os.name != "nt" or owner_principal.startswith("S-1-"):
-            return "owner_mismatch_sid"
+    allowed_owner_sids = {current_sid, "S-1-5-32-544"}
+    if owner_principal == "BA":
+        owner_sid = "S-1-5-32-544"
+    elif owner_principal.startswith("S-1-"):
+        owner_sid = owner_principal
+    elif os.name == "nt":
         try:
             owner_sid = _windows_sddl_alias_sid(owner_principal)
         except SpoolError:
             return "owner_alias_unresolved"
-        if owner_sid != current_sid:
-            return "owner_mismatch_alias"
+    else:
+        return "owner_mismatch_alias"
+    if owner_sid not in allowed_owner_sids:
+        return "owner_mismatch"
     allowed_aliases = {"SY", "BA", "OW"}
     allowed_sids = {current_sid, "S-1-5-18", "S-1-5-32-544", "S-1-3-4"}
     aces = re.findall(r"\(([^()]*(?:\([^()]*\)[^()]*)*)\)", sddl)
