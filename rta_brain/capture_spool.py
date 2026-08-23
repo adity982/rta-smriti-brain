@@ -432,7 +432,15 @@ def _windows_sddl_privacy_failure(sddl: str, current_sid: str) -> str | None:
             return "owner_alias_unresolved"
         if owner_sid != current_sid:
             return "owner_mismatch_alias"
-    allowed = {current_sid, "SY", "BA", "OW"}
+    allowed = {
+        current_sid,
+        "SY",
+        "BA",
+        "OW",
+        "S-1-5-18",
+        "S-1-5-32-544",
+        "S-1-3-4",
+    }
     aces = re.findall(r"\(([^()]*(?:\([^()]*\)[^()]*)*)\)", sddl)
     if not aces:
         return "allow_ace_missing"
@@ -536,7 +544,15 @@ def _windows_sddl_alias_sid(principal: str) -> str:
 
 
 def _windows_foreign_allow_sids(sddl: str, current_sid: str) -> tuple[str, ...]:
-    allowed = {current_sid, "SY", "BA", "OW"}
+    allowed = {
+        current_sid,
+        "SY",
+        "BA",
+        "OW",
+        "S-1-5-18",
+        "S-1-5-32-544",
+        "S-1-3-4",
+    }
     foreign: set[str] = set()
     for ace in re.findall(r"\(([^()]*(?:\([^()]*\)[^()]*)*)\)", sddl):
         fields = ace.split(";")

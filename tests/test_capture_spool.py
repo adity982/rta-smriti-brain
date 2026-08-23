@@ -773,6 +773,16 @@ class CaptureSpoolTests(unittest.TestCase):
             self.assertTrue(capture_spool._windows_sddl_is_private(sddl, sid))
         resolve.assert_called_once_with("LA")
 
+    def test_windows_sddl_accepts_canonical_private_trustee_sids(self):
+        from rta_brain.capture_spool import _windows_sddl_is_private
+
+        sid = "S-1-5-21-1000"
+        canonical = (
+            f"O:{sid}D:P(A;;FA;;;{sid})"
+            "(A;;FA;;;S-1-5-18)(A;;FA;;;S-1-5-32-544)"
+        )
+        self.assertTrue(_windows_sddl_is_private(canonical, sid))
+
     def test_windows_foreign_allow_aliases_are_resolved_before_removal(self):
         from rta_brain import capture_spool
 
