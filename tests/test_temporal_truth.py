@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from rta_brain import db
 
@@ -1500,11 +1501,19 @@ class TemporalTruthGovernanceTests(unittest.TestCase):
                     "idempotency_key": "shared-key",
                     "expected_stream_version": 0,
                 }
-                append_claim(**request)
-                replay = append_claim(**request)
-                self.assertTrue(replay["idempotent_replay"])
-                with self.assertRaisesRegex(ValueError, "different truth request"):
-                    append_claim(**{**request, "claim_id": "claim-b", "subject": "b"})
+                with patch(
+                    "rta_brain.temporal.db.now_iso",
+                    side_effect=[
+                        "2026-08-23T10:00:00+00:00",
+                        "2026-08-23T10:00:01+00:00",
+                        "2026-08-23T10:00:02+00:00",
+                    ],
+                ):
+                    append_claim(**request)
+                    replay = append_claim(**request)
+                    self.assertTrue(replay["idempotent_replay"])
+                    with self.assertRaisesRegex(ValueError, "different truth request"):
+                        append_claim(**{**request, "claim_id": "claim-b", "subject": "b"})
                 self.assertEqual(
                     conn.execute("SELECT COUNT(*) FROM truth_events").fetchone()[0], 1
                 )
