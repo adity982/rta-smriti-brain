@@ -764,14 +764,14 @@ class CaptureSpoolTests(unittest.TestCase):
         from rta_brain import capture_spool
 
         sid = "S-1-5-21-1000"
-        sddl = f"O:LAD:P(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FA;;;BA)"
+        sddl = "O:LAD:P(A;;FA;;;LA)(A;;FA;;;SY)(A;;FA;;;BA)"
         with mock.patch.object(
             capture_spool,
             "_windows_sddl_alias_sid",
             return_value=sid,
         ) as resolve:
             self.assertTrue(capture_spool._windows_sddl_is_private(sddl, sid))
-        resolve.assert_called_once_with("LA")
+        self.assertEqual(resolve.call_args_list, [mock.call("LA"), mock.call("LA")])
 
     def test_windows_sddl_accepts_canonical_private_trustee_sids(self):
         from rta_brain.capture_spool import _windows_sddl_is_private

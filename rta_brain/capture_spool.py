@@ -432,15 +432,8 @@ def _windows_sddl_privacy_failure(sddl: str, current_sid: str) -> str | None:
             return "owner_alias_unresolved"
         if owner_sid != current_sid:
             return "owner_mismatch_alias"
-    allowed = {
-        current_sid,
-        "SY",
-        "BA",
-        "OW",
-        "S-1-5-18",
-        "S-1-5-32-544",
-        "S-1-3-4",
-    }
+    allowed_aliases = {"SY", "BA", "OW"}
+    allowed_sids = {current_sid, "S-1-5-18", "S-1-5-32-544", "S-1-3-4"}
     aces = re.findall(r"\(([^()]*(?:\([^()]*\)[^()]*)*)\)", sddl)
     if not aces:
         return "allow_ace_missing"
@@ -458,7 +451,15 @@ def _windows_sddl_privacy_failure(sddl: str, current_sid: str) -> str | None:
         principals.add(principal)
     if not principals:
         return "allow_ace_missing"
-    if not principals.issubset(allowed):
+    for principal in principals:
+        if principal in allowed_aliases or principal in allowed_sids:
+            continue
+        if os.name == "nt" and not principal.startswith("S-1-"):
+            try:
+                if _windows_sddl_alias_sid(principal) in allowed_sids:
+                    continue
+            except SpoolError:
+                pass
         return "foreign_allow_principal"
     return None
 
@@ -544,27 +545,22 @@ def _windows_sddl_alias_sid(principal: str) -> str:
 
 
 def _windows_foreign_allow_sids(sddl: str, current_sid: str) -> tuple[str, ...]:
-    allowed = {
-        current_sid,
-        "SY",
-        "BA",
-        "OW",
-        "S-1-5-18",
-        "S-1-5-32-544",
-        "S-1-3-4",
-    }
+    allowed_aliases = {"SY", "BA", "OW"}
+    allowed_sids = {current_sid, "S-1-5-18", "S-1-5-32-544", "S-1-3-4"}
     foreign: set[str] = set()
     for ace in re.findall(r"\(([^()]*(?:\([^()]*\)[^()]*)*)\)", sddl):
         fields = ace.split(";")
         if len(fields) < 6 or fields[0] not in {"A", "OA"}:
             continue
         principal = fields[5]
-        if principal in allowed:
+        if principal in allowed_aliases or principal in allowed_sids:
             continue
         if principal.startswith("S-1-"):
             foreign.add(principal)
             continue
-        foreign.add(_windows_sddl_alias_sid(principal))
+        resolved = _windows_sddl_alias_sid(principal)
+        if resolved not in allowed_sids:
+            foreign.add(resolved)
     return tuple(sorted(foreign))
 
 
