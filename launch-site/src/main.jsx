@@ -28,10 +28,10 @@ import {
 import "./styles.css";
 
 const repositoryUrl = import.meta.env.VITE_REPOSITORY_URL || "https://github.com/sulabhdubey/rta-smriti-brain";
-const releaseUrl = `${repositoryUrl}/releases/tag/v0.6.0-alpha`;
-const ciRunUrl = `${repositoryUrl}/actions/runs/32484754948`;
-const nativeRunUrl = `${repositoryUrl}/actions/runs/32487134222`;
-const productHuntUrl = "https://www.producthunt.com/products/rta-smriti-brain?launch=rta-smriti-brain&utm_source=website&utm_medium=referral&utm_campaign=v060_release";
+const releaseUrl = `${repositoryUrl}/releases/tag/v0.9.0-alpha`;
+const ciRunUrl = `${repositoryUrl}/actions/workflows/ci.yml`;
+const nativeRunUrl = `${repositoryUrl}/actions/workflows/binaries.yml`;
+const productHuntUrl = "https://www.producthunt.com/products/rta-smriti-brain?launch=rta-smriti-brain&utm_source=website&utm_medium=referral&utm_campaign=v090_release";
 
 const installCommand = "python -m pip install .";
 const agents = ["Codex", "Claude Code", "Cursor", "GitHub Copilot CLI", "Gemini CLI", "Aider", "Cline", "Any MCP agent"];
@@ -83,7 +83,7 @@ function Hero() {
       <div className="heroScrim" />
       <HeroGraph />
       <div className="heroContent shell">
-        <div className="eyebrow"><LockKeyhole size={14} /> v0.6.0-alpha · Published prerelease · Local-first</div>
+        <div className="eyebrow"><LockKeyhole size={14} /> v0.9.0-alpha · Universal Capture · Local-first</div>
         <h1>Rta-Smriti Brain</h1>
         <p className="heroLead">Give every software project a private memory that survives new chats, agent switches, context compaction, and interrupted work.</p>
         <div className="heroActions">
@@ -92,7 +92,7 @@ function Hero() {
         </div>
         <a className="launchConversation" href={productHuntUrl}><MessageCircle size={15} /> Live on Product Hunt <span>Join the conversation</span><ExternalLink size={13} /></a>
         <div className="heroProof" aria-label="Product proof points">
-          <span><strong>v0.6</strong> published prerelease</span>
+          <span><strong>v0.9</strong> governed continuity</span>
           <span><strong>hosted</strong> CI green</span>
           <span><strong>0</strong> cloud accounts required</span>
         </div>
@@ -141,8 +141,8 @@ function ProblemBand() {
 const featureTabs = [
   ["graph", "Graph", Network, "See files, imports, symbols, memories, and evidence as one inspectable project system."],
   ["files", "Files", FileCode2, "Browse the real indexed tree, preview source, and add exact paths to the next task."],
-  ["memory", "Memory", Database, "Keep durable decisions, structured checkpoints, and work-state records separate from transient chat history."],
-  ["packs", "Context Packs", Zap, "Compile only the evidence relevant to the next agent objective."],
+  ["memory", "Truth", Database, "Inspect bitemporal claims, evidence, contradictions, checkpoints, and work state instead of flattening them into notes."],
+  ["packs", "Capture", Zap, "Normalize opt-in agent events privately, then compile only governed evidence for the next objective."],
 ];
 
 function ProductSection() {
@@ -169,9 +169,9 @@ function ProductSection() {
 
 function Architecture() {
   const stages = [
-    ["Inputs", "Repositories, threads, decisions", GitBranch],
-    ["Local brain", "SQLite, FTS5, graph, evidence", Database],
-    ["Continuity layer", "Transcript capture, checkpoints, reconciliation", Sparkles],
+    ["Inputs", "Repositories, decisions, opt-in agent events", GitBranch],
+    ["Private capture", "Bounded spool, redaction, normalization", LockKeyhole],
+    ["Truth + context", "Bitemporal evidence, governed packs", Database],
     ["Any agent", "Paste, CLI, skill, or MCP gateway", BrainCircuit],
   ];
   return (
@@ -190,7 +190,7 @@ function Architecture() {
           ))}
         </div>
         <div className="architectureFacts">
-          <span><Check size={15} /> Python 3.11+</span><span><Check size={15} /> Bundled Tree-sitter</span><span><Check size={15} /> Local SQLite</span><span><Check size={15} /> Multi-project MCP gateway</span><span><Check size={15} /> Ed25519 + encrypted snapshots</span>
+          <span><Check size={15} /> Python 3.11+</span><span><Check size={15} /> Private bounded spool</span><span><Check size={15} /> Bitemporal SQLite truth</span><span><Check size={15} /> Governed MCP gateway</span><span><Check size={15} /> Ed25519 + encrypted snapshots</span>
         </div>
       </div>
     </section>
@@ -224,11 +224,11 @@ function PramanaSection() {
 
 function Difference() {
   const rows = [
-    ["Plain second brain", "Notes", "Repo evidence + decisions + handoffs"],
-    ["Code indexer", "File search", "Durable memory + task-specific packs"],
-    ["Vector memory", "Similar text", "Evidence class + freshness + inspectability"],
-    ["Agent chat memory", "One vendor", "Agent-neutral project layer"],
-    ["MCP memory server", "Tools only", "CLI + MCP gateway + console + bootstrap + checks"],
+    ["Plain second brain", "Notes", "Event-backed project truth + evidence"],
+    ["Code indexer", "File search", "Durable memory + governed context packs"],
+    ["Vector memory", "Similar text", "Trust class + time + freshness + receipts"],
+    ["Agent chat memory", "One vendor", "Bounded opt-in capture across agents"],
+    ["MCP memory server", "Tools only", "Capability-separated CLI + MCP + console"],
   ];
   return (
     <section className="difference" id="difference">
@@ -279,7 +279,7 @@ function Install() {
   return (
     <section className="installSection" id="install">
       <div className="shell installGrid">
-        <div><span className="sectionIndex">07 / START LOCAL</span><h2>Your first project brain is one command away.</h2><p>Download v0.6.0-alpha or install it from source, then bootstrap one private SQLite brain per project.</p><p><a href={releaseUrl}>Release assets</a> · <a href={ciRunUrl}>CI matrix</a> · <a href={nativeRunUrl}>Native builds</a></p></div>
+        <div><span className="sectionIndex">07 / START LOCAL</span><h2>Your first project brain is one command away.</h2><p>Download v0.9.0-alpha or install it from source, then bootstrap one private SQLite brain per project.</p><p><a href={releaseUrl}>Release assets</a> · <a href={ciRunUrl}>CI matrix</a> · <a href={nativeRunUrl}>Native builds</a></p></div>
         <div className="terminalBlock">
           <div className="terminalHeader"><span><i /> <i /> <i /></span><strong>PowerShell</strong><CopyButton value={installCommand} /></div>
           <code><span>$</span> {installCommand}</code>

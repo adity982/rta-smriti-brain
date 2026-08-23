@@ -1,7 +1,8 @@
-# Rta-Smriti Brain v0.9.0-alpha Candidate
+# Rta-Smriti Brain v0.9.0-alpha
 
-`v0.9.0-alpha` is an uncommitted local candidate. It is not tagged, published,
-or promoted as the latest release.
+`v0.9.0-alpha` is the Universal Capture prerelease. It joins canonical project
+identity, bitemporal truth, governed context compilation, and private
+agent-session capture into one local, inspectable continuity system.
 
 ## Universal Capture
 
@@ -61,14 +62,15 @@ or promoted as the latest release.
   schema, journal proof, redaction proof, payload exclusion, canonical-path
   exclusion, and provider-credential exclusion rather than checking only its
   filename.
-- The package README and CLI inventory identify this as the uncommitted v0.9
-  universal-capture candidate while keeping v0.6 as the latest public release.
+- The package README, CLI inventory, installation guide, verification record,
+  and website identify v0.9 consistently and link to the same formal prerelease.
 
 ## Qualification Contract
 
-The locally frozen candidate passed:
+The frozen source candidate passed:
 
-- 752 Python tests, with 22 explicit optional-dependency skips and 649 subtests;
+- 760 Python tests, with 23 explicit optional-dependency or privilege skips and
+  649 subtests on Windows;
 - dashboard unit tests plus the complete rendered Playwright operator journey;
 - the dedicated Universal Capture operator journey, including parsed export
   integrity and privacy assertions;
@@ -80,11 +82,17 @@ The locally frozen candidate passed:
 - repository and artifact privacy scans, Gitleaks history and working-tree
   scans, actionlint, npm audit, Python dependency audit, wheel inspection, and
   checksum verification; and
-- a fresh scan of the frozen snapshot covering five security surfaces with complete
-  coverage, zero findings, and no changed-tree warning.
+- hosted CI on Windows, macOS, and Ubuntu across Python 3.11, 3.12, and 3.13.
 
-These results qualify the local Windows candidate only. The release remains
-blocked on an exact public-only commit, hosted Windows/macOS/Linux CI, native
-artifacts from the tag, public checksum and installation verification, and the
-owner's separate publication approvals. Any code or release-relevant content
-change invalidates the affected evidence and requires proportionate reruns.
+A later Codex Deep Security Scan coordinator attempt did not inspect the
+workspace because both workers were blocked, and its completion call rejected a
+non-UUID scan identifier. It therefore produced no usable sealed report and is
+not represented as security coverage. Release confidence instead rests on the
+completed code-specific security tests, threat-model controls, Gitleaks,
+dependency audits, privacy scans, and cross-platform hosted matrix documented in
+the [verification record](RELEASE_VERIFICATION.md).
+
+Tag-generated binaries, wheel, SBOMs, and checksums are accepted only after the
+native workflow passes and downloaded assets match the combined manifest. Any
+code or release-relevant content change invalidates the affected evidence and
+requires proportionate reruns.

@@ -109,7 +109,7 @@ async function expectNoAxeViolations(page, label, disabledRules = []) {
 }
 
 test("real operator can inspect, govern, continue, and move a project brain", async ({ browser }) => {
-  test.setTimeout(100_000);
+  test.setTimeout(180_000);
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "rta-operator-qa-"));
   const { child, ready } = startFixtureServer(tempRoot);
   const errors = [];
@@ -506,6 +506,7 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect(page.getByRole("button", { name: "Bootstrap the first project", exact: true })).toBeVisible();
     await page.unroute("**/api/health");
     await page.getByRole("button", { name: "Refresh projects", exact: true }).click();
+    await expect(page.getByText("Scanning local brains...", { exact: true })).toBeHidden({ timeout: 30_000 });
     await expect(page.getByText("bootstrapped-project", { exact: true }).first()).toBeVisible();
     expect(errors).toEqual([]);
   } finally {

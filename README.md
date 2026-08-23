@@ -7,9 +7,9 @@
 [![Release](https://img.shields.io/github/v/release/sulabhdubey/rta-smriti-brain?include_prereleases&label=release)](https://github.com/sulabhdubey/rta-smriti-brain/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
 
-**A local project brain for AI coding agents. `v0.6.0-alpha` is now published with lower-friction indexing, safer continuity, encrypted snapshots, and multi-project operation.**
+**A local project brain for AI coding agents. `v0.9.0-alpha` adds governed universal capture, bitemporal project truth, and context compilation without turning captured text into authority.**
 
-The current development line has completed the canonical-identity, temporal-truth, and governed-context kernels and is qualifying an uncommitted `v0.9.0-alpha` universal-capture candidate. The latest public prerelease remains `v0.6.0-alpha`; no later candidate is represented as published until its exact diff, cross-platform evidence, privacy review, and owner approval are complete.
+Rta-Smriti now connects repository intelligence, durable decisions, agent-session continuity, and evidence-aware retrieval through a private local event journal. Capture is opt-in, bounded, redacted before durable queuing, and explicitly treated as untrusted evidence until an operator or verifier promotes a claim.
 
 [Latest prerelease assets](https://github.com/sulabhdubey/rta-smriti-brain/releases) · [Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second product demo](launch-assets/product-hunt/rta-smriti-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Public benchmark](docs/PUBLIC_BENCHMARK.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
 
@@ -23,23 +23,20 @@ Rta-Smriti gives each project a memory that stays on your machine.
 
 ## Latest Release
 
-[`v0.6.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.6.0-alpha)
-is the latest formal GitHub prerelease. It points to
-commit `6c086f5e421f8ec5506e7ee6e6cb0296ca43fed3` and was verified by
-[GitHub Actions run 32484754948](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32484754948)
-on Windows, macOS, and Ubuntu across Python 3.11, 3.12, and 3.13.
+[`v0.9.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.0-alpha)
+is the current formal GitHub prerelease. Its exact tagged source is qualified by
+the hosted Windows, macOS, and Ubuntu matrix across Python 3.11, 3.12, and 3.13.
+The tag workflow builds and smoke-tests Windows x64, Linux x64, and macOS
+standalone binaries, a universal wheel, CycloneDX SBOMs, and a combined
+`SHA256SUMS.txt`; see the [release verification record](docs/RELEASE_VERIFICATION.md)
+for the evidence boundary and post-publication checks.
 
-The prerelease includes Windows x64, Linux x64, and macOS standalone binaries
-plus `SHA256SUMS.txt`. The native binaries were built and smoke-tested by
-[Native binaries run 32487134222](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32487134222).
-All three binaries were downloaded from their public release URLs and matched
-the published manifest. The Windows binary also passed `--version` and a clean
-`doctor` smoke test.
-
-This alpha adds bounded continuity capture, warmed hash caching, metadata-only
-oversized-file isolation, bundled Tree-sitter grammars, native LSP discovery,
-encrypted portable snapshots, MCP diagnostics, historical benchmark reports,
-and resilient multi-project workspaces.
+This alpha adds canonical project identity, an event-sourced bitemporal truth
+kernel, a governed context compiler, and Universal Capture: opt-in adapters feed
+a private bounded spool and normalization daemon that records redacted,
+hash-chained continuity events for supported coding agents. Replay is causal and
+non-executing, retention and deletion are capability-separated, and default MCP
+views remain project-scoped and path-free.
 
 ## What It Does
 
@@ -197,7 +194,7 @@ sessions, or pass `--sessions-root` when Codex stores sessions somewhere else.
 
 The dashboard runs on `127.0.0.1` and includes:
 
-![Rta-Smriti v0.6 operator console with evidence graph and retrieval diagnostics](launch-assets/screenshots/operator-console-v0.6.png)
+![Rta-Smriti operator console with evidence graph and retrieval diagnostics](launch-assets/screenshots/operator-console-v0.6.png)
 
 - **Project switcher**: every local brain, readiness, file count, memory count
 - **Canonical-root and Git identity**: bound project root, repository root, branch, HEAD, dirty-file count, and duplicate-root warnings
