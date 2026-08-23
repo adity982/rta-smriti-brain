@@ -69,7 +69,7 @@ agent-session capture into one local, inspectable continuity system.
 
 The frozen source candidate passed:
 
-- 760 Python tests, with 23 explicit optional-dependency or privilege skips and
+- 783 Python tests, with 23 explicit optional-dependency or privilege skips and
   649 subtests on Windows;
 - dashboard unit tests plus the complete rendered Playwright operator journey;
 - the dedicated Universal Capture operator journey, including parsed export
