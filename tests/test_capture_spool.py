@@ -759,6 +759,20 @@ class CaptureSpoolTests(unittest.TestCase):
         self.assertTrue(_windows_sddl_is_private(safe, sid))
         self.assertFalse(_windows_sddl_is_private(conditional_world, sid))
 
+    @unittest.skipUnless(os.name == "nt", "Windows SDDL owner alias test")
+    def test_windows_sddl_owner_alias_is_resolved_before_validation(self):
+        from rta_brain import capture_spool
+
+        sid = "S-1-5-21-1000"
+        sddl = f"O:LAD:P(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FA;;;BA)"
+        with mock.patch.object(
+            capture_spool,
+            "_windows_sddl_alias_sid",
+            return_value=sid,
+        ) as resolve:
+            self.assertTrue(capture_spool._windows_sddl_is_private(sddl, sid))
+        resolve.assert_called_once_with("LA")
+
     def test_windows_foreign_allow_aliases_are_resolved_before_removal(self):
         from rta_brain import capture_spool
 
