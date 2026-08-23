@@ -418,27 +418,37 @@ def windows_path_is_private(path: Path) -> bool:
         return False
 
 
-def _windows_sddl_is_private(sddl: str, current_sid: str) -> bool:
+def _windows_sddl_privacy_failure(sddl: str, current_sid: str) -> str | None:
     owner = re.match(r"^O:(.*?)(?=G:|D:|S:)", sddl)
-    if owner is None or owner.group(1) != current_sid:
-        return False
+    if owner is None:
+        return "owner_missing"
+    if owner.group(1) != current_sid:
+        return "owner_mismatch"
     allowed = {current_sid, "SY", "BA", "OW"}
     aces = re.findall(r"\(([^()]*(?:\([^()]*\)[^()]*)*)\)", sddl)
     if not aces:
-        return False
+        return "allow_ace_missing"
     principals: set[str] = set()
     for ace in aces:
         fields = ace.split(";")
         if len(fields) < 6:
-            return False
+            return "ace_malformed"
         ace_type = fields[0]
         principal = fields[5]
         if ace_type in {"D", "OD"}:
             continue
         if ace_type not in {"A", "OA"}:
-            return False
+            return "ace_type_unsupported"
         principals.add(principal)
-    return bool(principals) and principals.issubset(allowed)
+    if not principals:
+        return "allow_ace_missing"
+    if not principals.issubset(allowed):
+        return "foreign_allow_principal"
+    return None
+
+
+def _windows_sddl_is_private(sddl: str, current_sid: str) -> bool:
+    return _windows_sddl_privacy_failure(sddl, current_sid) is None
 
 
 def _windows_sddl_alias_sid(principal: str) -> str:
@@ -573,8 +583,12 @@ def ensure_windows_path_private(path: Path) -> None:
             f"*S-1-5-32-544:{inheritance}",
         ]
     )
-    if not windows_path_is_private(path):
-        raise SpoolUnsafeError("cannot enforce a private Windows capture ACL")
+    final_sddl = _windows_security_descriptor(Path(path))
+    failure = _windows_sddl_privacy_failure(final_sddl, sid)
+    if failure is not None:
+        raise SpoolUnsafeError(
+            f"cannot enforce a private Windows capture ACL: {failure}"
+        )
 
 
 def _harden_windows_directory(path: Path) -> None:

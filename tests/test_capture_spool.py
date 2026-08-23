@@ -837,6 +837,7 @@ class CaptureSpoolTests(unittest.TestCase):
 
         self.assertEqual(events[:3], ["owner", "inheritance", "descriptor"])
 
+    @unittest.skipUnless(os.name == "nt", "Windows ACL ownership test")
     def test_windows_acl_hardening_sets_current_user_as_owner(self):
         from rta_brain import capture_spool
 
