@@ -11,7 +11,7 @@ EXPECTED_DISPLAY_VERSION = "0.9.0-alpha"
 
 
 class ReleaseMetadataTests(unittest.TestCase):
-    def test_candidate_version_is_consistent_across_release_surfaces(self):
+    def test_release_version_is_consistent_across_public_surfaces(self):
         pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
         package_lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
@@ -33,18 +33,17 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(package_lock["version"], EXPECTED_DISPLAY_VERSION)
         self.assertEqual(package_lock["packages"][""]["version"], EXPECTED_DISPLAY_VERSION)
         self.assertIn(f'"{EXPECTED_PYTHON_VERSION}" not in version', binary_smoke)
-        self.assertIn("v0.9 Development Operator Console", dashboard)
+        self.assertIn("v0.9 Alpha Operator Console", dashboard)
         self.assertIn("version: 0.9.0-alpha", citation)
-        self.assertIn("## Current v0.9.0-alpha Candidate", roadmap)
-        self.assertIn("## [0.9.0-alpha] - Unreleased", changelog)
-        self.assertIn("**Current candidate:** `v0.9.0-alpha`", fact_sheet)
-        self.assertIn("uncommitted `v0.9.0-alpha` universal-capture candidate", readme)
-        self.assertNotIn("uncommitted `v0.8.0-alpha`", readme)
+        self.assertIn("## Published v0.9.0-alpha", roadmap)
+        self.assertIn("## [0.9.0-alpha] - 2026-08-23", changelog)
+        self.assertIn("**Current prerelease:** [`v0.9.0-alpha`]", fact_sheet)
+        self.assertIn("/releases/tag/v0.9.0-alpha", readme)
+        self.assertNotIn("uncommitted `v0.9.0-alpha`", readme)
         self.assertIn("capture           Operate the governed universal capture journal", readme)
-        self.assertIn("uncommitted local candidate", release_notes)
-        self.assertIn("fresh scan", release_notes)
-        self.assertIn("zero findings", release_notes)
-        self.assertIn("hosted Windows/macOS/Linux CI", release_notes)
+        self.assertNotIn("uncommitted local candidate", release_notes)
+        self.assertIn("not represented as security coverage", release_notes)
+        self.assertIn("hosted CI on Windows, macOS, and Ubuntu", release_notes)
         self.assertNotIn("post-fix candidate is required", release_notes)
         self.assertNotIn("zero Python runtime dependencies", fact_sheet)
         self.assertIn("truth             Query the bitemporal truth ledger", readme)

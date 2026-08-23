@@ -2,11 +2,9 @@
 
 **Category:** Open-source developer tool, local AI project memory
 
-**Current candidate:** `v0.9.0-alpha`
+**Current prerelease:** [`v0.9.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.0-alpha)
 
-**Latest published release:** [`v0.6.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.6.0-alpha)
-
-**Release state:** v0.9 is under local qualification and is not yet published. Published releases provide SHA-256 checksums, a wheel, and standalone Windows, Linux, and macOS artifacts.
+**Release state:** Published alpha with SHA-256 checksums, a universal wheel, CycloneDX SBOMs, and standalone Windows, Linux, and macOS artifacts.
 
 **License:** MIT
 
@@ -16,7 +14,7 @@
 
 **Problem:** AI coding sessions repeatedly lose repository context, durable decisions, release rules, and prior-session knowledge.
 
-**Solution:** One private brain per project that indexes repository structure, stores durable memory, ingests handoffs, classifies evidence, and generates bounded context packs for a concrete task.
+**Solution:** One private brain per project that indexes repository structure, records bitemporal project truth, normalizes opt-in agent events through a bounded local spool, and compiles governed context for a concrete task.
 
 **Privacy:** Local SQLite storage, loopback-only console, no account, no telemetry, no hosted database.
 

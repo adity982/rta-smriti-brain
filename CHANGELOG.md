@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.9.0-alpha] - Unreleased
+## [0.9.0-alpha] - 2026-08-23
 
 - Added opt-in universal passive capture with versioned vendor adapters, bounded private spools, deterministic normalization, and one managed daemon per brain.
 - Added append-only hash-chained capture events, causal replay, interruption diagnostics, policy-bound retention, deletion receipts, and encrypted forensic payload grants.

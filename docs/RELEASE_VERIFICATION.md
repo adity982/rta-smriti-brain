@@ -1,194 +1,125 @@
 # Release Verification
 
-This page records the reproducible checks and publication evidence for the
-formal `v0.6.0-alpha` prerelease. It distinguishes local verification, hosted
-CI, native binary workflow proof, and post-publication installation proof.
+This page records the evidence boundary for `v0.9.0-alpha`. It separates
+source qualification, hosted compatibility, tag-generated artifacts, and
+post-publication download checks so a passing test is never presented as proof
+of a different release gate.
 
 ## Publication State
 
-- Source version: `0.6.0-alpha` (`0.6.0a1` in Python package metadata)
+- Source version: `0.9.0-alpha` (`0.9.0a1` in Python package metadata)
 - Published branch: `main`
-- Frozen release commit: `6c086f5e421f8ec5506e7ee6e6cb0296ca43fed3`
-- Formal Git tag: `v0.6.0-alpha` (annotated and verified against the frozen commit)
-- Formal GitHub Release: [`Rta-Smriti Brain v0.6.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.6.0-alpha)
-- Release state: published prerelease from the green hosted matrix
-- Current `main` status: public README, documentation, and launch-site source
-  describe the formal prerelease; the release tag and assets remain bound to the
-  frozen commit above
+- Verified v0.9 source merge: `4f40aff1953d73080aff14dbb7e98034d76af735`
+- Formal tag: `v0.9.0-alpha` (created only after the publication metadata PR passes)
+- Formal release: [Rta-Smriti Brain v0.9.0-alpha](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.0-alpha)
+- Release classification: alpha prerelease
 
-The release contains Windows x64, Linux x64, and macOS binaries plus a combined
-SHA-256 manifest. GitHub-generated source archives are also available from the
-tag.
+The release workflow produces Windows x64, Linux x64, and macOS standalone
+binaries, a universal wheel, CycloneDX SBOMs, and a combined SHA-256 manifest.
+Artifact acceptance additionally requires redownloading the public files and
+matching them to `SHA256SUMS.txt`.
 
-## v0.6.0-alpha Release State
+## v0.9 Scope
 
-This release adds safer automatic continuity capture, warmed hash caching,
-metadata-only oversized-file isolation, bundled Tree-sitter grammars, bounded
-native LSP discovery, encrypted portable snapshots, MCP diagnostics, historical
-benchmark reports, and resilient multi-project workspaces.
+The v0.9 line combines four governed foundations:
 
-Latest release evidence from the C-drive release checkout:
+1. Canonical project identity prevents silent switching between duplicate roots,
+   clones, or worktrees.
+2. The event-sourced bitemporal truth kernel records what was asserted, when it
+   was valid, when it was learned, supporting evidence, contradictions,
+   validation, and abstention.
+3. The governed context compiler selects agent-specific context under immutable
+   task contracts, privacy grants, trust ordering, and hard token budgets.
+4. Universal Capture normalizes opt-in agent events through a private bounded
+   spool and one per-brain daemon into a redacted hash-chained journal.
 
-| Release gate | Result |
-| --- | --- |
-| Dashboard production build | Passed |
-| Launch-site production build | Passed |
-| Dashboard unit tests | 5 passed |
-| Operator browser QA | 2 passed |
-| Launch-site browser QA | Passed: desktop, mobile, interactions, media, links, accessibility |
-| Python unittest discovery | 251 tests passed, 9 platform-specific skips |
-| Python bytecode compilation | Passed |
-| npm audit high severity gate | 0 vulnerabilities |
-| Editable install dry run | Would install `rta-smriti-brain-0.6.0a1` |
-| Installed-distribution smoke | Passed install, upgrade, and uninstall lifecycle |
-| Public benchmark | Synthetic corpus passed lexical, hash-hybrid, continuation, contradiction, stale, and governance gates |
-| Privacy scan | 174 candidate files passed |
-| Git diff whitespace check | Passed with only Windows LF-to-CRLF warnings |
-| Built-in publish-readiness | Structural checks passed before publication; clean tree after commit and push |
-| Hosted CI | [Run 32484754948](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32484754948) passed Ubuntu Python 3.11, 3.12, 3.13, macOS Python 3.11, and Windows Python 3.11 |
-| Native binaries | [Run 32487134222](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32487134222) built and smoke-tested Windows, Linux, and macOS artifacts |
-| Published release assets | `rta-brain-v0.6.0-alpha-windows-x64.exe`, `rta-brain-v0.6.0-alpha-linux-x64`, `rta-brain-v0.6.0-alpha-macos`, and `SHA256SUMS.txt` uploaded |
-| Public release smoke | All three binaries were redownloaded and matched `SHA256SUMS.txt`; Windows returned `rta-brain 0.6.0a1` and passed a clean `doctor` run |
+Captured content remains untrusted evidence. Replay never executes captured
+actions. Read-only MCP responses are project-scoped and path-free by default;
+process control, retention, export, redaction, and deletion remain separate
+capabilities.
 
-Gitleaks `8.30.1`, actionlint, the repository privacy scanner, npm audit, and an
-isolated Python runtime dependency audit passed for this release candidate.
-Bandit, Ruff, and Semgrep are not claimed because they were not part of this
-release gate.
-
-## Verification Commands
-
-Run these commands from the repository root:
-
-```powershell
-npm run build
-npm run build:launch
-npm run test:unit
-npx playwright install chromium
-npm run test:operator
-python scripts/performance_probe.py --profiles 100 1000 --assert-bounds
-python -m unittest discover -s tests -v
-python -m pytest -q
-python -m compileall -q rta_brain tests scripts
-python scripts/build_installed_smoke.py
-python -m pip install ".[binary]"
-python scripts/build_binary.py
-python scripts/smoke_binary.py
-python scripts/privacy_scan.py
-python scripts/privacy_scan.py --root .
-pip-audit . --progress-spinner off
-python rta-brain.py publish-readiness --json
-git diff --check
-```
-
-Optional release-environment checks:
-
-```powershell
-npm audit --omit=dev
-pip install -e . --dry-run --no-deps
-gitleaks git --redact --no-banner --verbose .
-gitleaks dir --redact --no-banner launch-assets
-gitleaks dir --redact --no-banner launch-site/public
-```
-
-## v0.4 Historical Verified Snapshot
-
-The following snapshot is retained for the refreshed `v0.4.0-alpha` release.
-It is historical evidence and must not be interpreted as the current v0.6
-release state.
-
-Verified locally and through GitHub Actions. The refreshed formal release is
-bound to [CI run 32302463544](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32302463544),
-which passed on Windows, macOS, Ubuntu Python 3.11, Ubuntu Python 3.12, and
-Ubuntu Python 3.13 before the tag and assets were refreshed.
+## Verified Source Evidence
 
 | Gate | Result |
 | --- | --- |
-| Pytest regression suite | 176 passed, 6 platform/privilege skips, 513 subtests passed |
-| Unittest discovery | 182 tests passed, 6 platform/privilege skips |
-| Python bytecode compilation | Passed |
-| Operator console production build | Passed |
-| Launch-site production build | Passed |
-| Root npm dependency audit | 0 vulnerabilities |
-| Python runtime dependency surface | Core wheel has no required third-party dependencies; isolated install and both entry points passed |
-| Python project dependency audit | `pip-audit .` reported no known vulnerabilities |
-| Editable Python package dry-run | Resolved `rta-smriti-brain-0.4.0a1` |
-| Installed package lifecycle | Clean wheel install and 20-check first-run smoke passed; forced upgrade/reinstall and uninstall were then verified from an unrelated working directory |
-| Standalone Windows binary | Built from the versioned spec; CLI, SQLite/FTS, MCP dispatch, packaged dashboard assets, public benchmark, managed background sync, and managed console lifecycle passed |
-| Windows executable SHA-256 | `f934f74c251dd2dbaca21ef26ad03ab21635bf725c5598bb361fe7419f23d406` |
-| Linux executable SHA-256 | `73723745b84efeb2a0db6f58f1e6859c6c1daae04869ea1a2aa0b5dc0e2ef1ff` |
-| macOS executable SHA-256 | `4875357a5bb4b3f4d07c954f3398179fb6175ee9f6f4b80c03d59cd31e8dd7ab` |
-| Universal wheel SHA-256 | `a371e9f8050e4b6ee079e476ab40002b1aceb64adf53b94390081cf4cac9ce5c` |
-| Automated rendered operator acceptance | Playwright exercised every primary destination, destination-wide axe checks, onboarding/selection, root-conflict and empty-project recovery, Graph, Files, Canvas, task handoff, clipboard failure, watcher controls, governance receipts, Intelligence, workspaces, vault, hooks, persistence, keyboard focus, reduced motion, forced-colors structure, and 720/390 px layouts. A second failure-injection scenario proves that failed post-bootstrap identity verification clears the previous project; 2 scenarios passed with no unexpected page or console errors |
-| Manual operator browser workflow | Six local projects loaded; Graph, Files, Canvas, Bases, references, task handoff, agent selection, context packs, release checks, bootstrap, settings, and watcher controls passed at desktop and 390 px |
-| Accessibility repair | Intelligence and Bases tabs expose tab semantics and roving keyboard focus; Bases exposes table, row-group, row, header, and cell relationships; exactly one route is current; toolbar toggles expose state; graph search and workspace fields have names; status changes are live; modal focus is trapped/restored; keyboard Canvas inspection focuses and reveals the mobile inspector; normal-mode WCAG scans passed every destination; mobile Canvas cards had zero overlaps |
-| Performance and resource probe | Sanitized synthetic baselines passed at 100, 1,000, and 10,000 files; the committed JSON reports indexing, deep freshness, search/context-pack p95, SQLite size, and traced peak memory without hostnames or absolute paths |
-| Publication privacy scan | Passed across 169 public candidates, including the website, screenshots, gallery, poster, and video |
-| Launch-site operator acceptance | Built-site Playwright journey passed at desktop and 390 px: product and evidence tabs, mobile navigation, media metadata, local asset links, horizontal overflow, WCAG axe scans, and console/page errors |
-| Public benchmark | Six synthetic documents and queries; lexical and dependency-free hash-hybrid regression gates passed; this is not superiority evidence |
-| Codex Security remediation scan | A frozen pre-fix snapshot reviewed 18 changed runtime artifacts across eight threat surfaces and reproduced one low-severity stale-selection issue (`bf16b280-16e1-4d67-8d2a-08e7f83fab4e`). The issue is fixed and covered by a failing-then-passing rendered test. This scan is remediation evidence, not the final clean-tree gate |
-| Codex Security exact-commit gate | Full-candidate scan `c75b2a3f-4330-4f04-a0eb-c4655a37481d` and final runtime-diff scan `7d6952ce-130a-4746-8db4-c98b9a195d89` completed with full coverage and zero findings; the final follow-up changed test assertions only |
-| Built-in publish-readiness command | 11/11 structural and clean-tree checks passed on the candidate before publication |
-| Git whitespace validation | Passed |
-| Hosted compatibility | Final `main` matrix passed Windows x64, macOS ARM64, and Ubuntu with Python 3.11, 3.12, and 3.13 |
-| Published assets | Six refreshed release assets uploaded from the green hosted run; public downloads match the recomputed combined manifest |
-| Post-publish installation | Every refreshed public asset redownloaded and checksum-verified; staged Windows binary `--version` and `doctor` passed |
+| Local Python regression | 760 passed, 23 explicit optional-dependency or privilege skips, 649 subtests |
+| Focused console, onboarding, and spool suite | 84 passed, 6 skipped |
+| Managed console fallback identity tests | 2 passed |
+| Dashboard unit and production build | Passed |
+| Rendered operator journey | Passed, including Universal Capture export integrity and privacy assertions |
+| Installed package lifecycle | Upgrade and uninstall from `0.8.0a1` to `0.9.0a1` passed |
+| Windows native smoke | CLI, SQLite/FTS, MCP, benchmark, Tree-sitter, Universal Capture, encrypted snapshot, Ed25519, sync, and console passed |
+| Capture performance | 10,000 events at 170.445 events/s; replay page p99 43.071 ms; bounded backpressure verified |
+| Feature PR hosted CI | [Run 32635867425](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32635867425) passed Windows, macOS, and Ubuntu |
+| Post-merge hosted CI | [Run 32636448594](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32636448594) passed all five jobs |
+| GitHub Pages deployment | Post-merge deployment passed before the release metadata refresh |
 
-The six local skips are explicit platform or privilege conditions. Windows
-cannot exercise POSIX mode bits, and this account cannot create the symlinks
-used by rejection tests. The hosted macOS and Linux jobs exercise their native
-paths; hard-link, reparse-aware, descriptor-identity, and replace-during-read
-controls remain exercised on Windows.
+The publication metadata and website changes are rerun through the same hosted
+matrix before tagging. The final release record is updated with the exact tag
+commit, tag workflow, asset manifest, and post-download checks.
 
-Each hosted job performed the dashboard builds, privacy scan, Python regression
-suite, bytecode compilation, package-resolution check, clean-wheel install and
-first-run smoke, and built-in publish-readiness check. The final matrix passed
-before the release tag was refreshed.
+## Security And Privacy Evidence
 
-Gitleaks, Bandit, Ruff, and Semgrep were unavailable in the current shell, so
-this page does not claim fresh results from any of them. The bundled privacy
-scanner, dependency audits, focused hardening tests, and Codex Security scan
-all passed; none is described as equivalent to an unavailable tool.
+The v0.9 source candidate passed the repository privacy scanner, Gitleaks history
+and working-tree scans, actionlint, npm audit, Python dependency audit, wheel
+inspection, checksum verification, package-content checks, and focused
+security-control tests.
 
-Launch screenshots, gallery images, poster, and video were regenerated from the
-current synthetic fixture and launch source. Product Hunt and website video and
-poster copies match byte-for-byte; private-project scale claims are not accepted
-as launch evidence.
+A later Codex Deep Security Scan coordinator attempt is **not** counted as
+coverage: both workers were blocked before workspace inventory or source review,
+and completion rejected a non-UUID scan identifier. It produced no usable sealed
+report and found no file-level issue only because it inspected no files. The
+release record does not convert that failed scan into a clean result.
 
-The final wheel and three native binaries were produced and smoke-tested by the
-hosted matrix from the approved commit. The six public release assets were then
-downloaded again, and every file matched the published `SHA256SUMS.txt`.
+Release publication excludes local brain databases, spools, transcripts,
+capability tokens, keys, private project content, raw diagnostics, generated
+context packs, operator paths, and the private local v0.9 design/implementation
+documents. Public screenshots and media use synthetic data.
 
-## Refreshed v0.4 Alpha Scope
+## Reproduction
 
-The refreshed `v0.4.0-alpha` release includes the continuity hardening batch:
-managed transcript capture, append-only session events, structured work-state
-reconciliation, operational readiness, and a fail-closed multi-project MCP
-gateway. Local verification for that batch covered unit tests, bytecode
-compilation, dashboard and launch builds, dependency audits, wheel and binary
-smoke tests, privacy scan, presentation-mode media sanitization, and six-project
-daemon status. Hosted CI then passed on the refreshed commit before publication.
+Run from the repository root:
 
-Gitleaks is an optional release-environment check and is not claimed in this
-snapshot. The bundled privacy scanner remains a required gate and passed; this
-page does not imply that the two tools are equivalent.
+```powershell
+npm run test:unit
+npm run build
+npm run build:launch
+npm run test:launch
+python -m pytest -q
+python -m compileall -q rta_brain tests scripts
+python scripts/build_installed_smoke.py
+python scripts/privacy_scan.py --root .
+python scripts/performance_probe.py --profiles 100 1000 --assert-bounds
+python rta-brain.py publish-readiness --json
+actionlint
+gitleaks git --redact --no-banner --verbose .
+git diff --check
+```
 
-Codex host configuration was generated, added to the local Codex configuration,
-parsed successfully, and exercised against the multi-project MCP gateway over
-stdio. Existing Codex tasks still cannot dynamically acquire newly registered
-MCP tools; a fresh task must be started after host configuration changes.
+The native release workflow additionally audits dependencies, generates SBOMs,
+builds and smoke-tests each operating-system artifact, packages versioned files,
+privacy-scans the staged bundle, and uploads it for release assembly.
 
-## Privacy Boundary
+## Residual Boundaries
 
-Public verification must not expose local brain databases, private repository
-contents, user paths, capability tokens, private project names, or generated
-context packs. Public screenshots and launch media use synthetic demo data.
+- Managed workers are user-level local processes; login startup is explicit.
+- Same-user malware or administrator/root access can read operator-owned data.
+- Secret detection is defense in depth, not proof against every unknown format.
+- Vendor event formats and optional local adapters can change.
+- Filesystem deletion cannot guarantee erasure from SSD wear leveling or copies.
+- Call edges and unsupported-language parsing remain bounded impact hints.
+- The synthetic benchmark is reproducibility evidence, not external superiority
+  proof.
 
-See [Publishing Privacy](PUBLISHING_PRIVACY.md) for the complete procedure and
-[Security Policy](../SECURITY.md) for vulnerability reporting.
+See [Publishing Privacy](PUBLISHING_PRIVACY.md), the
+[v0.9 threat model](security/v0.9-capture-threat-model.md), and
+[Security Policy](../SECURITY.md).
 
 ## Historical Evidence
 
-The original v0.3 launch-readiness snapshot is retained at
-[`archive/LAUNCH_READINESS_v0.3.0-alpha.md`](archive/LAUNCH_READINESS_v0.3.0-alpha.md).
-It is historical evidence and must not be interpreted as the current release
-state.
+- [v0.6 release notes](RELEASE_NOTES_v0.6.0-alpha.md)
+- [v0.4 release notes](RELEASE_NOTES_v0.4.0-alpha.md)
+- [v0.3 launch snapshot](archive/LAUNCH_READINESS_v0.3.0-alpha.md)
+
+Historical records describe their own frozen versions and must not be interpreted
+as the current v0.9 release state.

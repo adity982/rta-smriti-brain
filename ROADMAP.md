@@ -1,6 +1,6 @@
 # Roadmap
 
-## Current v0.9.0-alpha Candidate
+## Published v0.9.0-alpha
 
 - Opt-in universal passive capture for supported coding-agent hooks and generic local producers
 - Private bounded spools, one normalizing daemon per brain, append-only hash-chained events, causal replay, and interruption diagnostics
@@ -23,7 +23,7 @@
 - Duplicate-root detection in one database and across the local dashboard registry
 - Privacy-safe integrity diagnostics in CLI, MCP, and operator settings
 
-## Published v0.6.0-alpha
+## Foundation From v0.6.0-alpha
 
 - Bounded transcript rebinding across Codex task working-directory changes
 - Exact-command MCP lifecycle diagnostics before agent-host registration
