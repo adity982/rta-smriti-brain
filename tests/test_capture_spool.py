@@ -809,7 +809,12 @@ class CaptureSpoolTests(unittest.TestCase):
             return safe_after_inheritance
 
         def apply(arguments):
-            events.append("inheritance" if "/inheritance:r" in arguments else "grant")
+            if "/inheritance:r" in arguments:
+                events.append("inheritance")
+            elif "/setowner" in arguments:
+                events.append("owner")
+            else:
+                events.append("grant")
 
         with mock.patch.object(
             capture_spool,
@@ -830,7 +835,34 @@ class CaptureSpoolTests(unittest.TestCase):
         ):
             capture_spool.ensure_windows_path_private(Path("private-control"))
 
-        self.assertEqual(events[:2], ["inheritance", "descriptor"])
+        self.assertEqual(events[:3], ["owner", "inheritance", "descriptor"])
+
+    def test_windows_acl_hardening_sets_current_user_as_owner(self):
+        from rta_brain import capture_spool
+
+        sid = "S-1-5-21-1000"
+        safe = f"O:{sid}D:P(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FA;;;BA)"
+        calls = []
+        with mock.patch.object(
+            capture_spool,
+            "windows_path_is_private",
+            side_effect=[False, True],
+        ), mock.patch.object(
+            capture_spool,
+            "_windows_current_user_sid",
+            return_value=sid,
+        ), mock.patch.object(
+            capture_spool,
+            "_windows_security_descriptor",
+            return_value=safe,
+        ), mock.patch.object(
+            capture_spool,
+            "_run_icacls",
+            side_effect=lambda arguments: calls.append(arguments),
+        ):
+            capture_spool.ensure_windows_path_private(Path("private-control"))
+
+        self.assertIn(["private-control", "/setowner", f"*{sid}"], calls)
 
     @unittest.skipUnless(os.name == "nt", "Windows executable resolution test")
     def test_windows_acl_helpers_ignore_executables_in_adversarial_cwd(self):

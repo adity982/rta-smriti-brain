@@ -554,6 +554,10 @@ def ensure_windows_path_private(path: Path) -> None:
         return
     sid = _windows_current_user_sid()
     inheritance = "(OI)(CI)F" if Path(path).is_dir() else "F"
+    # Hosted runners and enterprise-managed temp roots may create children whose
+    # owner is Administrators or a service account. Claim ownership while the
+    # inherited ACL still grants WRITE_OWNER, then remove inherited broad grants.
+    _run_icacls([str(path), "/setowner", f"*{sid}"])
     _run_icacls([str(path), "/inheritance:r"])
     # Removing inheritance can delete broad ACEs outright. Inspect the resulting
     # descriptor so we only remove explicit foreign grants that still exist.
