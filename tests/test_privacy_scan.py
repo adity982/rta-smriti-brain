@@ -168,6 +168,29 @@ class PrivacyScanTests(unittest.TestCase):
 
             self.assertEqual(scan(artifacts, []), [])
 
+    def test_large_release_binary_requires_an_explicit_bounded_scan_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            private_path = "C:" + r"\Users\Private User\project\proof.txt"
+            payload = b"binary-prefix\x00" + private_path.encode("utf-8")
+            (root / "rta-brain").write_bytes(payload)
+
+            with patch("scripts.privacy_scan.MAX_SCAN_BYTES", 16):
+                default_findings = scan(root, [])
+                release_findings = scan(root, [], max_file_bytes=128)
+
+            self.assertIn(("rta-brain", "unscanned-file-over-16-bytes"), default_findings)
+            self.assertIn(("rta-brain", "windows-user-path"), release_findings)
+
+    def test_large_release_binary_limit_is_hard_bounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "rta-brain").write_bytes(b"binary")
+
+            findings = scan(root, [], max_file_bytes=129 * 1024 * 1024)
+
+            self.assertEqual(findings, [(".", "invalid-max-file-bytes")])
+
     def test_git_deleted_paths_are_not_treated_as_release_candidates(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
