@@ -9,8 +9,9 @@ of a different release gate.
 
 - Source version: `0.9.0-alpha` (`0.9.0a1` in Python package metadata)
 - Published branch: `main`
-- Verified v0.9 source merge: `4f40aff1953d73080aff14dbb7e98034d76af735`
-- Formal tag: `v0.9.0-alpha` (created only after the publication metadata PR passes)
+- Universal Capture source merge: `4f40aff1953d73080aff14dbb7e98034d76af735`
+- Final tag commit: `c8002a29c25d63fce5249ff60289966c9dbd3dc4`
+- Formal tag: `v0.9.0-alpha`
 - Formal release: [Rta-Smriti Brain v0.9.0-alpha](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.0-alpha)
 - Release classification: alpha prerelease
 
@@ -42,7 +43,7 @@ capabilities.
 
 | Gate | Result |
 | --- | --- |
-| Local Python regression | 760 passed, 23 explicit optional-dependency or privilege skips, 649 subtests |
+| Local Python regression | 783 passed, 23 explicit optional-dependency or privilege skips, 649 subtests |
 | Focused console, onboarding, and spool suite | 84 passed, 6 skipped |
 | Managed console fallback identity tests | 2 passed |
 | Dashboard unit and production build | Passed |
@@ -52,11 +53,19 @@ capabilities.
 | Capture performance | 10,000 events at 170.445 events/s; replay page p99 43.071 ms; bounded backpressure verified |
 | Feature PR hosted CI | [Run 32635867425](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32635867425) passed Windows, macOS, and Ubuntu |
 | Post-merge hosted CI | [Run 32636448594](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32636448594) passed all five jobs |
-| GitHub Pages deployment | Post-merge deployment passed before the release metadata refresh |
+| Publication metadata PR CI | [Run 32640375142](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32640375142) passed all five jobs |
+| Publication merge CI | [Run 32641467412](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32641467412) passed all five jobs |
+| Nested-artifact privacy repair | [PR CI 32642651151](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32642651151) and [main CI 32643303151](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32643303151) passed |
+| Large native-artifact privacy repair | [PR CI 32644657258](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32644657258) and [main CI 32645754456](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32645754456) passed |
+| Final native release workflow | [Run 32646317248](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32646317248) passed Windows, macOS, and Linux |
+| GitHub Pages deployment | [Run 32641467447](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32641467447) passed; rendered desktop and 390 px mobile checks found no browser errors or horizontal overflow |
 
-The publication metadata and website changes are rerun through the same hosted
-matrix before tagging. The final release record is updated with the exact tag
-commit, tag workflow, asset manifest, and post-download checks.
+The first two native-release attempts failed closed and were not accepted. They
+identified incomplete scanning of an ignored nested artifact directory and a
+Linux binary larger than the default 25 MiB scan ceiling. The fixes preserved
+the 25 MiB archive-member limit while adding an explicit, hard-bounded 128 MiB
+top-level release-artifact scan. Only the final green native run above supplied
+the public release assets.
 
 ## Security And Privacy Evidence
 
@@ -75,6 +84,29 @@ Release publication excludes local brain databases, spools, transcripts,
 capability tokens, keys, private project content, raw diagnostics, generated
 context packs, operator paths, and the private local v0.9 design/implementation
 documents. Public screenshots and media use synthetic data.
+
+## Public Artifact Acceptance
+
+On 2026-08-23, all eight public release assets were downloaded anonymously from
+the formal GitHub prerelease. The seven files covered by `SHA256SUMS.txt` matched
+their published SHA-256 values:
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `rta_smriti_brain-0.9.0a1-py3-none-any.whl` | 494,920 | `9d698d2b75892f0d303b45619b4da3f9663adcaab80bc650cbe851fe1dc31b8b` |
+| `rta-brain-0.9.0a1-linux-x86_64` | 32,849,128 | `eb81ef800462eb49244312fe6381158394fe13a7f36d6719ce392e9047ce7896` |
+| `rta-brain-0.9.0a1-macos-arm64` | 16,851,760 | `2bdf79dd79b7f18db02e41168b52fdf7696baa33f69319c11fccaec2d1473d4d` |
+| `rta-brain-0.9.0a1-windows-x86_64.exe` | 18,095,617 | `4588604261b92e213fd130257e9232e370dd1a77b6f16175aead0bf65829bd91` |
+| Linux CycloneDX SBOM | 1,158 | `cf39121d7c7583c7877d75ebd939d6ccc5559583a601bfdc32300a800ce37c28` |
+| macOS CycloneDX SBOM | 1,154 | `0717a3ba4cbccb5866fb18fa5c8a11327808ac9c60a0ea7c054f88e7a1ad9c3d` |
+| Windows CycloneDX SBOM | 1,163 | `34d1128c251269ff9bb74695b135c0ecc1a7d1d3b065731e5e79acf93f52c18e` |
+
+The public wheel installed successfully in a new Python 3.13 virtual
+environment with its declared dependencies. From that clean environment,
+`rta-brain --version` returned `0.9.0a1`; initialization in an owner-only brain
+directory, repository ingestion, SHA-256 freshness, structured checkpointing,
+continuation readiness, and the 24-tool MCP probe passed. The anonymously
+downloaded Windows executable also returned `rta-brain 0.9.0a1`.
 
 ## Reproduction
 
