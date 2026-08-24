@@ -158,6 +158,10 @@ BrainDir="$HOME/.local/share/rta-smriti/brains"
 "$RtaBrain" start /path/to/my-project --project my-project --brain-dir "$BrainDir" --write-agents
 ```
 
+### Share What Happened
+
+Tried Rta-Smriti on a real project? [Share your experience in Discussions](https://github.com/sulabhdubey/rta-smriti-brain/discussions), [ask for installation help](https://github.com/sulabhdubey/rta-smriti-brain/discussions/categories/q-a), or [pick a first contribution](https://github.com/sulabhdubey/rta-smriti-brain/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22). If it saved you from repeating project context, consider [starring the repository](https://github.com/sulabhdubey/rta-smriti-brain).
+
 Verify that commands are operating on the intended checkout by passing its root:
 
 ```powershell
