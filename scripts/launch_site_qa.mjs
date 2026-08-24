@@ -87,11 +87,15 @@ try {
   await page.getByRole("heading", { name: "Rta-Smriti Brain", exact: true }).waitFor();
   assert.equal(await page.locator(".heroImage").evaluate((image) => image.naturalWidth > 0), true);
   const bodyText = await page.locator("body").innerText();
-  assert.match(bodyText, /v0\.9\.0-alpha/);
+  assert.match(bodyText, /v0\.9\.1-alpha/);
   assert.match(bodyText, /Universal Capture/);
   assert.match(bodyText, /Bitemporal/);
   assert.match(bodyText, /Context Compiler/i);
 
+  assert.match(bodyText, /Conceived and researched by Sulabh Dubey/);
+  assert.match(bodyText, /Built with OpenAI Codex/);
+  const codexLink = page.getByRole("link", { name: "OpenAI Codex", exact: true }).first();
+  assert.equal(await codexLink.getAttribute("href"), "https://openai.com/codex/");
   const productViews = [
     ["Graph", /dashboard-hero-v0\.9\.png$/],
     ["Files", /file-explorer-v0\.9\.png$/],

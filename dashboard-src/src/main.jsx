@@ -1617,7 +1617,7 @@ function App() {
           </div>
           <div>
             <h1>Rta-Smriti Brain</h1>
-            <span>v0.9 Alpha Operator Console</span>
+            <span>v0.9.1 Alpha Operator Console</span>
           </div>
         </div>
         <div className="topStatus">

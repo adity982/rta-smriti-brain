@@ -48,6 +48,9 @@ img { display: block; max-width: 100%; }
 .eyebrow, .sectionIndex { display: inline-flex; align-items: center; gap: 7px; color: var(--teal); font-size: 11px; font-weight: 800; text-transform: uppercase; }
 .hero h1 { max-width: 670px; margin: 20px 0 16px; font-size: clamp(58px, 7.5vw, 106px); line-height: .93; letter-spacing: 0; text-wrap: balance; }
 .heroLead { max-width: 650px; margin: 0; color: #c3d3e1; font-size: clamp(18px, 2vw, 25px); line-height: 1.45; text-shadow: 0 2px 20px #02060a; }
+.buildCredit { max-width: 650px; margin: 14px 0 0; color: #829aae; font-size: 12px; line-height: 1.55; }
+.buildCredit a { color: #b8ccdc; text-decoration: underline; text-decoration-color: #31566d; text-underline-offset: 3px; }
+.buildCredit a:hover { color: white; }
 .heroActions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 32px; }
 .primaryAction, .secondaryAction { display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-height: 47px; padding: 0 17px; border-radius: 7px; font-size: 13px; font-weight: 800; }
 .primaryAction { color: #021415; background: var(--teal); box-shadow: 0 13px 36px rgba(94,234,212,.15); }

@@ -7,11 +7,13 @@
 [![Release](https://img.shields.io/github/v/release/sulabhdubey/rta-smriti-brain?include_prereleases&label=release)](https://github.com/sulabhdubey/rta-smriti-brain/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
 
-**A local project brain for AI coding agents. `v0.9.0-alpha` adds governed universal capture, bitemporal project truth, and context compilation without turning captured text into authority.**
+**A local project brain for AI coding agents. `v0.9.1-alpha` hardens multi-project operator readiness around governed universal capture, bitemporal project truth, and context compilation.**
+
+**Build provenance:** Conceived and researched by [Sulabh Dubey](https://github.com/sulabhdubey). Built with [OpenAI Codex](https://openai.com/codex/) as the primary design, engineering, testing, and documentation agent under Sulabh's product direction and release approval. [Details](CONTRIBUTORS.md).
 
 Rta-Smriti now connects repository intelligence, durable decisions, agent-session continuity, and evidence-aware retrieval through a private local event journal. Capture is opt-in, bounded, redacted before durable queuing, and explicitly treated as untrusted evidence until an operator or verifier promotes a claim.
 
-[Latest prerelease assets](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.0-alpha) · [Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second v0.9 product demo](launch-assets/product-hunt/rta-smriti-v0.9-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Public benchmark](docs/PUBLIC_BENCHMARK.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
+[Latest prerelease assets](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.1-alpha) · [Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second v0.9 product demo](launch-assets/product-hunt/rta-smriti-v0.9-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Public benchmark](docs/PUBLIC_BENCHMARK.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Build provenance](CONTRIBUTORS.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
 
 Rta-Smriti Brain turns a project repository, long agent threads, durable decisions, and evidence into a small local memory graph that Codex, Claude Code, Cursor, or any MCP-capable agent can reuse before doing work.
 
@@ -23,13 +25,18 @@ Rta-Smriti gives each project a memory that stays on your machine.
 
 ## Latest Release
 
-[`v0.9.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.0-alpha)
-is the current formal GitHub prerelease. Its exact tagged source is qualified by
-the hosted Windows, macOS, and Ubuntu matrix across Python 3.11, 3.12, and 3.13.
-The tag workflow builds and smoke-tests Windows x64, Linux x64, and macOS
+[`v0.9.1-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.1-alpha)
+is the current patch line. A formal prerelease is accepted only after its exact
+tagged source passes the hosted Windows, macOS, and Ubuntu matrix across Python
+3.11, 3.12, and 3.13. The tag workflow builds and smoke-tests Windows x64, Linux x64, and macOS
 standalone binaries, a universal wheel, CycloneDX SBOMs, and a combined
 `SHA256SUMS.txt`; see the [release verification record](docs/RELEASE_VERIFICATION.md)
 for the evidence boundary and post-publication checks.
+The v0.9.1 patch starts the console from a lightweight authenticated registry
+snapshot and progressively resolves deeper checks. Delayed responses are bound
+to the project and request generation that created them, so switching projects
+cannot surface stale graph, file, capture, retrieval, governance, or truth
+information.
 
 This alpha adds canonical project identity, an event-sourced bitemporal truth
 kernel, a governed context compiler, and Universal Capture: opt-in adapters feed
@@ -53,6 +60,7 @@ views remain project-scoped and path-free.
 - Compiles governed agent-specific context from immutable task contracts, explicit acceptance and stop conditions, privacy grants, and explainable selection receipts.
 - Enforces a hard context token budget and keeps direct evidence ahead of low-trust historical memory.
 - Runs a local operator console with graph, canvas, typed bases, context-pack receipts, memory ledger, freshness checks, and bootstrap flow.
+- Loads project surfaces progressively with bounded requests, explicit lifecycle states, and race-safe project switching.
 - Exposes a dependency-light stdio MCP server for agent integrations.
 - Runs independent MCP tool calls concurrently while preserving ordered mutation visibility.
 - Watches active repositories with foreground or managed-background incremental sync and reuses a persistent SHA-256 cache for deep freshness checks.

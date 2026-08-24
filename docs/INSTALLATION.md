@@ -60,7 +60,7 @@ The repository includes a reproducible PyInstaller specification. The release
 workflow builds and smoke-tests separate Windows, macOS, and Linux artifacts,
 renames them with version/OS/architecture, and uploads a `SHA256SUMS.txt`
 manifest. The formal
-[`v0.9.0-alpha` release](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.0-alpha)
+[`v0.9.1-alpha` release](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.1-alpha)
 contains Windows x64, Linux x64, and macOS binaries, a universal wheel,
 CycloneDX SBOMs, and the combined checksum manifest.
 
