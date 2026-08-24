@@ -521,15 +521,26 @@ test("failed post-bootstrap identity verification clears the stale project", asy
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "rta-bootstrap-failure-qa-"));
   const { child, ready } = startFixtureServer(tempRoot);
   let context;
+  let page;
+  let releaseRegistry;
+  let markRegistryRequested;
+  const registryReleased = new Promise((resolve) => { releaseRegistry = resolve; });
+  const registryRequested = new Promise((resolve) => { markRegistryRequested = resolve; });
   try {
     const fixture = await ready;
     const bootstrapRepo = path.join(tempRoot, "bootstrapped-project");
     await mkdir(bootstrapRepo);
     await writeFile(path.join(bootstrapRepo, "README.md"), "# Bootstrapped project\n", "utf8");
     context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    const page = await context.newPage();
+    page = await context.newPage();
+    await page.route("**/api/projects", async (route) => {
+      markRegistryRequested();
+      await registryReleased;
+      await route.continue();
+    });
     await page.goto(fixture.url, { waitUntil: "domcontentloaded" });
     await expect(page.locator(".activeProjectCopy strong")).toHaveText("operator-demo");
+    await registryRequested;
 
     await page.getByRole("button", { name: "New Brain", exact: true }).click();
     await page.getByLabel("Project Folder").fill(bootstrapRepo);
@@ -545,9 +556,14 @@ test("failed post-bootstrap identity verification clears the stale project", asy
     await page.getByRole("button", { name: "Set Up & Start", exact: true }).click();
     await expect(page.locator(".miniOutput")).toContainText("Brain ready: bootstrapped-project", { timeout: 30_000 });
     await expect(page.locator(".miniOutput")).toContainText("VERIFY: Dashboard refresh failed after setup");
+    const registryResponse = page.waitForResponse((response) => response.url().includes("/api/projects"));
+    releaseRegistry();
+    await registryResponse;
     await expect(page.locator(".activeProjectCopy strong")).toHaveText("Choose a brain");
     await expect(page.locator(".statusBar [role='status']")).toContainText("simulated identity verification failure");
   } finally {
+    releaseRegistry?.();
+    await page?.unrouteAll({ behavior: "ignoreErrors" });
     await stopBootstrappedDaemons(tempRoot);
     await context?.close();
     await stopFixtureServer(child);

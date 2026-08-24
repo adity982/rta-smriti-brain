@@ -578,7 +578,11 @@ function App() {
       void refreshPublishReadiness({ silent: true });
       return payload;
     } catch (error) {
-      if (isExactProjectIdentity(preferredProject)) setSelectedProject(null);
+      if (isExactProjectIdentity(preferredProject)) {
+        registryRequestRef.current += 1;
+        setIsProjectRegistryLoading(false);
+        setSelectedProject(null);
+      }
       setLoadError(error.message);
       setMessage(`Dashboard refresh failed: ${error.message}`);
       return null;

@@ -178,7 +178,8 @@ def read_capture_spool_usage(
         "capture spool usage receipt is unsafe",
         "capture spool usage receipt changed during inspection",
     }
-    for attempt in range(3):
+    max_attempts = 8
+    for attempt in range(max_attempts):
         try:
             if selected_tokens is None:
                 return _read_capture_spool_usage_once(brain_path)
@@ -187,9 +188,9 @@ def read_capture_spool_usage(
                 source_tokens=selected_tokens,
             )
         except SpoolUnsafeError as exc:
-            if str(exc) not in transient_messages or attempt == 2:
+            if str(exc) not in transient_messages or attempt == max_attempts - 1:
                 raise
-            time.sleep(0.005)
+            time.sleep(min(0.005 * (2**attempt), 0.05))
     raise AssertionError("bounded capture usage read exhausted unexpectedly")
 
 

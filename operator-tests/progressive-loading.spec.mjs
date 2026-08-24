@@ -185,12 +185,13 @@ test("late file preview from the prior project is discarded", async ({ browser }
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "rta-preview-race-"));
   const { child, ready } = startFixtureServer(tempRoot);
   let context;
+  let page;
   let releasePreview;
   const previewReleased = new Promise((resolve) => { releasePreview = resolve; });
   try {
     const fixture = await ready;
     context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    const page = await context.newPage();
+    page = await context.newPage();
     const addSecondProject = async (route) => {
       const response = await route.fetch();
       const payload = await response.json();
@@ -229,6 +230,7 @@ test("late file preview from the prior project is discarded", async ({ browser }
     await expect(page.getByText("PROJECT A PRIVATE PREVIEW", { exact: true })).toHaveCount(0);
   } finally {
     releasePreview?.();
+    await page?.unrouteAll({ behavior: "ignoreErrors" });
     await context?.close();
     await stopProcess(child);
     await rm(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });

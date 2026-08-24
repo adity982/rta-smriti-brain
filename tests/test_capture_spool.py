@@ -26,27 +26,33 @@ class CaptureSpoolTests(unittest.TestCase):
 
             self.assertIsNotNone(claim)
 
-    def test_usage_reader_retries_one_atomic_refresh_but_remains_bounded(self):
+    def test_usage_reader_tolerates_a_short_atomic_refresh_burst_but_remains_bounded(self):
         from rta_brain.capture_spool import SpoolUnsafeError, read_capture_spool_usage
 
         expected = {"total_records": 4, "total_bytes": 128, "source_count": 1}
-        with mock.patch(
-            "rta_brain.capture_spool._read_capture_spool_usage_once",
-            side_effect=[
-                SpoolUnsafeError("capture spool usage receipt changed during inspection"),
-                expected,
-            ],
-        ) as read_once:
+        transient = SpoolUnsafeError(
+            "capture spool usage receipt changed during inspection"
+        )
+        with (
+            mock.patch(
+                "rta_brain.capture_spool._read_capture_spool_usage_once",
+                side_effect=[transient, transient, transient, transient, expected],
+            ) as read_once,
+            mock.patch("rta_brain.capture_spool.time.sleep"),
+        ):
             self.assertEqual(read_capture_spool_usage(Path("brain.sqlite")), expected)
-            self.assertEqual(read_once.call_count, 2)
+            self.assertEqual(read_once.call_count, 5)
 
-        with mock.patch(
-            "rta_brain.capture_spool._read_capture_spool_usage_once",
-            side_effect=SpoolUnsafeError("capture spool usage receipt changed during inspection"),
-        ) as read_once:
+        with (
+            mock.patch(
+                "rta_brain.capture_spool._read_capture_spool_usage_once",
+                side_effect=transient,
+            ) as read_once,
+            mock.patch("rta_brain.capture_spool.time.sleep"),
+        ):
             with self.assertRaisesRegex(SpoolUnsafeError, "changed during inspection"):
                 read_capture_spool_usage(Path("brain.sqlite"))
-            self.assertEqual(read_once.call_count, 3)
+            self.assertEqual(read_once.call_count, 8)
 
         with mock.patch(
             "rta_brain.capture_spool._read_capture_spool_usage_once",
