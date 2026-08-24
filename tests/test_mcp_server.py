@@ -196,6 +196,17 @@ class RtaBrainMcpTests(unittest.TestCase):
                 )
             self.assertEqual(result["structuredContent"]["status"], "ok")
 
+    def test_brain_directory_gateway_requires_explicit_project_in_advertised_schemas(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server = RtaBrainMcpServer(None, None, brain_dir=Path(tmp))
+
+            for tool in server.agent_tools:
+                schema = tool["inputSchema"]
+                self.assertIn("project", schema["properties"], tool["name"])
+                self.assertIn("project", schema["required"], tool["name"])
+            with self.assertRaisesRegex(ValueError, "project is required"):
+                server.call_tool("brain_search", {"query": "missing route"})
+
     def test_brain_directory_gateway_routes_projects_without_duplicate_tools(self):
         with tempfile.TemporaryDirectory() as tmp:
             brain_dir = Path(tmp)

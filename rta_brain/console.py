@@ -224,6 +224,71 @@ def _project_root(conn: sqlite3.Connection, project: str) -> Path:
     return Path(str(row["root_path"])).expanduser().resolve()
 
 
+def scan_brain_registry(brain_dir: Path) -> list[dict]:
+    """Discover project identities and cheap counts without repository inspection."""
+    brain_dir = brain_dir.expanduser().resolve()
+    if not brain_dir.exists():
+        return []
+    entries: list[dict] = []
+    for db_path in sorted(brain_dir.glob("*.sqlite")):
+        conn = None
+        try:
+            if db_path.is_symlink() or db_path.stat().st_nlink > 1:
+                continue
+            conn = _open_db(db_path)
+            init_schema(conn)
+            payload = projects_list(conn)
+            for project in payload["projects"]:
+                root_path = project.get("root_path")
+                entries.append(
+                    {
+                        "status": "ok",
+                        "scan_state": "checking",
+                        "db_path": str(db_path),
+                        "db_file": db_path.name,
+                        "project": project["name"],
+                        "root_path": root_path,
+                        "repository_identity": project.get("repository_identity"),
+                        "canonical_root": canonical_root(root_path) if root_path else None,
+                        "created_at": project.get("created_at"),
+                        "ready": None,
+                        "integrity": {"status": "checking", "operationally_ready": False},
+                        "sources": int(project.get("sources") or 0),
+                        "memories": int(project.get("memories") or 0),
+                        "freshness": {"mode": "summary", "state": "not_checked"},
+                        "suggested_next_command": None,
+                    }
+                )
+        except Exception as exc:
+            entries.append(
+                {
+                    "status": "error",
+                    "scan_state": "error",
+                    "db_path": str(db_path),
+                    "db_file": db_path.name,
+                    "project": db_path.stem,
+                    "ready": False,
+                    "error": f"{exc.__class__.__name__}: {exc}",
+                }
+            )
+        finally:
+            if conn is not None:
+                conn.close()
+    roots_by_project: dict[str, dict[str, str]] = {}
+    projects_by_root: dict[str, list[dict]] = {}
+    for entry in entries:
+        if entry.get("status") != "ok" or not entry.get("canonical_root"):
+            continue
+        root = str(entry["canonical_root"])
+        roots_by_project.setdefault(str(entry["project"]).casefold(), {})[canonical_root_key(root)] = root
+        projects_by_root.setdefault(canonical_root_key(root), []).append(entry)
+    for entry in entries:
+        roots = roots_by_project.get(str(entry.get("project", "")).casefold(), {})
+        entry["root_conflict"] = len(roots) > 1
+        owners = projects_by_root.get(canonical_root_key(entry["canonical_root"]), []) if entry.get("canonical_root") else []
+        entry["root_duplicate"] = len(owners) > 1
+    return entries
+
 def scan_brain_databases(brain_dir: Path) -> list[dict]:
     brain_dir = brain_dir.expanduser().resolve()
     if not brain_dir.exists():
@@ -630,6 +695,60 @@ def publish_readiness(tool_root: Path) -> dict:
     }
 
 
+def checkpoint_status_snapshot(conn: sqlite3.Connection, db_path: Path, project: str) -> dict:
+    """Return checkpoint and lifecycle state without a repository integrity walk."""
+    checkpoint = latest_checkpoint(conn, project)
+    lifecycle = continuity_status(db_path, project, include_binding_diagnostics=False)
+    reasons: list[str] = ["project_integrity_not_checked"]
+    if checkpoint is None:
+        reasons.append("no_structured_checkpoint")
+    elif checkpoint.get("source") == "continuity-daemon":
+        project_row = conn.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()
+        truncated = (
+            conn.execute(
+                "SELECT 1 FROM session_events WHERE project_id = ? AND event_type = 'history_truncated' LIMIT 1",
+                (int(project_row["id"]),),
+            ).fetchone()
+            if project_row else None
+        )
+        if truncated:
+            reasons.append("continuity_history_truncated")
+    if lifecycle.get("state") != "running":
+        reasons.append("continuity_not_running")
+    if int(lifecycle.get("sessions_pending") or 0) > 0:
+        reasons.append("continuity_capture_backlog")
+    if lifecycle.get("has_error") or lifecycle.get("last_error") or int(lifecycle.get("consecutive_errors") or 0) > 0:
+        reasons.append("continuity_capture_errors")
+    return {
+        "status": "ok",
+        "project": project,
+        "database_healthy": None,
+        "continuation_ready": None,
+        "operational_state": "integrity_not_checked",
+        "reasons": reasons,
+        "latest_checkpoint": checkpoint,
+        "event_count": None,
+        "work_state_conflicts": None,
+        "integrity": {"status": "not_checked", "operationally_ready": None},
+        "temporal_truth": {"status": "not_checked"},
+        "continuity": lifecycle,
+    }
+
+
+def dashboard_bootstrap_snapshot(config: ConsoleConfig) -> dict:
+    """Return the first meaningful dashboard payload without deep project checks."""
+    return {
+        "status": "ok",
+        "brain_dir": str(config.brain_dir.expanduser().resolve()),
+        "default_db": str(config.default_db) if config.default_db else None,
+        "default_project": config.default_project,
+        "shell": runtime_shell(),
+        "cli_command": shell_cli_command(config.tool_root),
+        "projects": scan_brain_registry(config.brain_dir),
+        "project_scan_state": "checking",
+        "publish": None,
+    }
+
 def dashboard_snapshot(config: ConsoleConfig) -> dict:
     return {
         "status": "ok",
@@ -762,6 +881,9 @@ def make_handler(config: ConsoleConfig):
                 if parsed.path == "/api/runtime-health":
                     self._json({"status": "ok", "instance_id": config.instance_id})
                     return
+                if parsed.path == "/api/bootstrap":
+                    self._json(dashboard_bootstrap_snapshot(config))
+                    return
                 if parsed.path == "/api/health":
                     self._json(dashboard_snapshot(config))
                     return
@@ -847,7 +969,7 @@ def make_handler(config: ConsoleConfig):
                 if parsed.path == "/api/continuity":
                     q = _query(self)
                     db_path = resolve_brain_db(config, q["db_path"])
-                    self._json(continuity_status(db_path, q["project"]))
+                    self._json(continuity_status(db_path, q["project"], include_binding_diagnostics=False))
                     return
                 if parsed.path == "/api/checkpoint":
                     q = _query(self)
@@ -858,9 +980,13 @@ def make_handler(config: ConsoleConfig):
                             "status": "ok",
                             "project": q["project"],
                             "checkpoint": latest_checkpoint(conn, q["project"]),
-                            "readiness": operational_readiness(
-                                conn, q["project"], lifecycle=continuity_status(db_path, q["project"]),
-                                include_event_count=False,
+                            "readiness": (
+                                checkpoint_status_snapshot(conn, db_path, q["project"])
+                                if q.get("mode") == "summary"
+                                else operational_readiness(
+                                    conn, q["project"], lifecycle=continuity_status(db_path, q["project"], include_binding_diagnostics=False),
+                                    include_event_count=False,
+                                )
                             ),
                         })
                     finally:

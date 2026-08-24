@@ -116,7 +116,7 @@ def continuity_status(
     db_path: Path,
     project: str,
     *,
-    include_binding_diagnostics: bool = True,
+    include_binding_diagnostics: bool = False,
 ) -> dict:
     payload = _read_json(continuity_paths(db_path, project)["state"])
     if not payload:

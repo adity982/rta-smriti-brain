@@ -454,7 +454,7 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await page.getByLabel("Project Folder").fill(bootstrapRepo);
     await page.getByLabel("Project Name").fill("bootstrapped-project");
     let ambiguousBootstrapHealthServed = false;
-    await page.route("**/api/health", async (route) => {
+    await page.route("**/api/bootstrap", async (route) => {
       const response = await route.fetch();
       const payload = await response.json();
       const created = (payload.projects || []).find((project) => project.project === "bootstrapped-project");
@@ -472,7 +472,7 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect(page.locator(".activeProjectCopy strong")).toHaveText("bootstrapped-project");
     await expect(page.locator(".taskComposer code")).toContainText("bootstrapped-project.sqlite");
     await expect(page.locator(".taskComposer code")).not.toContainText("operator-demo.sqlite");
-    await page.unroute("**/api/health");
+    await page.unroute("**/api/bootstrap");
     await reloadedNavigation.getByRole("button", { name: "Settings", exact: true }).click();
     const bootstrappedStopSync = page.getByRole("button", { name: "Stop Sync", exact: true });
     if (await bootstrappedStopSync.isVisible()) {
@@ -484,7 +484,7 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect(page.getByRole("button", { name: "Start Sync", exact: true })).toHaveAttribute("aria-busy", "false");
 
     let healthMode = "conflict";
-    await page.route("**/api/health", async (route) => {
+    await page.route("**/api/bootstrap", async (route) => {
       const response = await route.fetch();
       const payload = await response.json();
       const projects = healthMode === "empty"
@@ -504,7 +504,7 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await page.getByRole("button", { name: "Refresh projects", exact: true }).click();
     await page.getByRole("button", { name: /Projects Choose a brain/ }).click();
     await expect(page.getByRole("button", { name: "Bootstrap the first project", exact: true })).toBeVisible();
-    await page.unroute("**/api/health");
+    await page.unroute("**/api/bootstrap");
     await page.getByRole("button", { name: "Refresh projects", exact: true }).click();
     await expect(page.getByText("Scanning local brains...", { exact: true })).toBeHidden({ timeout: 30_000 });
     await expect(page.getByText("bootstrapped-project", { exact: true }).first()).toBeVisible();
@@ -534,11 +534,14 @@ test("failed post-bootstrap identity verification clears the stale project", asy
     await page.getByRole("button", { name: "New Brain", exact: true }).click();
     await page.getByLabel("Project Folder").fill(bootstrapRepo);
     await page.getByLabel("Project Name").fill("bootstrapped-project");
-    await page.route("**/api/health", (route) => route.fulfill({
-      status: 503,
-      contentType: "application/json",
-      body: JSON.stringify({ status: "error", error: { message: "simulated identity verification failure" } }),
-    }));
+    await page.route("**/api/bootstrap", (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      return route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "error", error: { message: "simulated identity verification failure" } }),
+      });
+    });
     await page.getByRole("button", { name: "Set Up & Start", exact: true }).click();
     await expect(page.locator(".miniOutput")).toContainText("Brain ready: bootstrapped-project", { timeout: 30_000 });
     await expect(page.locator(".miniOutput")).toContainText("VERIFY: Dashboard refresh failed after setup");
