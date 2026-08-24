@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Installation help and questions
+    url: https://github.com/sulabhdubey/rta-smriti-brain/discussions/categories/q-a
+    about: Ask for help without opening a formal bug report.
+  - name: Ideas and design proposals
+    url: https://github.com/sulabhdubey/rta-smriti-brain/discussions/categories/ideas
+    about: Discuss a broad idea before investing in an implementation.
+  - name: Private security report
+    url: https://github.com/sulabhdubey/rta-smriti-brain/security/advisories/new
+    about: Report vulnerabilities privately. Do not publish secrets or exploit details.
