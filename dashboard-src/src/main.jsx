@@ -160,15 +160,27 @@ function readApiToken() {
 const API_TOKEN = readApiToken();
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: { "Content-Type": "application/json", "X-Rta-Smriti-Token": API_TOKEN, ...(options.headers || {}) },
-  });
-  const payload = await response.json();
-  if (!response.ok || payload.status === "error") {
-    throw new Error(displayPath(payload.error?.message || `Request failed: ${path}`));
+  const timeoutMs = Number(options.timeoutMs || (String(options.method || "GET").toUpperCase() === "GET" ? 60_000 : 300_000));
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  const { timeoutMs: _ignoredTimeout, ...fetchOptions } = options;
+  try {
+    const response = await fetch(path, {
+      ...fetchOptions,
+      signal: fetchOptions.signal || controller.signal,
+      headers: { "Content-Type": "application/json", "X-Rta-Smriti-Token": API_TOKEN, ...(fetchOptions.headers || {}) },
+    });
+    const payload = await response.json();
+    if (!response.ok || payload.status === "error") {
+      throw new Error(displayPath(payload.error?.message || `Request failed: ${path}`));
+    }
+    return payload;
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds: ${path.split("?")[0]}`);
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
   }
-  return payload;
 }
 
 function qs(params) {
@@ -389,6 +401,8 @@ function App() {
   const [health, setHealth] = useState(null);
   const [projects, setProjects] = useState([]);
   const [selectedProject, setSelectedProject] = useState(null);
+  const selectedProjectRef = useRef(null);
+  const registryRequestRef = useRef(0);
   const [task, setTask] = useState(DEFAULT_TASK);
   const [contextBudget, setContextBudget] = useState(4000);
   const [contextStudioMode, setContextStudioMode] = useState("quick");
@@ -405,7 +419,10 @@ function App() {
   const [freshness, setFreshness] = useState(null);
   const projectRequestRef = useRef(0);
   const fileRequestRef = useRef(0);
+  const filePreviewRequestRef = useRef(0);
   const governanceRequestRef = useRef(0);
+  const intelligenceRequestRef = useRef(0);
+  const truthRequestRef = useRef(0);
   const inspectorRef = useRef(null);
   const [publish, setPublish] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
@@ -414,6 +431,7 @@ function App() {
   const [activeDrawer, setActiveDrawer] = useState("evidence");
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isProjectRegistryLoading, setIsProjectRegistryLoading] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [nodeQuery, setNodeQuery] = useState("");
@@ -460,6 +478,7 @@ function App() {
   const [truthDiff, setTruthDiff] = useState(null);
   const [isTruthBusy, setIsTruthBusy] = useState(false);
   const captureRequestRef = useRef(0);
+  const captureActionRequestRef = useRef(0);
   const [captureData, setCaptureData] = useState({ overview: null, replay: null, diagnostics: null });
   const [captureBusy, setCaptureBusy] = useState(false);
   const [captureError, setCaptureError] = useState("");
@@ -470,6 +489,13 @@ function App() {
     if (!selectedProject) return null;
     return { db_path: selectedProject.db_path, project: selectedProject.project };
   }, [selectedProject]);
+
+  selectedProjectRef.current = selectedProject;
+  const isCurrentProject = (project) => Boolean(
+    project
+    && selectedProjectRef.current?.db_path === project.db_path
+    && selectedProjectRef.current?.project === project.project
+  );
 
   const graphOptions = useMemo(() => ({ mode: graphMode, depth: graphDepth, task, focalSourceId: selectedNode?.sourceId }), [graphMode, graphDepth, task, selectedNode?.sourceId]);
   const computedGraph = useMemo(
@@ -505,10 +531,34 @@ function App() {
   const contextBindingRef = useRef(contextBinding);
   contextBindingRef.current = contextBinding;
 
+  async function refreshProjectRegistry(preferredProject = null) {
+    const requestId = registryRequestRef.current + 1;
+    registryRequestRef.current = requestId;
+    setIsProjectRegistryLoading(true);
+    try {
+      const payload = await api("/api/projects");
+      if (requestId !== registryRequestRef.current) return null;
+      const available = payload.projects || [];
+      setProjects(available);
+      setHealth((current) => ({ ...(current || {}), project_scan_state: "ready" }));
+      setSelectedProject((current) => chooseProject(available, current, current || preferredProject).selected);
+      setLoadError("");
+      return payload;
+    } catch (error) {
+      if (requestId === registryRequestRef.current) {
+        setLoadError(error.message);
+        setMessage(`Project health scan failed: ${error.message}`);
+      }
+      return null;
+    } finally {
+      if (requestId === registryRequestRef.current) setIsProjectRegistryLoading(false);
+    }
+  }
+
   async function loadHealth(preferredProject = null) {
     setIsLoading(true);
     try {
-      const payload = await api("/api/health");
+      const payload = await api("/api/bootstrap");
       setLoadError("");
       setHealth(payload);
       setProjects(payload.projects || []);
@@ -521,10 +571,18 @@ function App() {
         setMessage(`The new brain could not be matched to its exact database identity. Selection was cleared to protect the canonical root.`);
       } else if (preferredDecision.reason === "preferred_name_ambiguous") {
         setMessage(`More than one brain has that name. Select the exact database before continuing.`);
+      } else if (available.length) {
+        setMessage(`${available.length} project brains found. Verifying repository health in the background...`);
       }
+      void refreshProjectRegistry(preferredIdentity);
+      void refreshPublishReadiness({ silent: true });
       return payload;
     } catch (error) {
-      if (isExactProjectIdentity(preferredProject)) setSelectedProject(null);
+      if (isExactProjectIdentity(preferredProject)) {
+        registryRequestRef.current += 1;
+        setIsProjectRegistryLoading(false);
+        setSelectedProject(null);
+      }
       setLoadError(error.message);
       setMessage(`Dashboard refresh failed: ${error.message}`);
       return null;
@@ -533,16 +591,16 @@ function App() {
     }
   }
 
-  async function refreshPublishReadiness() {
+  async function refreshPublishReadiness({ silent = false } = {}) {
     if (isRefreshingPublish) return;
     setIsRefreshingPublish(true);
     try {
       const payload = await api("/api/publish-readiness");
       setPublish(payload);
       const ready = payload.checks?.filter((check) => check.ok).length || 0;
-      setMessage(`Rta-Smriti release checks refreshed: ${ready}/${payload.checks?.length || 0} ready.`);
+      if (!silent) setMessage(`Rta-Smriti release checks refreshed: ${ready}/${payload.checks?.length || 0} ready.`);
     } catch (error) {
-      setMessage(`Rta-Smriti release checks failed: ${error.message}`);
+      if (!silent) setMessage(`Rta-Smriti release checks failed: ${error.message}`);
     } finally {
       setIsRefreshingPublish(false);
     }
@@ -577,47 +635,58 @@ function App() {
     const governanceRequestId = governanceRequestRef.current + 1;
     governanceRequestRef.current = governanceRequestId;
     const params = { db_path: project.db_path, project: project.project };
-    const [
-      memoryPayload,
-      graphPayload,
-      stalePayload,
-      settingsPayload,
-      checkpointPayload,
-      watcherPayload,
-      governancePayload,
-      continuityPayload,
-      truthPayload,
-    ] = await Promise.all([
-      api(`/api/memories?${qs({ ...params, limit: 40 })}`),
-      api(`/api/graph?${qs({ ...params, limit: 120 })}`),
-      api(`/api/stale-check?${qs(params)}`),
-      api(`/api/settings?${qs(params)}`),
-      api(`/api/checkpoint?${qs(params)}`),
-      api(`/api/watcher?${qs(params)}`),
-      api(`/api/governance?${qs({ ...params, limit: 50 })}`),
-      api(`/api/continuity?${qs(params)}`),
-      api(`/api/truth?${qs({ ...params, mode: "overview", limit: 120 })}`),
-    ]);
-    if (requestId !== projectRequestRef.current) return;
-    setMemories(memoryPayload.memories || []);
-    setGraphData(graphPayload || { nodes: [], edges: [] });
-    setFreshness(stalePayload);
-    setProjectSettings(settingsPayload.settings);
-    setParserCapabilities(settingsPayload.parser_capabilities || {});
-    setCheckpoint(checkpointPayload.checkpoint || null);
-    setContinuationReadiness(checkpointPayload.readiness || null);
-    setWatcher(watcherPayload);
-    if (governanceRequestId === governanceRequestRef.current) {
-      setGovernance({ policies: governancePayload.policies || [], receipts: governancePayload.receipts || [] });
-    }
-    setContinuity(continuityPayload);
-    setTruthData(truthPayload);
+    setFreshness({ state: "checking", fresh: 0, changed: 0, missing: 0, added: 0, uninspectable: 0 });
+    setWatcher({ state: "loading", backend: null });
+    setContinuity({ state: "loading", backend: null });
     setTruthDetail(null);
     setTruthDiff(null);
     setSelectedNode(null);
     setReferenceHistory([]);
-  }
 
+    const requests = [
+      ["memories", api(`/api/memories?${qs({ ...params, limit: 40 })}`), (payload) => setMemories(payload.memories || [])],
+      ["graph", api(`/api/graph?${qs({ ...params, limit: 120 })}`), (payload) => setGraphData(payload || { nodes: [], edges: [] })],
+      ["freshness", api(`/api/stale-check?${qs(params)}`), setFreshness],
+      ["settings", api(`/api/settings?${qs(params)}`), (payload) => {
+        setProjectSettings(payload.settings);
+        setParserCapabilities(payload.parser_capabilities || {});
+      }],
+      ["checkpoint", api(`/api/checkpoint?${qs({ ...params, mode: "summary" })}`), (payload) => {
+        setCheckpoint(payload.checkpoint || null);
+        setContinuationReadiness(payload.readiness || null);
+      }],
+      ["sync", api(`/api/watcher?${qs(params)}`), setWatcher],
+      ["governance", api(`/api/governance?${qs({ ...params, limit: 50 })}`), (payload) => {
+        if (governanceRequestId === governanceRequestRef.current) {
+          setGovernance({ policies: payload.policies || [], receipts: payload.receipts || [] });
+        }
+      }],
+      ["continuity", api(`/api/continuity?${qs(params)}`), setContinuity],
+      ["truth", api(`/api/truth?${qs({ ...params, mode: "overview", limit: 120 })}`), setTruthData],
+    ];
+    const pending = new Set(requests.map(([label]) => label));
+    const results = await Promise.all(requests.map(async ([label, request, apply]) => {
+      try {
+        const payload = await request;
+        if (requestId === projectRequestRef.current) apply(payload);
+        return { label, ok: true };
+      } catch (error) {
+        return { label, ok: false, error: error.message };
+      } finally {
+        pending.delete(label);
+        if (requestId === projectRequestRef.current && pending.size) {
+          setMessage(`${project.project}: core data available; checking ${[...pending].join(", ")}...`);
+        }
+      }
+    }));
+    if (requestId !== projectRequestRef.current) return;
+    const failures = results.filter((result) => !result.ok);
+    if (failures.length) {
+      setMessage(`${project.project} loaded with ${failures.length} unavailable section${failures.length === 1 ? "" : "s"}: ${failures.map((result) => result.label).join(", ")}.`);
+    } else {
+      setMessage(`${project.project} index loaded.`);
+    }
+  }
   async function loadCapture(
     project = selectedProject,
     replayMode = captureReplayMode,
@@ -634,51 +703,59 @@ function App() {
         api(`/api/capture?${qs({ ...params, mode: "replay", replay_mode: replayMode, privacy_ceiling: privacyCeiling, limit: 100 })}`),
         api(`/api/capture?${qs({ ...params, mode: "diagnostics" })}`),
       ]);
-      if (requestId !== captureRequestRef.current) return null;
+      if (requestId !== captureRequestRef.current || !isCurrentProject(project)) return null;
       const next = { overview, replay, diagnostics };
       setCaptureData(next);
       setCaptureError("");
       return next;
     } catch (error) {
-      if (requestId === captureRequestRef.current) {
+      if (requestId === captureRequestRef.current && isCurrentProject(project)) {
         setCaptureError(error.message);
         setMessage(`Capture console could not load: ${error.message}`);
       }
       return null;
     } finally {
-      if (requestId === captureRequestRef.current) setCaptureBusy(false);
+      if (requestId === captureRequestRef.current && isCurrentProject(project)) setCaptureBusy(false);
     }
   }
 
   async function runCaptureAction(action, values = {}, success = "Capture state updated.") {
-    if (!selectedParams || captureBusy) return null;
+    const project = selectedProject;
+    if (!project || captureBusy) return null;
+    const requestId = captureActionRequestRef.current + 1;
+    captureActionRequestRef.current = requestId;
+    const params = { db_path: project.db_path, project: project.project };
     setCaptureBusy(true);
     setCaptureError("");
     try {
       const result = await api("/api/capture", {
         method: "POST",
-        body: JSON.stringify({ ...selectedParams, action, ...values }),
+        body: JSON.stringify({ ...params, action, ...values }),
       });
+      if (requestId !== captureActionRequestRef.current || !isCurrentProject(project)) return null;
       setMessage(success);
-      await loadCapture(selectedProject);
-      return result;
+      await loadCapture(project);
+      return isCurrentProject(project) ? result : null;
     } catch (error) {
-      setCaptureError(error.message);
-      setMessage(`Capture operation failed: ${error.message}`);
+      if (requestId === captureActionRequestRef.current && isCurrentProject(project)) {
+        setCaptureError(error.message);
+        setMessage(`Capture operation failed: ${error.message}`);
+      }
       return null;
     } finally {
-      setCaptureBusy(false);
+      if (requestId === captureActionRequestRef.current && isCurrentProject(project)) setCaptureBusy(false);
     }
   }
 
   async function exportCapture(privacyCeiling) {
+    const project = selectedProject;
     const payload = await runCaptureAction(
       "export",
       { privacy_ceiling: privacyCeiling, limit: 500, max_bytes: 16_000_000 },
       "Privacy-verified capture export prepared.",
     );
-    if (!payload) return;
-    downloadJson(`${selectedProject.project}-capture.json`, payload);
+    if (!payload || !isCurrentProject(project)) return;
+    downloadJson(`${project.project}-capture.json`, payload);
     setMessage("Privacy-verified capture export downloaded.");
   }
 
@@ -700,13 +777,20 @@ function App() {
   }
 
   async function loadFilePreview(entry) {
-    if (!selectedProject || entry.kind !== "file") return;
+    const project = selectedProject;
+    if (!project || entry.kind !== "file") return;
+    const requestId = filePreviewRequestRef.current + 1;
+    filePreviewRequestRef.current = requestId;
     setFilePreview({ loading: true, relative_path: entry.relative_path, name: entry.name });
     try {
-      const payload = await api(`/api/file-preview?${qs({ db_path: selectedProject.db_path, project: selectedProject.project, path: entry.relative_path })}`);
-      setFilePreview(payload.file || { ...entry, missing: true });
+      const payload = await api(`/api/file-preview?${qs({ db_path: project.db_path, project: project.project, path: entry.relative_path })}`);
+      if (requestId === filePreviewRequestRef.current && isCurrentProject(project)) {
+        setFilePreview(payload.file || { ...entry, missing: true });
+      }
     } catch (error) {
-      setFilePreview({ ...entry, error: error.message });
+      if (requestId === filePreviewRequestRef.current && isCurrentProject(project)) {
+        setFilePreview({ ...entry, error: error.message });
+      }
     }
   }
 
@@ -734,15 +818,42 @@ function App() {
 
   useEffect(() => {
     if (selectedProject) {
+      projectRequestRef.current += 1;
+      fileRequestRef.current += 1;
+      filePreviewRequestRef.current += 1;
+      governanceRequestRef.current += 1;
+      intelligenceRequestRef.current += 1;
+      truthRequestRef.current += 1;
+      captureRequestRef.current += 1;
+      captureActionRequestRef.current += 1;
+      setMemories([]);
+      setGraphData({ nodes: [], edges: [] });
+      setFreshness({ state: "checking", fresh: 0, changed: 0, missing: 0, added: 0, uninspectable: 0 });
+      setProjectSettings(null);
+      setParserCapabilities({});
+      setWatcher({ state: "loading", backend: null });
+      setContinuity({ state: "loading", backend: null });
+      setReceipts([]);
+      setCheckpoint(null);
+      setContinuationReadiness(null);
       setFileTree({ entries: [], prefix: "", query: "", total_files: 0 });
       setFilePreview(null);
+      setFilesLoading(false);
       setGovernance({ policies: [], receipts: [] });
       setPreflightDecision(null);
+      setIntelligence({ diagnostics: null, graph: null, workspaces: [] });
+      setTruthData({ claims: [], events: [], contradictions: [], validators: [], abstentions: [], counts: {} });
+      setTruthDetail(null);
+      setTruthDiff(null);
+      setCaptureData({ overview: null, replay: null, diagnostics: null });
+      setCaptureBusy(false);
+      setCaptureError("");
+      setSelectedNode(null);
+      setReferenceHistory([]);
       setMessage(`Loading ${selectedProject.project}...`);
       loadProjectDetails(selectedProject)
         .then(async () => {
           if (viewMode === "files") await loadFiles("", "", selectedProject);
-          setMessage(`${selectedProject.project} index loaded.`);
         })
         .catch((error) => setMessage(`Could not load ${selectedProject.project}: ${error.message}`));
     }
@@ -760,7 +871,7 @@ function App() {
       try {
         const [continuityPayload, checkpointPayload] = await Promise.all([
           api(`/api/continuity?${qs(params)}`),
-          api(`/api/checkpoint?${qs(params)}`),
+          api(`/api/checkpoint?${qs({ ...params, mode: "summary" })}`),
         ]);
         if (!cancelled) {
           setContinuity(continuityPayload);
@@ -1105,42 +1216,60 @@ function App() {
     }
   }
 
-  async function loadWorkspaces() {
-    if (!selectedParams) return [];
-    const payload = await api(`/api/workspaces?${qs(selectedParams)}`);
+  async function loadWorkspaces(project = selectedProject) {
+    if (!project) return [];
+    const requestId = intelligenceRequestRef.current + 1;
+    intelligenceRequestRef.current = requestId;
+    const params = { db_path: project.db_path, project: project.project };
+    const payload = await api(`/api/workspaces?${qs(params)}`);
+    if (requestId !== intelligenceRequestRef.current || !isCurrentProject(project)) return [];
     setIntelligence((current) => ({ ...current, workspaces: payload.workspaces || [] }));
     return payload.workspaces || [];
   }
 
   async function runRetrievalDiagnostics(query) {
-    if (!selectedParams || !query.trim()) return null;
+    const project = selectedProject;
+    if (!project || !query.trim()) return null;
+    const requestId = intelligenceRequestRef.current + 1;
+    intelligenceRequestRef.current = requestId;
+    const params = { db_path: project.db_path, project: project.project };
     setIsIntelligenceBusy(true);
     try {
-      const payload = await api(`/api/retrieval-diagnostics?${qs({ ...selectedParams, query: query.trim(), limit: 8 })}`);
+      const payload = await api(`/api/retrieval-diagnostics?${qs({ ...params, query: query.trim(), limit: 8 })}`);
+      if (requestId !== intelligenceRequestRef.current || !isCurrentProject(project)) return null;
       setIntelligence((current) => ({ ...current, diagnostics: payload }));
       setMessage(`Retrieval explained in ${payload.latency_ms} ms.`);
       return payload;
     } catch (error) {
-      setMessage(`Retrieval diagnostics failed: ${error.message}`);
+      if (requestId === intelligenceRequestRef.current && isCurrentProject(project)) {
+        setMessage(`Retrieval diagnostics failed: ${error.message}`);
+      }
       return null;
     } finally {
-      setIsIntelligenceBusy(false);
+      if (requestId === intelligenceRequestRef.current && isCurrentProject(project)) setIsIntelligenceBusy(false);
     }
   }
 
   async function runImpactQuery(target, queryType = "impact") {
-    if (!selectedParams || !target.trim()) return null;
+    const project = selectedProject;
+    if (!project || !target.trim()) return null;
+    const requestId = intelligenceRequestRef.current + 1;
+    intelligenceRequestRef.current = requestId;
+    const params = { db_path: project.db_path, project: project.project };
     setIsIntelligenceBusy(true);
     try {
-      const payload = await api(`/api/graph-query?${qs({ ...selectedParams, target: target.trim(), type: queryType, depth: 3, limit: 100 })}`);
+      const payload = await api(`/api/graph-query?${qs({ ...params, target: target.trim(), type: queryType, depth: 3, limit: 100 })}`);
+      if (requestId !== intelligenceRequestRef.current || !isCurrentProject(project)) return null;
       setIntelligence((current) => ({ ...current, graph: payload }));
       setMessage(`${queryType} query found ${payload.nodes.length} nodes and ${payload.edges.length} relationships.`);
       return payload;
     } catch (error) {
-      setMessage(`Graph query failed: ${error.message}`);
+      if (requestId === intelligenceRequestRef.current && isCurrentProject(project)) {
+        setMessage(`Graph query failed: ${error.message}`);
+      }
       return null;
     } finally {
-      setIsIntelligenceBusy(false);
+      if (requestId === intelligenceRequestRef.current && isCurrentProject(project)) setIsIntelligenceBusy(false);
     }
   }
 
@@ -1184,18 +1313,23 @@ function App() {
 
   async function loadTruth(project = selectedProject, { silent = false } = {}) {
     if (!project) return null;
+    const requestId = truthRequestRef.current + 1;
+    truthRequestRef.current = requestId;
     if (!silent) setIsTruthBusy(true);
     try {
       const payload = await api(`/api/truth?${qs({
         db_path: project.db_path, project: project.project, mode: "overview", limit: 120,
       })}`);
+      if (requestId !== truthRequestRef.current || !isCurrentProject(project)) return null;
       setTruthData(payload);
       return payload;
     } catch (error) {
-      setMessage(`Temporal truth could not load: ${error.message}`);
+      if (requestId === truthRequestRef.current && isCurrentProject(project)) {
+        setMessage(`Temporal truth could not load: ${error.message}`);
+      }
       return null;
     } finally {
-      if (!silent) setIsTruthBusy(false);
+      if (!silent && requestId === truthRequestRef.current && isCurrentProject(project)) setIsTruthBusy(false);
     }
   }
 
@@ -1222,34 +1356,47 @@ function App() {
   }
 
   async function inspectTruthClaim(claimId) {
-    if (!selectedProject || !claimId) return;
+    const project = selectedProject;
+    if (!project || !claimId) return;
+    const requestId = truthRequestRef.current + 1;
+    truthRequestRef.current = requestId;
+    const params = { db_path: project.db_path, project: project.project };
     setIsTruthBusy(true);
     try {
       const payload = await api(`/api/truth?${qs({
-        ...selectedParams, mode: "explain", claim_id: claimId,
+        ...params, mode: "explain", claim_id: claimId,
       })}`);
-      setTruthDetail(payload);
+      if (requestId === truthRequestRef.current && isCurrentProject(project)) setTruthDetail(payload);
     } catch (error) {
-      setMessage(`Claim evidence could not load: ${error.message}`);
+      if (requestId === truthRequestRef.current && isCurrentProject(project)) {
+        setMessage(`Claim evidence could not load: ${error.message}`);
+      }
     } finally {
-      setIsTruthBusy(false);
+      if (requestId === truthRequestRef.current && isCurrentProject(project)) setIsTruthBusy(false);
     }
   }
 
   async function compareTruth(fromSequence, toSequence, validAt) {
-    if (!selectedProject) return;
+    const project = selectedProject;
+    if (!project) return;
+    const requestId = truthRequestRef.current + 1;
+    truthRequestRef.current = requestId;
+    const params = { db_path: project.db_path, project: project.project };
     setIsTruthBusy(true);
     try {
       const payload = await api(`/api/truth?${qs({
-        ...selectedParams, mode: "diff", from_sequence: fromSequence,
+        ...params, mode: "diff", from_sequence: fromSequence,
         to_sequence: toSequence, valid_at: validAt, limit: 200,
       })}`);
+      if (requestId !== truthRequestRef.current || !isCurrentProject(project)) return;
       setTruthDiff(payload);
       setMessage(`${payload.changes?.length || 0} truth changes found between sequences ${fromSequence} and ${toSequence}.`);
     } catch (error) {
-      setMessage(`Truth diff failed: ${error.message}`);
+      if (requestId === truthRequestRef.current && isCurrentProject(project)) {
+        setMessage(`Truth diff failed: ${error.message}`);
+      }
     } finally {
-      setIsTruthBusy(false);
+      if (requestId === truthRequestRef.current && isCurrentProject(project)) setIsTruthBusy(false);
     }
   }
 
@@ -1474,7 +1621,7 @@ function App() {
           </div>
           <div>
             <h1>Rta-Smriti Brain</h1>
-            <span>v0.9 Alpha Operator Console</span>
+            <span>v0.9.1 Alpha Operator Console</span>
           </div>
         </div>
         <div className="topStatus">
@@ -1517,7 +1664,7 @@ function App() {
                 <small>Projects</small>
                 <strong>{selectedProject?.project || "Choose a brain"}</strong>
               </span>
-              <span className={`projectStateDot ${selectedProject?.ready ? "ok" : "warn"}`} />
+              <span className={`projectStateDot ${selectedProject?.scan_state === "checking" ? "checking" : selectedProject?.ready ? "ok" : "warn"}`} />
               <ChevronRight className="projectChevron" size={16} />
             </button>
             {projectsOpen && (
@@ -1530,14 +1677,14 @@ function App() {
                       setSelectedProject(project);
                       setProjectsOpen(false);
                     }}
-                    aria-label={`${project.project}, ${safeNumber(project.sources)} files, ${project.root_conflict || project.root_duplicate ? "root conflict" : project.ready ? "indexed" : "needs indexing"}`}
+                    aria-label={`${project.project}, ${safeNumber(project.sources)} files, ${project.scan_state === "checking" ? "health checking" : project.root_conflict || project.root_duplicate ? "root conflict" : project.ready ? "indexed" : "needs attention"}`}
                   >
                     <Network size={15} />
                     <span>
                       <strong>{project.project}</strong>
                       <small>{safeNumber(project.sources)} files / {safeNumber(project.memories)} memories{project.git?.branch ? ` / ${project.git.branch}@${project.git.head || "unborn"}` : ""}</small>
                     </span>
-                    <i className={project.ready && !project.root_conflict && !project.root_duplicate ? "ok" : "warn"} title={project.root_conflict || project.root_duplicate ? "Canonical checkout ownership needs review" : ""} />
+                    <i className={project.scan_state === "checking" ? "checking" : project.ready && !project.root_conflict && !project.root_duplicate ? "ok" : "warn"} title={project.scan_state === "checking" ? "Repository health is still being verified" : project.root_conflict || project.root_duplicate ? "Canonical checkout ownership needs review" : ""} />
                   </button>
                 ))}
                 {isLoading && !projects.length && <div className="railEmpty">Scanning local brains...</div>}
@@ -1579,7 +1726,7 @@ function App() {
           </nav>
           <div className="railFooter">
             <span>
-              <Database size={15} /> {readyProjects}/{projects.length} indexed
+              <Database size={15} /> {isProjectRegistryLoading ? `${projects.length} found / checking` : `${readyProjects}/${projects.length} ready`}
             </span>
             <span>
               <HardDrive size={15} /> SQLite
@@ -1623,7 +1770,7 @@ function App() {
             <button className="toolButton" onClick={() => setStageExpanded((value) => !value)} aria-label={stageExpanded ? "Exit expanded workspace" : "Expand workspace"}>
               <Maximize2 size={16} />
             </button>
-            {(selectedProject?.root_conflict || selectedProject?.root_duplicate || selectedProject?.integrity?.operationally_ready === false) && (
+            {(selectedProject?.root_conflict || selectedProject?.root_duplicate || (selectedProject?.scan_state !== "checking" && selectedProject?.integrity?.status !== "checking" && selectedProject?.integrity?.operationally_ready === false)) && (
               <div className="rootConflictBanner" role="alert">
                 <ShieldCheck size={17} />
                 <span>
@@ -1854,7 +2001,7 @@ function App() {
 
       <footer className="statusBar">
         <span>
-          <CheckCircle2 size={14} /> Brain Status: {isLoading ? "Scanning" : loadError ? "Needs attention" : "Healthy"}
+          <CheckCircle2 size={14} /> Brain Status: {isLoading || isProjectRegistryLoading ? "Checking" : loadError ? "Needs attention" : "Healthy"}
         </span>
         <span>
           <CircleDot size={14} /> Graph DB: Local SQLite
@@ -1886,6 +2033,7 @@ function GraphSettings({
   continuity, onToggleContinuity, isChangingContinuity,
 }) {
   const settings = projectSettings || {};
+  const integrityPending = !integrity || integrity.status === "checking" || integrity.status === "not_checked";
   const updateSetting = (key, value) => setProjectSettings((current) => ({ ...(current || {}), [key]: value }));
   const parserStatus = parserCapabilities[settings.parser_adapter];
   const watcherRunning = watcher?.state === "running";
@@ -1978,16 +2126,16 @@ function GraphSettings({
         </button>
         <p className="blockedPolicyWarning"><ShieldCheck size={14} /> Metadata-only files remain visible as warnings and are never represented as content-verified. Strict block mode remains available.</p>
       </div>
-      <div className={`settingsGroup integritySettings ${integrity?.operationally_ready ? "verified" : "attention"}`}>
+      <div className={`settingsGroup integritySettings ${integrityPending ? "checking" : integrity?.operationally_ready ? "verified" : "attention"}`}>
         <div className="watcherHeading">
           <ShieldCheck size={16} />
-          <span><strong>Checkout integrity</strong><small>{integrity?.operationally_ready ? "Verified" : "Attention required"}</small></span>
+          <span><strong>Checkout integrity</strong><small>{integrityPending ? "Verifying" : integrity?.operationally_ready ? "Verified" : "Attention required"}</small></span>
         </div>
         <div className="integrityFacts">
-          <span>Schema <b>v{integrity?.schema_version ?? "?"}</b></span>
-          <span>Binding <b>{integrity?.binding?.state?.replaceAll("_", " ") || "unknown"}</b></span>
-          <span>Root <b>{integrity?.binding?.root_fingerprint || "unbound"}</b></span>
-          <span>Duplicates <b>{integrity?.duplicate_root_count ?? 0}</b></span>
+          <span>Schema <b>{integrityPending ? "checking" : `v${integrity?.schema_version ?? "?"}`}</b></span>
+          <span>Binding <b>{integrityPending ? "checking" : integrity?.binding?.state?.replaceAll("_", " ") || "unknown"}</b></span>
+          <span>Root <b>{integrityPending ? "checking" : integrity?.binding?.root_fingerprint || "unbound"}</b></span>
+          <span>Duplicates <b>{integrityPending ? "checking" : integrity?.duplicate_root_count ?? 0}</b></span>
         </div>
       </div>
       <div className="settingsGroup watcherSettings">

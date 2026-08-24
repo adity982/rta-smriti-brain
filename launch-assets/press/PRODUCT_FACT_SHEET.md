@@ -2,9 +2,11 @@
 
 **Category:** Open-source developer tool, local AI project memory
 
-**Current prerelease:** [`v0.9.0-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.0-alpha)
+**Current prerelease:** [`v0.9.1-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.1-alpha)
 
-**Release state:** Published alpha with SHA-256 checksums, a universal wheel, CycloneDX SBOMs, and standalone Windows, Linux, and macOS artifacts.
+**Release contract:** The alpha patch adds progressive operator loading and race-safe multi-project isolation. Formal publication requires SHA-256 checksums, a universal wheel, CycloneDX SBOMs, and standalone Windows, Linux, and macOS artifacts.
+
+**Creation:** Conceived and researched by Sulabh Dubey; built with [OpenAI Codex](https://openai.com/codex/) as the primary AI engineering agent under maintainer review. See [`CONTRIBUTORS.md`](../../CONTRIBUTORS.md).
 
 **License:** MIT
 

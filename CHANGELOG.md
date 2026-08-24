@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.1-alpha] - Unreleased
+
+- Added progressive authenticated dashboard bootstrap so useful project state renders before deep repository and continuity checks complete.
+- Isolated all project-scoped asynchronous responses so delayed graph, file, capture, retrieval, governance, and truth results cannot leak across project switches.
+- Added bounded API timeouts and explicit checking, stopped, and not-configured lifecycle states.
+- Made multi-project MCP gateway schemas require an explicit project while preserving project-bound single-brain defaults.
+- Added rendered adversarial regressions for progressive loading, delayed registry refresh, file-preview isolation, and capture-state isolation.
+
 ## [0.9.0-alpha] - 2026-08-23
 
 - Added opt-in universal passive capture with versioned vendor adapters, bounded private spools, deterministic normalization, and one managed daemon per brain.

@@ -1,5 +1,13 @@
 # Roadmap
 
+## v0.9.1-alpha Patch Candidate
+
+- Progressive dashboard bootstrap with useful early project state
+- Race-safe isolation across project switching and delayed API responses
+- Explicit checking and stopped lifecycle states with bounded request timeouts
+- Explicit project selection in the multi-project MCP gateway contract
+- Expanded rendered operator and adversarial loading coverage
+
 ## Published v0.9.0-alpha
 
 - Opt-in universal passive capture for supported coding-agent hooks and generic local producers
@@ -36,7 +44,7 @@
 - Metadata-only large-file isolation plus explicit strict blocking
 - Safe local language-server discovery and loopback-only Ollama continuity compaction
 
-## Next After v0.9.0-alpha
+## Next After v0.9.1-alpha
 
 - Expand the public benchmark with community-reviewed corpora and blinded human relevance judgments
 - Add approximate nearest-neighbor indexes for very large local embedding collections

@@ -28,7 +28,7 @@ import {
 import "./styles.css";
 
 const repositoryUrl = import.meta.env.VITE_REPOSITORY_URL || "https://github.com/sulabhdubey/rta-smriti-brain";
-const releaseUrl = `${repositoryUrl}/releases/tag/v0.9.0-alpha`;
+const releaseUrl = `${repositoryUrl}/releases/tag/v0.9.1-alpha`;
 const ciRunUrl = `${repositoryUrl}/actions/workflows/ci.yml`;
 const nativeRunUrl = `${repositoryUrl}/actions/workflows/binaries.yml`;
 const productHuntUrl = "https://www.producthunt.com/products/rta-smriti-brain?launch=rta-smriti-brain&utm_source=website&utm_medium=referral&utm_campaign=v090_release";
@@ -105,9 +105,10 @@ function Hero() {
       <div className="heroScrim" />
       <HeroGraph />
       <div className="heroContent shell">
-        <div className="eyebrow"><LockKeyhole size={14} /> v0.9.0-alpha · Universal Capture · Local-first</div>
+        <div className="eyebrow"><LockKeyhole size={14} /> v0.9.1-alpha · Operator-ready · Local-first</div>
         <h1>Rta-Smriti Brain</h1>
-        <p className="heroLead">A private continuity layer that captures bounded agent events, preserves bitemporal project truth, and compiles governed context for the next task.</p>
+        <p className="heroLead">A private continuity layer that captures bounded agent events, preserves bitemporal project truth, and loads governed context predictably across real multi-project work.</p>
+        <p className="buildCredit">Conceived and researched by <a href="https://github.com/sulabhdubey">Sulabh Dubey</a>. Built with <a href="https://openai.com/codex/">OpenAI Codex</a> as the primary AI engineering agent under maintainer review.</p>
         <div className="heroActions">
           <a className="primaryAction" href={releaseUrl}><TerminalSquare size={18} /> Get latest alpha <ArrowRight size={17} /></a>
           <a className="secondaryAction" href="#demo"><Play size={17} /> Watch the product</a>
@@ -305,7 +306,7 @@ function Install() {
   return (
     <section className="installSection" id="install">
       <div className="shell installGrid">
-        <div><span className="sectionIndex">08 / START LOCAL</span><h2>Install locally. Start a project in one command.</h2><p>Use the source install below or download the verified v0.9.0-alpha binary and checksum for your operating system.</p><p><a href={releaseUrl}>Release assets</a> · <a href={ciRunUrl}>CI matrix</a> · <a href={nativeRunUrl}>Native builds</a></p></div>
+        <div><span className="sectionIndex">08 / START LOCAL</span><h2>Install locally. Start a project in one command.</h2><p>Use the source install below or download the verified v0.9.1-alpha binary and checksum for your operating system.</p><p><a href={releaseUrl}>Release assets</a> · <a href={ciRunUrl}>CI matrix</a> · <a href={nativeRunUrl}>Native builds</a></p></div>
         <div>
           <div className="platformSwitch" role="tablist" aria-label="Installation platform">
             {Object.entries(labels).map(([id, label]) => <button key={id} role="tab" aria-selected={platform === id} onClick={() => setPlatform(id)}>{label}</button>)}
@@ -322,7 +323,7 @@ function Install() {
 
 function Footer() {
   return (
-    <footer><div className="shell footerGrid"><Brand compact /><p>Project memory that stays with the project.</p><div><a href="#install">Install</a><a href={`${repositoryUrl}/blob/main/SECURITY.md`}>Security & privacy</a><a href="./LICENSE.txt">MIT License</a><a href={productHuntUrl}>Product Hunt <ExternalLink size={13} /></a>{repositoryUrl && <a href={repositoryUrl}>Get source <ExternalLink size={13} /></a>}</div></div></footer>
+    <footer><div className="shell footerGrid"><Brand compact /><p>Conceived by Sulabh Dubey. Built with OpenAI Codex.</p><div><a href="#install">Install</a><a href={`${repositoryUrl}/blob/main/CONTRIBUTORS.md`}>Build provenance</a><a href={`${repositoryUrl}/blob/main/SECURITY.md`}>Security & privacy</a><a href="./LICENSE.txt">MIT License</a><a href={productHuntUrl}>Product Hunt <ExternalLink size={13} /></a>{repositoryUrl && <a href={repositoryUrl}>Get source <ExternalLink size={13} /></a>}</div></div></footer>
   );
 }
 
@@ -345,7 +346,7 @@ function ReleaseStory() {
         </div>
         <div className="releaseProof">
           <img src="./assets/universal-capture-v0.9.png" alt="Rta-Smriti v0.9 Agent Flight Recorder showing two bounded unverified events from one authorized source" />
-          <div><span className="sectionIndex">UNIVERSAL CAPTURE</span><h3>Observe first. Promote only with evidence.</h3><p>Captured commands and tool calls are replayed as read-only records. Redaction happens before durable queuing, raw payload retention stays off by default, and destructive retention or deletion operations require preview-derived confirmation.</p><a href={releaseUrl}>Read the v0.9 release evidence <ArrowRight size={15} /></a></div>
+          <div><span className="sectionIndex">UNIVERSAL CAPTURE</span><h3>Observe first. Promote only with evidence.</h3><p>Captured commands and tool calls are replayed as read-only records. Redaction happens before durable queuing, raw payload retention stays off by default, and destructive retention or deletion operations require preview-derived confirmation.</p><a href={releaseUrl}>Read the v0.9.1 release evidence <ArrowRight size={15} /></a></div>
         </div>
       </div>
     </section>

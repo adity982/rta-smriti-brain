@@ -6,8 +6,8 @@ from pathlib import Path
 from rta_brain import __version__
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_PYTHON_VERSION = "0.9.0a1"
-EXPECTED_DISPLAY_VERSION = "0.9.0-alpha"
+EXPECTED_PYTHON_VERSION = "0.9.1a1"
+EXPECTED_DISPLAY_VERSION = "0.9.1-alpha"
 
 
 class ReleaseMetadataTests(unittest.TestCase):
@@ -22,8 +22,10 @@ class ReleaseMetadataTests(unittest.TestCase):
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         fact_sheet = (ROOT / "launch-assets" / "press" / "PRODUCT_FACT_SHEET.md").read_text(encoding="utf-8")
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        contributors = (ROOT / "CONTRIBUTORS.md").read_text(encoding="utf-8")
+        launch_site = (ROOT / "launch-site" / "src" / "main.jsx").read_text(encoding="utf-8")
         usage = (ROOT / "docs" / "USAGE_GUIDE.md").read_text(encoding="utf-8")
-        release_notes = (ROOT / "docs" / "RELEASE_NOTES_v0.9.0-alpha.md").read_text(
+        release_notes = (ROOT / "docs" / "RELEASE_NOTES_v0.9.1-alpha.md").read_text(
             encoding="utf-8"
         )
 
@@ -33,18 +35,27 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(package_lock["version"], EXPECTED_DISPLAY_VERSION)
         self.assertEqual(package_lock["packages"][""]["version"], EXPECTED_DISPLAY_VERSION)
         self.assertIn(f'"{EXPECTED_PYTHON_VERSION}" not in version', binary_smoke)
-        self.assertIn("v0.9 Alpha Operator Console", dashboard)
-        self.assertIn("version: 0.9.0-alpha", citation)
+        self.assertIn("v0.9.1 Alpha Operator Console", dashboard)
+        self.assertIn("version: 0.9.1-alpha", citation)
         self.assertIn("## Published v0.9.0-alpha", roadmap)
+        self.assertIn("## v0.9.1-alpha Patch Candidate", roadmap)
+        self.assertIn("## [0.9.1-alpha] - Unreleased", changelog)
         self.assertIn("## [0.9.0-alpha] - 2026-08-23", changelog)
-        self.assertIn("**Current prerelease:** [`v0.9.0-alpha`]", fact_sheet)
-        self.assertIn("/releases/tag/v0.9.0-alpha", readme)
-        self.assertNotIn("uncommitted `v0.9.0-alpha`", readme)
+        self.assertIn("**Current prerelease:** [`v0.9.1-alpha`]", fact_sheet)
+        self.assertIn("/releases/tag/v0.9.1-alpha", readme)
+        self.assertNotIn("uncommitted `v0.9.1-alpha`", readme)
         self.assertIn("capture           Operate the governed universal capture journal", readme)
         self.assertNotIn("uncommitted local candidate", release_notes)
-        self.assertIn("not represented as security coverage", release_notes)
-        self.assertIn("hosted CI on Windows, macOS, and Ubuntu", release_notes)
-        self.assertNotIn("post-fix candidate is required", release_notes)
+        self.assertIn("13 of 13 operator-readiness", release_notes)
+        self.assertIn("12 of 12 release/website code-bearing surfaces", release_notes)
+        self.assertIn("Hosted CI and release artifacts remain publication gates", release_notes)
+        self.assertIn("Conceived and researched by [Sulabh Dubey]", readme)
+        self.assertIn("[OpenAI Codex](https://openai.com/codex/)", readme)
+        self.assertIn("Rta-Smriti Brain was conceived, researched, and product-directed", contributors)
+        self.assertIn("does not imply that OpenAI endorses", contributors)
+        self.assertIn("Built with <a href=\"https://openai.com/codex/\">OpenAI Codex</a>", launch_site)
+        self.assertIn("Conceived and researched by Sulabh Dubey", release_notes)
+        self.assertNotIn("given-names: OpenAI", citation)
         self.assertNotIn("zero Python runtime dependencies", fact_sheet)
         self.assertIn("truth             Query the bitemporal truth ledger", readme)
         self.assertIn("context           Govern and compile agent-specific context", readme)
@@ -68,10 +79,10 @@ class ReleaseMetadataTests(unittest.TestCase):
         smoke = (ROOT / "scripts" / "build_installed_smoke.py").read_text(encoding="utf-8")
 
         self.assertIn(
-            'BASELINE_REF = "f8736ebaab50dba75f86e22aa246066611d2c75e"',
+            'BASELINE_REF = "v0.9.0-alpha"',
             smoke,
         )
-        self.assertIn("v0.8 baseline and v0.9 candidate", smoke)
+        self.assertIn("v0.9.0 baseline and v0.9.1 candidate", smoke)
         self.assertIn("baseline_version == expected_version", smoke)
         self.assertNotIn('"--force-reinstall", str(wheel)', smoke)
 

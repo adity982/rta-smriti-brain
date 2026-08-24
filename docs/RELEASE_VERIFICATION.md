@@ -1,4 +1,40 @@
 # Release Verification
+## v0.9.1-alpha Candidate Verification
+
+The v0.9.1 patch preserves the published v0.9 architecture and tightens the
+operator surface around progressive loading, project isolation, lifecycle
+status, and explicit multi-project MCP routing.
+
+| Candidate gate | Result |
+| --- | --- |
+| Package metadata | `0.9.1a1` / `v0.9.1-alpha` |
+| Full local Python regression | 768 passed; 23 explicit platform or optional-capability skips; 649 subtests passed |
+| Dashboard unit tests | 5 passed |
+| Progressive loading and project-switch isolation | 4 rendered adversarial journeys passed |
+| Complete operator browser suite | 7 rendered journeys passed |
+| Real local multi-project audit | Passed without browser errors, failed API responses, persistent loading states, false integrity alerts, or mobile overflow |
+| Frozen Codex Security diff scans | 13 of 13 changed operator-readiness surfaces and 12 of 12 release/website code-bearing surfaces covered; zero findings |
+| Privacy and secrets | Repository privacy scan and Gitleaks staged/history checks passed |
+| Dependency integrity | npm audit found zero vulnerabilities; Python dependency check found no broken requirements |
+| Patch integrity | `git diff --check` and actionlint passed |
+| Hosted Windows/macOS/Linux CI | Pending exact committed candidate |
+| Native binaries, wheel, SBOMs, and checksums | Pending tag workflow |
+| GitHub Pages and anonymous download acceptance | Pending publication |
+
+The real-project audit used private local brains only as operator fixtures.
+Project names, roots, database contents, capability tokens, and local scan paths
+are not included in this repository or its release evidence. Managed watchers,
+continuity workers, and capture daemons remain explicit opt-in services; stopped
+services are reported honestly and are not silently enabled by the dashboard.
+
+The successful security result is a diff scan of the frozen v0.9.1 patch. It
+does not replace the repository's existing threat model, privacy scanner,
+Gitleaks coverage, dependency audits, hosted matrix, or artifact acceptance
+gates. Hosted CI and release artifacts must pass before this candidate is
+published.
+
+## Published v0.9.0-alpha Baseline
+
 
 This page records the evidence boundary for `v0.9.0-alpha`. It separates
 source qualification, hosted compatibility, tag-generated artifacts, and

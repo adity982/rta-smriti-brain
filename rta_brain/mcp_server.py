@@ -110,6 +110,24 @@ def tool_schema(name: str, description: str, properties: dict[str, Any], require
     }
 
 
+def gateway_tool_schema(tool: dict[str, Any]) -> dict[str, Any]:
+    """Require an explicit project when advertising a multi-project gateway tool."""
+    advertised = copy.deepcopy(tool)
+    schema = advertised["inputSchema"]
+    schema["properties"].setdefault(
+        "project",
+        {"type": "string", "description": "Project memory bank name."},
+    )
+    required = list(schema.get("required") or [])
+    if "project" not in required:
+        required.append("project")
+    schema["required"] = required
+    advertised["description"] = (
+        f'{advertised["description"]} An explicit project is required in multi-project gateway mode.'
+    )
+    return advertised
+
+
 TOOLS = [
     tool_schema(
         "brain_search",
@@ -1025,7 +1043,7 @@ class RtaBrainMcpServer:
             enabled.update(CAPTURE_DESTRUCTIVE_TOOLS)
         self.enabled_tools = frozenset(enabled)
         self.agent_tools = [
-            (copy.deepcopy(TOOL_BY_NAME[name]) if self.brain_dir is not None else _agent_tool_schema(TOOL_BY_NAME[name]))
+            (gateway_tool_schema(TOOL_BY_NAME[name]) if self.brain_dir is not None else _agent_tool_schema(TOOL_BY_NAME[name]))
             for name in TOOL_BY_NAME if name in enabled
         ]
 
@@ -2015,7 +2033,7 @@ def build_parser() -> argparse.ArgumentParser:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--db", help="Path to one SQLite brain file")
     source.add_argument("--brain-dir", help="Directory of project-scoped SQLite brain files")
-    parser.add_argument("--project", default="default", help="Default project memory bank for single-database mode")
+    parser.add_argument("--project", help="Default project memory bank for single-database mode")
     parser.add_argument("--root", help="Expected canonical checkout root pinned by the generated MCP configuration")
     parser.add_argument(
         "--allow-memory-writes", action="store_true",

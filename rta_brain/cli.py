@@ -896,6 +896,7 @@ def build_parser() -> argparse.ArgumentParser:
     continuity.add_argument("--inactivity", type=float, default=900.0)
     continuity.add_argument("--lookback-days", type=float, default=30.0, help="Initial session lookback; 0 imports all history")
     continuity.add_argument("--backlog-tail-mb", type=float, default=2.0, help="Recent tail retained when a session backlog is oversized")
+    continuity.add_argument("--binding-diagnostics", action="store_true", help="Scan recent Codex sessions for canonical-root binding diagnostics")
 
     continuity_worker = sub.add_parser("_continuity-worker", help=argparse.SUPPRESS)
     continuity_worker.add_argument("--root", required=True)
@@ -1782,7 +1783,7 @@ def main(argv=None) -> int:
         try:
             db_path = Path(args.db).expanduser().resolve()
             if args.action == "status":
-                payload = continuity_status(db_path, args.project)
+                payload = continuity_status(db_path, args.project, include_binding_diagnostics=args.binding_diagnostics)
             elif args.action == "stop":
                 payload = stop_continuity(db_path, args.project)
             else:
