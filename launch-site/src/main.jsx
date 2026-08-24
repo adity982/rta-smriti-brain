@@ -132,7 +132,7 @@ function Header() {
       <div className="shell headerInner">
         <Brand />
         <nav className={open ? "siteNav open" : "siteNav"} aria-label="Main navigation">
-          <a href="#release" onClick={() => setOpen(false)}>v0.9</a>
+          <a href="#release" onClick={() => setOpen(false)}>v0.9.1</a>
           <a href="#product" onClick={() => setOpen(false)}>Product</a>
           <a href="#architecture" onClick={() => setOpen(false)}>Architecture</a>
           <a href="#difference" onClick={() => setOpen(false)}>Why different</a>
@@ -332,13 +332,13 @@ function ReleaseStory() {
     ["v0.6", "Hardened runtime", "Cross-platform lifecycle, parsing, hybrid retrieval, signed and encrypted snapshots."],
     ["v0.7", "Temporal truth", "Append-only event sourcing with recorded time, valid time, claims, evidence, and contradictions."],
     ["v0.8", "Context compiler", "Capability-bound, privacy-aware packs with fixed-point scoring, receipts, and abstention."],
-    ["v0.9", "Universal Capture", "Opt-in adapters, bounded private spool, normalization, replay, retention, deletion, and diagnostics."],
+    ["v0.9.1", "Operator-ready Universal Capture", "Progressive multi-project loading, race-safe project isolation, bounded capture diagnostics, and verified cross-platform artifacts."],
   ];
   return (
     <section className="releaseStory" id="release">
       <div className="shell">
         <div className="sectionHeading rowHeading">
-          <div><span className="sectionIndex">02 / CURRENT RELEASE</span><h2>v0.9 is a continuity system, not a chat transcript dump.</h2></div>
+          <div><span className="sectionIndex">02 / CURRENT RELEASE</span><h2>v0.9.1 makes governed continuity dependable under real multi-project load.</h2></div>
           <p>The newest layer captures activity conservatively, keeps it untrusted, and routes only governed evidence into the next agent task.</p>
         </div>
         <div className="releaseTrack">

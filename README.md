@@ -26,7 +26,7 @@ Rta-Smriti gives each project a memory that stays on your machine.
 ## Latest Release
 
 [`v0.9.1-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.1-alpha)
-is the current patch line. A formal prerelease is accepted only after its exact
+is the current published prerelease. A formal prerelease is accepted only after its exact
 tagged source passes the hosted Windows, macOS, and Ubuntu matrix across Python
 3.11, 3.12, and 3.13. The tag workflow builds and smoke-tests Windows x64, Linux x64, and macOS
 standalone binaries, a universal wheel, CycloneDX SBOMs, and a combined
