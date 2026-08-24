@@ -1,6 +1,6 @@
 # Roadmap
 
-## v0.9.1-alpha Patch Candidate
+## Published v0.9.1-alpha
 
 - Progressive dashboard bootstrap with useful early project state
 - Race-safe isolation across project switching and delayed API responses

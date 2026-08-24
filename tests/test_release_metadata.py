@@ -28,6 +28,9 @@ class ReleaseMetadataTests(unittest.TestCase):
         release_notes = (ROOT / "docs" / "RELEASE_NOTES_v0.9.1-alpha.md").read_text(
             encoding="utf-8"
         )
+        release_verification = (ROOT / "docs" / "RELEASE_VERIFICATION.md").read_text(
+            encoding="utf-8"
+        )
 
         self.assertEqual(__version__, EXPECTED_PYTHON_VERSION)
         self.assertEqual(pyproject["project"]["version"], EXPECTED_PYTHON_VERSION)
@@ -38,17 +41,24 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("v0.9.1 Alpha Operator Console", dashboard)
         self.assertIn("version: 0.9.1-alpha", citation)
         self.assertIn("## Published v0.9.0-alpha", roadmap)
-        self.assertIn("## v0.9.1-alpha Patch Candidate", roadmap)
-        self.assertIn("## [0.9.1-alpha] - Unreleased", changelog)
+        self.assertIn("## Published v0.9.1-alpha", roadmap)
+        self.assertIn("## [0.9.1-alpha] - 2026-08-24", changelog)
         self.assertIn("## [0.9.0-alpha] - 2026-08-23", changelog)
         self.assertIn("**Current prerelease:** [`v0.9.1-alpha`]", fact_sheet)
+        self.assertIn("**Published release:**", fact_sheet)
+        self.assertNotIn("Formal publication requires", fact_sheet)
         self.assertIn("/releases/tag/v0.9.1-alpha", readme)
         self.assertNotIn("uncommitted `v0.9.1-alpha`", readme)
         self.assertIn("capture           Operate the governed universal capture journal", readme)
         self.assertNotIn("uncommitted local candidate", release_notes)
         self.assertIn("13 of 13 operator-readiness", release_notes)
         self.assertIn("12 of 12 release/website code-bearing surfaces", release_notes)
-        self.assertIn("Hosted CI and release artifacts remain publication gates", release_notes)
+        self.assertIn("## Publication Evidence", release_notes)
+        self.assertIn("run 32724105024", release_notes)
+        self.assertIn("downloaded without authentication", release_notes)
+        self.assertIn("## Published v0.9.1-alpha Verification", release_verification)
+        self.assertIn("Formal annotated tag: `v0.9.1-alpha`", release_verification)
+        self.assertIn("03a9e40844a47e9a3d643c67d65e9ca701c3853125c613d3ee6b1028f12bcdb4", release_verification)
         self.assertIn("Conceived and researched by [Sulabh Dubey]", readme)
         self.assertIn("[OpenAI Codex](https://openai.com/codex/)", readme)
         self.assertIn("Rta-Smriti Brain was conceived, researched, and product-directed", contributors)

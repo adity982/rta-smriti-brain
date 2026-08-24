@@ -44,9 +44,12 @@ The frozen Windows candidate passed:
   implementation surfaces and 12 of 12 release/website code-bearing surfaces,
   with zero findings in either scan.
 
-The security scan covered this patch, not an independent audit of every
-historical line in the repository. Its temporary local report and private
-operator data are not release artifacts.
+The frozen security scans covered the original operator-readiness and
+release/website surfaces, not an independent audit of every historical line in
+the repository. The later seven-entry concurrency repair was manually reviewed
+and separately passed regression, privacy, secrets, dependency, workflow, and
+patch-integrity checks; it is not misrepresented as part of those frozen scans.
+Temporary local reports and private operator data are not release artifacts.
 
 ## Compatibility And Upgrade
 
