@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.9.1-alpha] - Unreleased
+## [0.9.1-alpha] - 2026-08-24
 
 - Added progressive authenticated dashboard bootstrap so useful project state renders before deep repository and continuity checks complete.
 - Isolated all project-scoped asynchronous responses so delayed graph, file, capture, retrieval, governance, and truth results cannot leak across project switches.

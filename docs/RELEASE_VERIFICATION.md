@@ -1,5 +1,5 @@
 # Release Verification
-## v0.9.1-alpha Candidate Verification
+## Published v0.9.1-alpha Verification
 
 The v0.9.1 patch preserves the published v0.9 architecture and tightens the
 operator surface around progressive loading, project isolation, lifecycle
@@ -8,18 +8,62 @@ status, and explicit multi-project MCP routing.
 | Candidate gate | Result |
 | --- | --- |
 | Package metadata | `0.9.1a1` / `v0.9.1-alpha` |
-| Full local Python regression | 768 passed; 23 explicit platform or optional-capability skips; 649 subtests passed |
+| Full local Python regression | 788 passed; 23 explicit platform or optional-capability skips |
 | Dashboard unit tests | 5 passed |
 | Progressive loading and project-switch isolation | 4 rendered adversarial journeys passed |
 | Complete operator browser suite | 7 rendered journeys passed |
 | Real local multi-project audit | Passed without browser errors, failed API responses, persistent loading states, false integrity alerts, or mobile overflow |
-| Frozen Codex Security diff scans | 13 of 13 changed operator-readiness surfaces and 12 of 12 release/website code-bearing surfaces covered; zero findings |
+| Frozen Codex Security diff scans | 13 of 13 operator-readiness surfaces and 12 of 12 release/website code-bearing surfaces covered; zero findings. The later seven-entry concurrency repair was manually reviewed and separately passed regression, privacy, secrets, dependency, workflow, and patch-integrity checks; it is not misrepresented as part of those frozen scans. |
 | Privacy and secrets | Repository privacy scan and Gitleaks staged/history checks passed |
 | Dependency integrity | npm audit found zero vulnerabilities; Python dependency check found no broken requirements |
 | Patch integrity | `git diff --check` and actionlint passed |
-| Hosted Windows/macOS/Linux CI | Pending exact committed candidate |
-| Native binaries, wheel, SBOMs, and checksums | Pending tag workflow |
-| GitHub Pages and anonymous download acceptance | Pending publication |
+| Hosted Windows/macOS/Linux CI | PR [run 32719412677](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32719412677) and post-merge [run 32722109549](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32722109549) passed all five jobs |
+| Native binaries, wheel, SBOMs, and checksums | Tag [run 32724105024](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32724105024) passed all three platforms |
+| GitHub Pages and anonymous download acceptance | Pages [run 32722110481](https://github.com/sulabhdubey/rta-smriti-brain/actions/runs/32722110481) passed; eight public assets downloaded anonymously and verified |
+
+### Publication State
+
+- Published source commit: `721bd2ec98395f2be36a3b7ebb60c14bfa63c882`
+- Formal annotated tag: `v0.9.1-alpha`
+- Formal prerelease: [Rta-Smriti Brain v0.9.1-alpha](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.1-alpha)
+- Release classification: alpha prerelease
+- Published assets: three standalone binaries, one universal wheel, three
+  CycloneDX SBOMs, and one combined SHA-256 manifest
+
+The first post-merge Windows attempt passed the complete Python and installed
+package stages, then Chromium reported runner-level `ERR_NO_BUFFER_SPACE` during
+rendered acceptance. One bounded rerun passed the entire Windows job without a
+code change. The retry is recorded here rather than hidden or counted as two
+independent confirmations.
+
+### Public Artifact Acceptance
+
+On 2026-08-24, all eight release files were downloaded from public release URLs
+without authentication. The seven files covered by `SHA256SUMS.txt` matched:
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `rta_smriti_brain-0.9.1a1-py3-none-any.whl` | 498,026 | `eb0d526effd5c3cb836e7ba1b1659b614ad1909830a908a5bc78a7e335d44eb1` |
+| `rta-brain-0.9.1a1-linux-x86_64` | 32,856,192 | `246706ffd0323d2865f8fff7acd76695118518fa7d7969258fdd5b9eab7a2052` |
+| `rta-brain-0.9.1a1-macos-arm64` | 16,856,816 | `b312ea01e20ab6c1ca0657b42e233ed1b02f6b4523b487ac0167597cd3b87e7d` |
+| `rta-brain-0.9.1a1-windows-x86_64.exe` | 18,101,869 | `980a3f4aaaee9de97dca050eb81e4bbcf623c6b13148ef4db572da30af54a323` |
+| Linux CycloneDX SBOM | 1,160 | `21b8144ca4a7998c01309443c13c9b343e74e6794bb05063a08935ef90018a37` |
+| macOS CycloneDX SBOM | 1,164 | `6717dbe8fbca722b6f3132c9f3e818c966b3eb835550f81c108879cce4b02605` |
+| Windows CycloneDX SBOM | 1,165 | `b0d3965fb988c8ae744832bae0dadbccacf45635f1a909586e8b493749624778` |
+
+The combined public manifest itself has SHA-256
+`03a9e40844a47e9a3d643c67d65e9ca701c3853125c613d3ee6b1028f12bcdb4`.
+The anonymously downloaded Windows binary reported `rta-brain 0.9.1a1`. The
+anonymous wheel installed in a clean Python environment with its declared
+dependencies, reported `0.9.1a1`, and returned an `ok` doctor result. The public
+bundle also passed the bounded artifact privacy scan.
+
+### Public Website Acceptance
+
+The deployed website was rendered at 1440 by 900 and 390 by 844. Both views had
+zero horizontal overflow, zero page or console errors, zero WCAG 2.0/2.1 A/AA
+violations, loaded all images, and loaded the 60.053-second product video. The
+release page, installation document, and website URLs all resolved publicly.
 
 The real-project audit used private local brains only as operator fixtures.
 Project names, roots, database contents, capability tokens, and local scan paths
