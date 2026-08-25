@@ -80,9 +80,9 @@ Panel task. In **Settings > AI > MCP Servers**, confirm the server indicator is
 green and reports **Server is active**. Existing tasks cannot acquire newly
 registered tools dynamically.
 
-**Verification scope:** The instructions were checked against Zed 1.16.2's
-official MCP documentation on Windows 11, and the generated server command was
-validated with `mcp-doctor`. Zed itself was not installed in the verification
-environment, so the settings UI and live Agent Panel connection were not tested.
-The generated command is OS-specific; the same placement steps apply on macOS
-and Linux, but those platforms were not tested for this recipe.
+**Tested scope:** The instructions were checked against Zed 1.16.2's official
+MCP documentation on Windows 11, Zed 1.16.2 was installed from the official
+package, and the generated server command was validated with `mcp-doctor`.
+Personal Zed settings and a live Agent Panel connection were not tested. The
+generated command is OS-specific; the same placement steps apply on macOS and
+Linux, but those platforms were not tested for this recipe.
