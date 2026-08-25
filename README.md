@@ -338,6 +338,8 @@ Continuity capture uses a 30-day session lookback on first start so a new brain 
 Rta-Smriti ships a stdio MCP server. Run `mcp-config` as shown above to generate
 the correct absolute `command` and `args` for the current operating system and
 Python environment; do not hand-edit a Windows path into a macOS or Linux host.
+For a host-specific walkthrough, see the community
+[Zed setup recipe](docs/MCP_HOST_ZED.md).
 
 The generated server is project-bound and read-only by default. Memory writes,
 canonical-repository ingestion, and thread ingestion require explicit startup

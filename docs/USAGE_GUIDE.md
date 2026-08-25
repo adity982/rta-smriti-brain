@@ -271,6 +271,10 @@ A `ready` result proves initialize, tools/list, and ping worked for that command
 Copy the returned config into the host, then start a fresh agent task. Existing
 tasks cannot dynamically acquire newly registered MCP tools.
 
+Zed users can follow the focused [Zed MCP host recipe](MCP_HOST_ZED.md) for the
+`context_servers` mapping, single-project and read-only multi-project placement,
+worktree trust, restart, and server-status checks.
+
 Governed context compilation is a narrower, fail-closed delegation. After the
 operator authorizes a task contract, append its exact positive ID and SHA-256
 digest to a **single-project** server's generated `args`:

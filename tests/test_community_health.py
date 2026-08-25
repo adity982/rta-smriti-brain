@@ -35,6 +35,19 @@ class CommunityHealthTests(unittest.TestCase):
             config,
         )
 
+    def test_zed_recipe_is_linked_and_keeps_generated_config_read_only(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        usage = (ROOT / "docs" / "USAGE_GUIDE.md").read_text(encoding="utf-8")
+        recipe = (ROOT / "docs" / "MCP_HOST_ZED.md").read_text(encoding="utf-8")
+
+        self.assertIn("docs/MCP_HOST_ZED.md", readme)
+        self.assertIn("MCP_HOST_ZED.md", usage)
+        self.assertIn('"context_servers"', recipe)
+        self.assertIn("mcp-doctor", recipe)
+        self.assertIn("read-only by default", recipe)
+        self.assertIn("create a new Agent task", recipe)
+        self.assertIn("not an official integration or partnership", recipe)
+
 
 if __name__ == "__main__":
     unittest.main()
