@@ -35,6 +35,17 @@ class CommunityHealthTests(unittest.TestCase):
             config,
         )
 
+    def test_zed_recipe_uses_generated_config_and_verification(self):
+        recipe = (ROOT / "docs" / "ZED_MCP.md").read_text(encoding="utf-8")
+
+        self.assertIn("https://zed.dev/docs/ai/mcp", recipe)
+        self.assertIn("context_servers", recipe)
+        self.assertIn("mcp-config --project", recipe)
+        self.assertIn("mcp-config --brain-dir", recipe)
+        self.assertIn("mcp-doctor --project", recipe)
+        self.assertIn("Fully quit and restart Zed", recipe)
+        self.assertIn("Tested scope:", recipe)
+
 
 if __name__ == "__main__":
     unittest.main()

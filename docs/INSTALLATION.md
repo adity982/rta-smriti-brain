@@ -141,6 +141,9 @@ Generate one MCP gateway configuration for the whole brain directory:
 
 Register the emitted absolute command and arguments in Codex or another MCP host. Restart the host completely and create a new task before testing the tools. Use the single-database `mcp-config --project ...` form only when the host should access one project.
 
+For exact custom-server placement in Zed, including single-project and
+read-only multi-project behavior, follow the [Zed MCP recipe](ZED_MCP.md).
+
 ## Universal Capture
 
 Universal Capture is opt-in. It does not install hooks or retain raw agent
