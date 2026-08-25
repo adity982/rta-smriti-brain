@@ -5,8 +5,8 @@ is not an official integration or partnership with Zed Industries.
 
 The recipe was validated on Windows 11 with Zed 1.16.2. The generated command
 was probed through MCP initialize, `tools/list`, and ping with `mcp-doctor`.
-Zed's documented `context_servers` format and server-status screen were used as
-the host-side contract.
+Zed's documented `context_servers` format and server-status guidance were used
+as the host-side contract.
 
 ## Before editing Zed settings
 
@@ -78,4 +78,3 @@ Zed's current MCP configuration and status guidance is maintained in the
 [official Zed MCP documentation](https://zed.dev/docs/ai/mcp). Its
 [worktree-trust documentation](https://zed.dev/docs/worktree-trust) explains
 how project-local MCP settings are gated.
-
