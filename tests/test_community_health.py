@@ -43,7 +43,10 @@ class CommunityHealthTests(unittest.TestCase):
         self.assertIn("mcp-config --project", recipe)
         self.assertIn("mcp-config --brain-dir", recipe)
         self.assertIn("mcp-doctor --project", recipe)
-        self.assertIn("Fully quit and restart Zed", recipe)
+        self.assertIn("validates only the generated single-project command", recipe)
+        self.assertIn("read-only, project-scoped call", recipe)
+        self.assertIn("is not visible or active", recipe)
+        self.assertNotIn("Existing tasks cannot acquire", recipe)
         self.assertIn("Tested scope:", recipe)
 
 

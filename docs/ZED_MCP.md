@@ -71,14 +71,15 @@ Before registering the server, probe the exact single-project command:
 "$RtaBrain" --db "$BrainDir/project-name.sqlite" --json mcp-doctor --project project-name
 ```
 
-For a multi-project gateway, run this probe for each project database you plan
-to access. A passing probe verifies MCP initialization, tool listing, and ping;
-it does not register the server in Zed.
+`mcp-doctor` validates only the generated single-project command. It does not
+validate the brain-directory gateway or register either server in Zed.
 
-Fully quit and restart Zed after saving the settings, then open a new Agent
-Panel task. In **Settings > AI > MCP Servers**, confirm the server indicator is
-green and reports **Server is active**. Existing tasks cannot acquire newly
-registered tools dynamically.
+After saving the settings, confirm that the server indicator in **Settings >
+AI > MCP Servers** is green and reports **Server is active**. Open a fresh Agent
+Panel thread and make one read-only, project-scoped call, such as `brain_search`
+with an explicit `project`, to validate the gateway through Zed. If the server
+is not visible or active, fully quit and restart Zed, then check the indicator
+again before retrying from a fresh thread.
 
 **Tested scope:** The instructions were checked against Zed 1.16.2's official
 MCP documentation on Windows 11, Zed 1.16.2 was installed from the official
