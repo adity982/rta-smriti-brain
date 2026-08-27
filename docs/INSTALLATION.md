@@ -1,8 +1,15 @@
 # Installation
 
+## Current Prerelease
+
+[`v1.0.2-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v1.0.2-alpha)
+is the current public prerelease. Use the source checkout or download the
+standalone binary for your operating system from that release. Verify downloads
+against its `SHA256SUMS.txt` before execution.
+
 Rta-Smriti Brain is a local Python application. The packaged dashboard is
-included, so normal users need Python 3.11 or newer and Git. Node.js is needed
-only to change the dashboard source.
+included, so normal source-install users need Python 3.11 or newer and Git.
+Node.js is needed only to change the dashboard or launch-site source.
 
 ## Windows
 
@@ -60,7 +67,7 @@ The repository includes a reproducible PyInstaller specification. The release
 workflow builds and smoke-tests separate Windows, macOS, and Linux artifacts,
 renames them with version/OS/architecture, and uploads a `SHA256SUMS.txt`
 manifest. The formal
-[`v0.9.1-alpha` release](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.1-alpha)
+[`v1.0.2-alpha` release](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v1.0.2-alpha)
 contains Windows x64, Linux x64, and macOS binaries, a universal wheel,
 CycloneDX SBOMs, and the combined checksum manifest.
 
@@ -108,12 +115,18 @@ macOS or Linux:
 
 The command detects the canonical Git root, creates or migrates and indexes the
 brain, starts per-project repository sync and the managed loopback console, then
-opens an authorized browser. Both processes survive terminal closure.
+opens an authorized browser. Both processes survive terminal closure. A new
+brain defaults to the built-in hash retrieval provider. Re-running `start` or
+`bootstrap-project` preserves an existing brain's provider; pass
+`--embedding-provider` only for a deliberate migration, because the first
+hybrid rebuild can take time on a large repository.
 
 Use `rta-brain console open --brain-dir <path>` later. `console status`,
 `restart`, and `stop` expose and repair lifecycle state. Login startup is disabled
 by default; `console login-enable` adds a user-level Windows, macOS, or Linux
 registration and `console login-disable` removes it. Neither mode is privileged.
+Windows uses a hidden direct-process startup entry; running `login-enable`
+again after upgrading replaces the legacy visible `.cmd` registration.
 
 ## Codex Continuity And MCP
 
@@ -182,7 +195,8 @@ package and standalone binaries. No separate parser or signing extra is needed.
 # Precise context token counting
 python -m pip install ".[tokenization]"
 
-# Filesystem-event repository sync with polling fallback
+# Watchdog event sync is included in the standard package.
+# The historical watcher extra remains an empty compatibility alias.
 python -m pip install ".[watcher]"
 
 # Local Sentence Transformers retrieval
@@ -190,10 +204,10 @@ python -m pip install ".[embeddings]"
 
 ```
 
-Optional tokenization, watchdog events, Sentence Transformers, LSP execution,
-and Ollama compaction are never activated without an explicit install or project
-setting. Lexical search, feature-hash retrieval, Tree-sitter with regex fallback,
-and Ed25519 signing work from the standard package.
+Optional tokenization, Sentence Transformers, LSP execution, and Ollama
+compaction are never activated without an explicit install or project setting.
+Watchdog event sync, lexical search, feature-hash retrieval, Tree-sitter with
+regex fallback, and Ed25519 signing work from the standard package.
 
 ## Legacy Wrapper Compatibility
 

@@ -1,5 +1,20 @@
 # Rta-Smriti Brain
 
+## v1.0.2-alpha
+
+`v1.0.2-alpha` is the current operator-hardening prerelease for the v1 release
+line. It adds hidden Windows login startup, one shared terminal-independent
+worker launcher, Watchdog-by-default event sync, adaptive large-repository
+polling fallback, idempotent Windows private-directory onboarding, and a WCAG AA
+contrast correction. See the [release notes](docs/RELEASE_NOTES_v1.0.2-alpha.md)
+and bounded [verification ledger](docs/RELEASE_VERIFICATION.md).
+
+v1 turns the brain from a searchable index into an inspectable project-reality
+layer. A deterministic Project Cognition projection reconciles indexed sources,
+bitemporal truth, observations, structured work state, decisions, and local
+multimodal evidence. It reports readiness, coverage, change impact, conflicts,
+and decision debt under explicit output budgets. It does not execute project
+work, route models, or replace an agent harness.
 ![Rta-Smriti Brain - Give every project a memory](launch-assets/social/github-social-preview.png)
 
 [![CI](https://github.com/sulabhdubey/rta-smriti-brain/actions/workflows/ci.yml/badge.svg)](https://github.com/sulabhdubey/rta-smriti-brain/actions/workflows/ci.yml)
@@ -7,13 +22,13 @@
 [![Release](https://img.shields.io/github/v/release/sulabhdubey/rta-smriti-brain?include_prereleases&label=release)](https://github.com/sulabhdubey/rta-smriti-brain/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
 
-**A local project brain for AI coding agents. `v0.9.1-alpha` hardens multi-project operator readiness around governed universal capture, bitemporal project truth, and context compilation.**
+**A sovereign local project-memory and evidence layer for AI coding agents. The `v1.0.2-alpha` release preserves deterministic Project Reality while hardening Windows onboarding, invisible background lifecycle, large-repository sync, and dashboard accessibility.**
 
 **Build provenance:** Conceived and researched by [Sulabh Dubey](https://github.com/sulabhdubey). Built with [OpenAI Codex](https://openai.com/codex/) as the primary design, engineering, testing, and documentation agent under Sulabh's product direction and release approval. [Details](CONTRIBUTORS.md).
 
 Rta-Smriti now connects repository intelligence, durable decisions, agent-session continuity, and evidence-aware retrieval through a private local event journal. Capture is opt-in, bounded, redacted before durable queuing, and explicitly treated as untrusted evidence until an operator or verifier promotes a claim.
 
-[Latest prerelease assets](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.1-alpha) · [Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second v0.9 product demo](launch-assets/product-hunt/rta-smriti-v0.9-launch-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Public benchmark](docs/PUBLIC_BENCHMARK.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Build provenance](CONTRIBUTORS.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
+[Current release: v1.0.2-alpha](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v1.0.2-alpha) · [Release notes](docs/RELEASE_NOTES_v1.0.2-alpha.md) · [Live website](https://sulabhdubey.github.io/rta-smriti-brain/) · [60-second v1.0.2 product demo](launch-assets/product-hunt/rta-smriti-v1.0.2-product-demo.mp4) · [Installation](docs/INSTALLATION.md) · [Usage guide](docs/USAGE_GUIDE.md) · [Architecture](docs/ARCHITECTURE.md) · [Public benchmark](docs/PUBLIC_BENCHMARK.md) · [Release verification](docs/RELEASE_VERIFICATION.md) · [Build provenance](CONTRIBUTORS.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md)
 
 Rta-Smriti Brain turns a project repository, long agent threads, durable decisions, and evidence into a small local memory graph that Codex, Claude Code, Cursor, or any MCP-capable agent can reuse before doing work.
 
@@ -25,25 +40,21 @@ Rta-Smriti gives each project a memory that stays on your machine.
 
 ## Latest Release
 
-[`v0.9.1-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v0.9.1-alpha)
-is the current published prerelease. A formal prerelease is accepted only after its exact
-tagged source passes the hosted Windows, macOS, and Ubuntu matrix across Python
-3.11, 3.12, and 3.13. The tag workflow builds and smoke-tests Windows x64, Linux x64, and macOS
-standalone binaries, a universal wheel, CycloneDX SBOMs, and a combined
+[`v1.0.2-alpha`](https://github.com/sulabhdubey/rta-smriti-brain/releases/tag/v1.0.2-alpha)
+is the current published prerelease. The exact tagged source passes the hosted
+Windows, macOS, and Ubuntu matrix across Python 3.11, 3.12, and 3.13. The native
+workflow builds and smoke-tests Windows x64, Linux x64, and macOS standalone
+binaries, a universal wheel, CycloneDX SBOMs, and a combined
 `SHA256SUMS.txt`; see the [release verification record](docs/RELEASE_VERIFICATION.md)
 for the evidence boundary and post-publication checks.
-The v0.9.1 patch starts the console from a lightweight authenticated registry
-snapshot and progressively resolves deeper checks. Delayed responses are bound
-to the project and request generation that created them, so switching projects
-cannot surface stale graph, file, capture, retrieval, governance, or truth
-information.
 
-This alpha adds canonical project identity, an event-sourced bitemporal truth
-kernel, a governed context compiler, and Universal Capture: opt-in adapters feed
-a private bounded spool and normalization daemon that records redacted,
-hash-chained continuity events for supported coding agents. Replay is causal and
-non-executing, retention and deletion are capability-separated, and default MCP
-views remain project-scoped and path-free.
+v1 adds deterministic Project Cognition and the Project Reality cockpit on top
+of canonical project identity, bitemporal truth, governed context compilation,
+and Universal Capture. It reconciles indexed sources, structured work state,
+decisions, observations, and governed local media into bounded readiness,
+coverage, conflict, change-impact, and decision-debt views. The product remains
+an evidence and continuity layer: it does not execute project work or silently
+promote captured text into trusted truth.
 
 ## What It Does
 
@@ -148,6 +159,8 @@ optional extras, troubleshooting, and uninstall instructions.
 
 Create one central brain directory, then onboard and open a project in one command. This detects the canonical Git root, creates or migrates the brain, indexes it, starts the background watcher, starts Codex task-continuity capture when a local Codex sessions folder exists, opens the managed console, and opens an authorized browser session:
 
+New brains default to built-in hash retrieval. Re-running onboarding preserves an existing brain's configured provider; use `--embedding-provider` only when you intentionally want to rebuild retrieval with a different provider.
+
 ```powershell
 $BrainDir = "$env:USERPROFILE\Documents\Rta-Smriti\brains"
 & $RtaBrain start C:\path\to\my-project --project my-project --brain-dir $BrainDir --write-agents
@@ -206,7 +219,7 @@ sessions, or pass `--sessions-root` when Codex stores sessions somewhere else.
 
 The dashboard runs on `127.0.0.1` and includes:
 
-![Rta-Smriti v0.9 operator console with evidence graph and retrieval diagnostics](launch-assets/screenshots/operator-console-v0.9.png)
+![Rta-Smriti v1 Project Reality cockpit with readiness, decision debt, coverage, and change impact](launch-assets/screenshots/operator-cognition-v1.0.2.png)
 
 - **Project switcher**: every local brain, readiness, file count, memory count
 - **Canonical-root and Git identity**: bound project root, repository root, branch, HEAD, dirty-file count, and duplicate-root warnings
@@ -221,6 +234,7 @@ The dashboard runs on `127.0.0.1` and includes:
 - **Evidence inspector**: open the optional detail panel for the selected node, must-know memories, and measured fresh/changed/missing/added/blocked source counts
 - **Truth Timeline**: inspect bitemporal claims, evidence links, contradictions, validator health, and recorded-versus-valid time without flattening history into mutable notes
 - **Universal Capture**: review explicitly authorized agent-event sources, bounded normalized events, replay order, redaction state, queue health, retention previews, and daemon diagnostics; captured text remains untrusted until promoted with evidence
+- **Project Reality**: inspect deterministic readiness, digital-twin reconciliation, knowledge coverage, decision debt, change impact, bounded conflicts, and governed local media evidence
 - **Incremental refresh**: update the selected repo index from the freshness control; filesystem events force a bounded content-hash check for touched paths, while unchanged projects use a fast stat manifest
 - **Indexing policy**: configure metadata-only or strict oversized-file handling, parser/LSP behavior, local thread compaction, and optional hybrid retrieval per project
 - **References and backlinks**: inspect why a node is connected and follow its visible relationships
@@ -236,6 +250,19 @@ The dashboard runs on `127.0.0.1` and includes:
 
 ## How To Use With An Agent
 
+## v1 Project Reality CLI
+
+```powershell
+& $RtaBrain --db "$BrainDir\project-name.sqlite" --json cognition --project project-name --root C:\path\to\project
+& $RtaBrain --db "$BrainDir\project-name.sqlite" --json media list --project project-name
+```
+
+`cognition` reads one bounded, deterministic projection from the existing brain.
+Routine readiness uses the latest indexed snapshot. Before consequential work,
+run `stale-check --deep` or re-ingest the repository; freshness is evidence about
+indexed bytes, not proof that an external workflow, test, or claim is correct.
+Media sources remain distinct from derived descriptions. A derivation becomes
+verified only through explicit operator authority and provenance.
 The daily loop is the same for every agent:
 
 1. Select the project.
@@ -463,12 +490,12 @@ Intentional design constraints:
 
 Advanced modes and safety boundaries:
 
-- Managed sync, continuity, and console processes are user-level local processes. Login startup is opt-in because Rta-Smriti does not install privileged services.
+- Managed sync, continuity, and console processes are user-level local processes. Login startup is opt-in because Rta-Smriti does not install privileged services. Windows startup uses a hidden direct-process launcher and re-enabling it migrates the legacy visible `.cmd` entry.
 - Hybrid retrieval works dependency-free through the built-in hash provider. Sentence Transformers remains an explicit local extra for operators who want model-backed comparison.
 - Standard installs and standalone binaries include Tree-sitter grammars for Python, JavaScript, TypeScript/TSX, Go, Rust, and Java, with deterministic regex fallback for unsupported syntax.
 - LSP mode can discover `pyright-langserver`, `basedpyright-langserver`, `gopls`, `typescript-language-server`, or `rust-analyzer` from the operator PATH. Execution is opt-in, bounded, never uses a shell, and rejects project-local discovered executables; the legacy explicit JSON adapter remains available.
 - Repository ingestion warms the persistent SHA-256 cache while content is already being read. A following deep verification reuses unchanged hashes; only a legacy/cold cache or changed file requires another content read.
-- Filesystem-event workers hash touched paths to catch same-stat edits. Polling-only workers also force periodic deep verification, so some same-stat changes are detected on cadence rather than instantly.
+- Standard installs and standalone binaries include Watchdog filesystem events. The emergency polling fallback hashes on cadence, backs off on repositories with 10,000 or more indexed files, and forces periodic deep verification, so same-stat changes may be detected later when events are unavailable.
 - The per-file content cap is configurable up to 16 MB. Metadata-only sources produce `fresh_with_warnings`; strict mode keeps the previous fail-closed behavior.
 - Call edges are deterministic impact hints, not compiler-perfect call graphs. Use them to find likely blast radius, then verify consequential changes against source and tests.
 - Standard installs include Ed25519 public-key signatures. Compatible HMAC-SHA256 snapshots remain available, while encrypted snapshots use scrypt plus AES-256-GCM and may also carry an Ed25519 signature. Private snapshots and keys are never safe public exports.

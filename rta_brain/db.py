@@ -33,7 +33,7 @@ from .repository import (
 )
 
 VALID_PRAMANA = {"pratyaksha", "sabda", "anumana", "smriti", "kalpana"}
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 MAX_THREAD_BYTES = 10 * 1024 * 1024
 MAX_THREAD_PROMOTIONS = 100
 MAX_SEARCH_LIMIT = 50
@@ -161,7 +161,14 @@ def _validate_database_sidecars(database: Path, *, harden: bool) -> None:
                     f"brain database sidecar is owned by another user: {sidecar}"
                 )
             if harden:
-                sidecar.chmod(0o600)
+                try:
+                    sidecar.chmod(0o600)
+                except FileNotFoundError:
+                    # SQLite removes WAL/SHM files after the last connection
+                    # closes. Disappearance after the safety checks is benign;
+                    # every sidecar that still exists is revalidated on the
+                    # next connection.
+                    continue
         elif harden:
             _ensure_windows_private(sidecar)
 
@@ -312,8 +319,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
             validate_capture_schema_v10,
         )
         from .context_schema import validate_context_schema_v9
+        from .cognition_schema import validate_cognition_schema_v11
 
         validate_context_schema_v9(conn)
+        validate_cognition_schema_v11(conn)
         if capture_schema_v10_patch_required(conn):
             owns_transaction = not conn.in_transaction
             migration_savepoint = "rta_capture_v10_patch"
@@ -352,8 +361,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
         if starting_schema_version == SCHEMA_VERSION:
             from .capture_schema import validate_capture_schema_v10
             from .context_schema import validate_context_schema_v9
+            from .cognition_schema import validate_cognition_schema_v11
 
             validate_context_schema_v9(conn)
+            validate_cognition_schema_v11(conn)
             validate_capture_schema_v10(conn)
             if owns_transaction:
                 conn.commit()
@@ -896,6 +907,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
             from .capture_schema import migrate_capture_schema_v10
 
             migrate_capture_schema_v10(conn)
+        if starting_schema_version < 11:
+            from .cognition_schema import migrate_cognition_schema_v11
+
+            migrate_cognition_schema_v11(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         if owns_transaction:
             conn.commit()
@@ -3062,6 +3077,7 @@ def indexed_freshness(conn: sqlite3.Connection, project: str = "default") -> dic
     ).fetchone()["count"])
     metadata_only = int(conn.execute(
         "SELECT COUNT(*) AS count FROM sources WHERE project_id = ? AND kind = 'file' "
+        "AND json_valid(metadata_json) = 1 "
         "AND json_extract(metadata_json, '$.content_indexed') = 0",
         (project_id,),
     ).fetchone()["count"])

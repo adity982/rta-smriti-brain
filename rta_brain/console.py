@@ -35,6 +35,7 @@ from .capture_control import (
 from .capture_daemon import start_capture, stop_capture
 from .capture_types import CapturePolicy
 from .context import build_context_pack, build_continuation_prompt
+from .cognition import cognition_snapshot, record_observation, reconcile_observation
 from .context_host import (
     audit_context_for_operator,
     authorize_context_contract,
@@ -75,6 +76,18 @@ from .governance import (
 )
 from .hooks import install_git_hooks, uninstall_git_hooks
 from .lifecycle import apply_memory_feedback, run_conservative_decay
+from .multimodal import (
+    add_derivation,
+    delete_media,
+    export_multimodal_manifest,
+    ingest_media,
+    list_multimodal_derivations,
+    list_multimodal_evidence,
+    purge_expired_media,
+    redact_derivation,
+    set_media_retention,
+    verify_multimodal_source,
+)
 from .parsers import ParserRegistry
 from .portability import (
     export_bundle,
@@ -211,8 +224,35 @@ def _row_count(conn: sqlite3.Connection, table: str, project_id: int | None = No
     return int(row["c"])
 
 
+_REQUEST_DATABASES = threading.local()
+
+
+def _begin_request_database_scope() -> None:
+    _REQUEST_DATABASES.connections = []
+
+
+def _close_request_databases() -> None:
+    connections = getattr(_REQUEST_DATABASES, "connections", None)
+    _REQUEST_DATABASES.connections = None
+    if not connections:
+        return
+    first_error: Exception | None = None
+    for conn in reversed(connections):
+        try:
+            conn.close()
+        except Exception as exc:
+            if first_error is None:
+                first_error = exc
+    if first_error is not None:
+        raise first_error
+
+
 def _open_db(db_path: str | Path) -> sqlite3.Connection:
-    return connect(Path(db_path).expanduser().resolve())
+    conn = connect(Path(db_path).expanduser().resolve())
+    connections = getattr(_REQUEST_DATABASES, "connections", None)
+    if connections is not None:
+        connections.append(conn)
+    return conn
 
 
 def _project_root(conn: sqlite3.Connection, project: str) -> Path:
@@ -845,6 +885,9 @@ def make_handler(config: ConsoleConfig):
             self.send_header("X-Frame-Options", "DENY")
 
         def _json(self, payload: dict, status: int = 200) -> None:
+            # A threaded client can issue its next request as soon as it receives
+            # this response. Release SQLite WAL/SHM state before that boundary.
+            _close_request_databases()
             body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -870,6 +913,7 @@ def make_handler(config: ConsoleConfig):
             self.wfile.write(body)
 
         def do_GET(self) -> None:
+            _begin_request_database_scope()
             parsed = urlparse(self.path)
             try:
                 if not is_local_request(self):
@@ -1138,9 +1182,9 @@ def make_handler(config: ConsoleConfig):
                             result = verify_ledger(conn, project=q["project"])
                         else:
                             raise ValueError(f"unsupported truth query mode: {mode}")
-                        self._json(redact_truth_for_operator(result))
                     finally:
                         conn.close()
+                    self._json(redact_truth_for_operator(result))
                     return
                 if parsed.path == "/api/capture":
                     q = _query(self)
@@ -1190,6 +1234,59 @@ def make_handler(config: ConsoleConfig):
                     finally:
                         conn.close()
                     return
+                if parsed.path == "/api/cognition":
+                    q = _query(self)
+                    conn = _open_db(resolve_brain_db(config, q["db_path"]))
+                    try:
+                        self._json(cognition_snapshot(
+                            conn,
+                            project=q["project"],
+                            active_root=_project_root(conn, q["project"]),
+                            include_change_impact=q.get("include_change_impact", "true").casefold()
+                            not in {"0", "false", "no"},
+                        ))
+                    finally:
+                        conn.close()
+                    return
+                if parsed.path == "/api/multimodal":
+                    q = _query(self)
+                    conn = _open_db(resolve_brain_db(config, q["db_path"]))
+                    try:
+                        project = q["project"]
+                        mode = str(q.get("mode", "sources")).strip().casefold()
+                        if mode == "sources":
+                            result = list_multimodal_evidence(
+                                conn, project=project, limit=int(q.get("limit", "100"))
+                            )
+                        elif mode == "derivations":
+                            result = list_multimodal_derivations(
+                                conn,
+                                project=project,
+                                source_id=q["source_id"],
+                                include_text=q.get("include_text", "false").casefold()
+                                in {"1", "true", "yes"},
+                                limit=int(q.get("limit", "100")),
+                            )
+                        elif mode == "verify":
+                            result = verify_multimodal_source(
+                                conn,
+                                project=project,
+                                active_root=_project_root(conn, project),
+                                source_id=q["source_id"],
+                            )
+                        elif mode == "export":
+                            result = export_multimodal_manifest(
+                                conn,
+                                project=project,
+                                audience=q.get("audience", "local"),
+                                limit=int(q.get("limit", "1000")),
+                            )
+                        else:
+                            raise ValueError("multimodal mode must be sources, derivations, verify, or export")
+                        self._json(result)
+                    finally:
+                        conn.close()
+                    return
                 if parsed.path == "/api/publish-readiness":
                     self._json(publish_readiness(config.tool_root))
                     return
@@ -1208,6 +1305,7 @@ def make_handler(config: ConsoleConfig):
                 self._json({"status": "error", "error": {"type": exc.__class__.__name__, "message": "request could not be completed"}}, status=500)
 
         def do_POST(self) -> None:
+            _begin_request_database_scope()
             try:
                 if not is_local_request(self) or not is_local_origin(self) or not is_authorized_request(self, config):
                     self._json({"status": "error", "error": {"type": "Forbidden", "message": "valid local capability required"}}, status=403)
@@ -1310,27 +1408,26 @@ def make_handler(config: ConsoleConfig):
                             )
                         else:
                             raise ValueError("unknown context compiler action")
-                        self._json(result)
                     finally:
                         conn.close()
+                    self._json(result)
                     return
                 if self.path == "/api/context-pack":
                     conn = _open_db(resolve_brain_db(config, payload["db_path"]))
                     try:
-                        self._json(
-                            {
-                                "status": "ok",
-                                "pack": build_context_pack(
-                                    conn,
-                                    payload["task"],
-                                    project=payload["project"],
-                                    limit=int(payload.get("limit", 8)),
-                                    max_tokens=int(payload.get("max_tokens", 4_000)),
-                                ),
-                            }
-                        )
+                        result = {
+                            "status": "ok",
+                            "pack": build_context_pack(
+                                conn,
+                                payload["task"],
+                                project=payload["project"],
+                                limit=int(payload.get("limit", 8)),
+                                max_tokens=int(payload.get("max_tokens", 4_000)),
+                            ),
+                        }
                     finally:
                         conn.close()
+                    self._json(result)
                     return
                 if self.path == "/api/search":
                     conn = _open_db(resolve_brain_db(config, payload["db_path"]))
@@ -1460,9 +1557,9 @@ def make_handler(config: ConsoleConfig):
                             )
                         else:
                             raise ValueError(f"unsupported truth action: {action}")
-                        self._json(redact_truth_for_operator(result))
                     finally:
                         conn.close()
+                    self._json(redact_truth_for_operator(result))
                     return
                 if self.path == "/api/memory":
                     conn = _open_db(resolve_brain_db(config, payload["db_path"]))
@@ -1717,6 +1814,133 @@ def make_handler(config: ConsoleConfig):
                                 "retention-confirm, redaction-preview, "
                                 "deletion-preview, deletion-confirm, export, daemon-start, or daemon-stop"
                             )
+                        self._json(result)
+                    finally:
+                        conn.close()
+                    return
+                if self.path == "/api/cognition":
+                    conn = _open_db(resolve_brain_db(config, payload["db_path"]))
+                    try:
+                        project = str(payload["project"])
+                        root = _project_root(conn, project)
+                        action = str(payload.get("action", "")).strip().casefold()
+                        if action == "observe":
+                            result = record_observation(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                observation_id=payload["observation_id"],
+                                subsystem=payload["subsystem"],
+                                entity_key=payload["entity_key"],
+                                expected_state=payload.get("expected_state"),
+                                observed_state=payload["observed_state"],
+                                status=payload["status"],
+                                source_identifier=payload["source_identifier"],
+                                source_hash=payload.get("source_hash"),
+                                evidence=payload.get("evidence"),
+                                observed_at=payload.get("observed_at"),
+                                valid_until=payload.get("valid_until"),
+                                privacy_class=payload.get("privacy_class", "internal"),
+                                sharing_policy=payload.get("sharing_policy", "local-only"),
+                            )
+                        elif action == "reconcile":
+                            result = reconcile_observation(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                observation_id=payload["observation_id"],
+                                receipt_id=payload["receipt_id"],
+                                action="set_status",
+                                outcome=payload["status"],
+                                reason=payload["reason"],
+                                actor_type="operator",
+                                actor_id="dashboard-operator",
+                                evidence=payload.get("evidence"),
+                            )
+                        else:
+                            raise ValueError("cognition action must be observe or reconcile")
+                        self._json(result)
+                    finally:
+                        conn.close()
+                    return
+                if self.path == "/api/multimodal":
+                    conn = _open_db(resolve_brain_db(config, payload["db_path"]))
+                    try:
+                        project = str(payload["project"])
+                        root = _project_root(conn, project)
+                        action = str(payload.get("action", "")).strip().casefold()
+                        if action == "add":
+                            result = ingest_media(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                path=payload["path"],
+                                privacy_class=payload.get("privacy_class", "internal"),
+                                sharing_policy=payload.get("sharing_policy", "local-only"),
+                                metadata=payload.get("metadata"),
+                                maximum_bytes=int(payload.get("maximum_bytes", 32 * 1024 * 1024)),
+                            )
+                        elif action == "derive":
+                            result = add_derivation(
+                                conn,
+                                project=project,
+                                source_id=payload["source_id"],
+                                method=payload["method"],
+                                text=payload["text"],
+                                confidence=float(payload["confidence"]),
+                                verification_status=payload.get("verification_status", "unverified"),
+                                tool_identity=payload.get("tool_identity", "dashboard-operator"),
+                                model_identity=payload.get("model_identity"),
+                                derivation_id=payload.get("derivation_id"),
+                                metadata=payload.get("metadata"),
+                                actor_type="operator",
+                                actor_id="dashboard-operator",
+                            )
+                        elif action == "redact":
+                            result = redact_derivation(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                derivation_id=payload["derivation_id"],
+                                reason=payload["reason"],
+                                actor_type="operator",
+                                actor_id="dashboard-operator",
+                            )
+                        elif action == "delete":
+                            result = delete_media(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                source_id=payload["source_id"],
+                                reason=payload["reason"],
+                                actor_type="operator",
+                                actor_id="dashboard-operator",
+                            )
+                        elif action == "retention":
+                            result = set_media_retention(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                source_id=payload["source_id"],
+                                retain_until=payload["retain_until"],
+                                actor_type="operator",
+                                actor_id="dashboard-operator",
+                            )
+                        elif action == "purge":
+                            dry_run = payload.get("dry_run", True)
+                            if type(dry_run) is not bool:
+                                raise ValueError("dry_run must be a boolean")
+                            result = purge_expired_media(
+                                conn,
+                                project=project,
+                                active_root=root,
+                                actor_type="operator",
+                                actor_id="dashboard-operator",
+                                now=payload.get("now"),
+                                dry_run=dry_run,
+                            )
+                        else:
+                            raise ValueError("multimodal action must be add, derive, redact, delete, retention, or purge")
                         self._json(result)
                     finally:
                         conn.close()

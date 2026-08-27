@@ -1,5 +1,42 @@
 # Architecture
 
+## Project Cognition Layer
+
+v1 adds a deterministic read projection over existing evidence rather than a
+second mutable source of truth. It binds every request to the canonical project
+and combines the latest indexed source snapshot, bitemporal claims, normalized
+observations, structured work state, durable decisions, and governed media
+records. The projection emits project readiness, a digital-twin reconciliation,
+knowledge coverage, decision debt, change-impact hints, conflicts, and explicit
+input/output truncation metadata.
+
+Readiness is intentionally stricter than database health. Missing checkpoints,
+stale or uncertain indexed evidence, unresolved high-authority conflicts,
+incomplete work state, and omitted bounded inputs can block or degrade
+continuation readiness. Routine cognition reads the latest completed index and
+does not walk the live filesystem. Consequential work still requires an explicit
+live or deep freshness check. The projection is deterministic and bounded; it is
+not an LLM judge, planner, executor, or compiler-perfect program analysis.
+
+## Local Multimodal Evidence
+
+Media is stored as local evidence metadata and bounded content-derived
+descriptors. Stable descriptor checks reject links, reparse points, hard links,
+path substitution, oversized inputs, and changing files. Original sources and
+derived descriptions remain separate records. Derivations start unverified and
+require explicit operator authority plus provenance before they can contribute
+verified evidence. Retention, redaction, deletion, and public export are
+separate operations; public export is metadata-only and omits local paths and
+payloads.
+
+## Stable Interfaces
+
+The Python SDK, CLI `cognition` and `media` commands, authenticated loopback
+console endpoints, and read-only MCP tools call the same domain boundaries.
+Interface responses carry schema/version information, exact totals, displayed
+counts, truncation flags, freshness semantics, and limitations. MCP remains
+project-scoped and capability-bounded. None of these interfaces grants an agent
+execution authority over the project.
 Rta-Smriti is a local Python application with a React operator surface. It has no hosted control plane.
 
 ```text
@@ -37,7 +74,7 @@ Each brain is one SQLite database. Connections reject symbolic, reparse, and har
 
 ## Ingestion
 
-The walker rejects links, non-regular files, ignored folders, traversal overages, total-size overages, and sources above the project's configured cap. A stat manifest skips unchanged repositories. Filesystem events bypass metadata shortcuts and bind a content-hash read to the repository root, even when size and modification time were restored. Only changed files are parsed, chunked, indexed, and embedded. `watch-repo` runs this incremental path in the foreground. The `watcher` lifecycle command runs it in a detached per-project worker, using optional filesystem events when `watchdog` is installed and portable polling otherwise. Polling workers force a full content verification at least every five minutes so same-stat changes cannot remain indefinitely invisible.
+The walker rejects links, non-regular files, ignored folders, traversal overages, total-size overages, and sources above the project's configured cap. A stat manifest skips unchanged repositories. Filesystem events bypass metadata shortcuts and bind a content-hash read to the repository root, even when size and modification time were restored. Only changed files are parsed, chunked, indexed, and embedded. `watch-repo` runs this incremental path in the foreground. The `watcher` lifecycle command runs it in a detached per-project worker. Standard packages and standalone binaries include Watchdog filesystem events; portable polling remains an emergency fallback when the event backend cannot start. Fallback polling waits at least 30 seconds at 10,000 indexed files and 60 seconds at 50,000 files, and forces a full content verification at least every five minutes so same-stat changes cannot remain indefinitely invisible.
 
 Deep freshness uses SHA-256 values cached by project, absolute source path, size, and nanosecond modification time. `ingest-repo --force` bypasses the manifest and metadata shortcuts for an uncached re-read.
 
@@ -78,7 +115,7 @@ The governed compiler is separate from the legacy copyable context-pack builder.
 
 Compilation captures one read-only project snapshot, verifies repository and database fences, adapts candidate evidence through a strict normalized contract, filters privacy and scope before scoring, and ranks with fixed-point authority, verification, freshness, temporal, lexical, graph, risk, outcome, and continuation signals. Mandatory controls either fit or the compiler abstains. Comparison variants share the same snapshot, while immutable metadata receipts explain inclusion, exclusion, redaction, downgrade, deduplication, section allocation, and truncation without retaining private payloads by default. Operator-confirmed outcomes can later attribute useful or harmful evidence without letting the compiler execute the task.
 
-The authority key is host-owned. Windows uses DPAPI; POSIX uses an owner-only unlinked file. Status returns only a fingerprint. CLI, loopback console, and MCP entry points call the same compiler boundary; MCP fixes the agent principal and session server-side rather than accepting caller-supplied identity. The compiler prepares evidence and constraints only. It does not plan, route models, call project tools, mutate repositories, or cross into RTA-Net execution responsibilities.
+The authority key is host-owned. Windows uses DPAPI; POSIX uses an owner-only unlinked file. Status returns only a fingerprint. CLI, loopback console, and MCP entry points call the same compiler boundary; MCP fixes the agent principal and session server-side rather than accepting caller-supplied identity. The compiler prepares evidence and constraints only. It does not plan, route models, call project tools, mutate repositories, or cross into agent-harness execution responsibilities.
 
 ## Governance
 

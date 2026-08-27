@@ -108,12 +108,35 @@ async function expectNoAxeViolations(page, label, disabledRules = []) {
   expect(violations, `${label} has WCAG violations`).toEqual([]);
 }
 
+async function clickForJsonResponse(page, buttonName, endpoint) {
+  const responsePromise = page.waitForResponse((response) => (
+    new URL(response.url()).pathname === endpoint
+    && response.request().method() === "POST"
+  ));
+  await page.getByRole("button", { name: buttonName, exact: true }).click();
+  const response = await responsePromise;
+  const body = await response.text();
+  expect(
+    response.ok(),
+    `${endpoint} returned HTTP ${response.status()}: ${body.slice(0, 2_000)}`,
+  ).toBeTruthy();
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    throw new Error(`${endpoint} returned non-JSON content: ${body.slice(0, 2_000)}`);
+  }
+  expect(payload.status, `${endpoint} returned an error payload`).not.toBe("error");
+  return payload;
+}
+
 test("real operator can inspect, govern, continue, and move a project brain", async ({ browser }) => {
   test.setTimeout(180_000);
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "rta-operator-qa-"));
   const { child, ready } = startFixtureServer(tempRoot);
   const errors = [];
   let context;
+  let releaseReloadCognition;
   try {
     const fixture = await ready;
     const bootstrapRepo = path.join(tempRoot, "bootstrapped-project");
@@ -277,7 +300,8 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect(page.getByRole("button", { name: /1 receipt/ })).toBeVisible();
     await page.getByRole("button", { name: "Governed Compiler", exact: true }).click();
     await expect(page.getByText("Authorized, receipted, explainable", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Authorize & Compile", exact: true }).click();
+    const firstCompilation = await clickForJsonResponse(page, "Authorize & Compile", "/api/context-compiler");
+    expect(firstCompilation.compilation_receipt?.compilation_id).toContain("ctxc-");
     await expect(page.locator(".compilerReceiptSummary code")).toContainText("ctxc-");
     await page.getByRole("button", { name: "Explain", exact: true }).click();
     await expect(page.getByText(/Explanation verified/)).toBeVisible();
@@ -288,7 +312,8 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await governedObjective.fill(`${await governedObjective.inputValue()} with a changed objective`);
     await expect(page.locator(".compilerReceiptSummary")).toHaveCount(0);
     await expect(page.getByRole("main").getByRole("button", { name: "Copy Command", exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Authorize & Compile", exact: true }).click();
+    const secondCompilation = await clickForJsonResponse(page, "Authorize & Compile", "/api/context-compiler");
+    expect(secondCompilation.compilation_receipt?.compilation_id).toContain("ctxc-");
     await expect(page.locator(".compilerReceiptSummary code")).toContainText("ctxc-");
 
     await operatorNavigation.getByRole("button", { name: "Files", exact: true }).click();
@@ -349,7 +374,23 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await page.getByRole("button", { name: "Run decay", exact: true }).click();
     await expect(page.getByText(/eligible memories conservatively aged/)).toBeVisible();
 
+    let markReloadCognitionStarted;
+    const reloadCognitionStarted = new Promise((resolve) => {
+      markReloadCognitionStarted = resolve;
+    });
+    const reloadCognitionGate = new Promise((resolve) => {
+      releaseReloadCognition = resolve;
+    });
+    let heldReloadCognition = false;
+    await page.route("**/api/cognition?*", async (route) => {
+      if (heldReloadCognition) return route.continue();
+      heldReloadCognition = true;
+      markReloadCognitionStarted();
+      await reloadCognitionGate;
+      await route.continue();
+    });
     await page.reload({ waitUntil: "domcontentloaded" });
+    await reloadCognitionStarted;
     await expect(page.getByText("Brain Status: Healthy", { exact: true })).toBeVisible();
     const reloadedNavigation = page.getByRole("navigation", { name: "Operator console navigation" });
     await reloadedNavigation.getByRole("button", { name: "Intelligence", exact: true }).click();
@@ -370,9 +411,19 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     });
     await page.getByRole("main").getByRole("button", { name: "Copy Command", exact: true }).click();
     await expect(page.getByRole("button", { name: "Copy Failed", exact: true })).toBeVisible();
-    await expect(page.locator("footer.statusBar").getByRole("status")).toContainText(
+    const copyFailureStatus = page.locator("footer.statusBar").getByRole("status");
+    await expect(copyFailureStatus).toContainText(
       "Copy failed: clipboard permission was denied",
     );
+    const reloadCognitionResponse = page.waitForResponse((response) => (
+      new URL(response.url()).pathname === "/api/cognition"
+    ));
+    releaseReloadCognition();
+    await reloadCognitionResponse;
+    await page.waitForTimeout(100);
+    await expect(copyFailureStatus).toContainText("Copy failed: clipboard permission was denied");
+    await page.unroute("**/api/cognition?*");
+    releaseReloadCognition = undefined;
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.getByText("Brain Status: Healthy", { exact: true })).toBeVisible();
 
@@ -510,6 +561,7 @@ test("real operator can inspect, govern, continue, and move a project brain", as
     await expect(page.getByText("bootstrapped-project", { exact: true }).first()).toBeVisible();
     expect(errors).toEqual([]);
   } finally {
+    releaseReloadCognition?.();
     await stopBootstrappedDaemons(tempRoot);
     await context?.close();
     await stopFixtureServer(child);
@@ -524,8 +576,12 @@ test("failed post-bootstrap identity verification clears the stale project", asy
   let page;
   let releaseRegistry;
   let markRegistryRequested;
+  let releaseProjectDetails;
+  let markProjectDetailsRequested;
   const registryReleased = new Promise((resolve) => { releaseRegistry = resolve; });
   const registryRequested = new Promise((resolve) => { markRegistryRequested = resolve; });
+  const projectDetailsReleased = new Promise((resolve) => { releaseProjectDetails = resolve; });
+  const projectDetailsRequested = new Promise((resolve) => { markProjectDetailsRequested = resolve; });
   try {
     const fixture = await ready;
     const bootstrapRepo = path.join(tempRoot, "bootstrapped-project");
@@ -538,9 +594,15 @@ test("failed post-bootstrap identity verification clears the stale project", asy
       await registryReleased;
       await route.continue();
     });
+    await page.route(/\/api\/cognition\?/, async (route) => {
+      markProjectDetailsRequested();
+      await projectDetailsReleased;
+      await route.continue();
+    });
     await page.goto(fixture.url, { waitUntil: "domcontentloaded" });
     await expect(page.locator(".activeProjectCopy strong")).toHaveText("operator-demo");
     await registryRequested;
+    await projectDetailsRequested;
 
     await page.getByRole("button", { name: "New Brain", exact: true }).click();
     await page.getByLabel("Project Folder").fill(bootstrapRepo);
@@ -560,9 +622,14 @@ test("failed post-bootstrap identity verification clears the stale project", asy
     releaseRegistry();
     await registryResponse;
     await expect(page.locator(".activeProjectCopy strong")).toHaveText("Choose a brain");
+    const projectDetailsResponse = page.waitForResponse((response) => response.url().includes("/api/cognition?"));
+    releaseProjectDetails();
+    await projectDetailsResponse;
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await expect(page.locator(".statusBar [role='status']")).toContainText("simulated identity verification failure");
   } finally {
     releaseRegistry?.();
+    releaseProjectDetails?.();
     await page?.unrouteAll({ behavior: "ignoreErrors" });
     await stopBootstrappedDaemons(tempRoot);
     await context?.close();

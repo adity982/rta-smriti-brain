@@ -131,7 +131,10 @@ class RuntimeControlTests(unittest.TestCase):
     def test_detached_spawn_options_are_platform_specific(self):
         options = detached_process_kwargs()
         if os.name == "nt":
-            self.assertGreater(options["creationflags"], 0)
+            flags = options["creationflags"]
+            self.assertTrue(flags & getattr(subprocess, "DETACHED_PROCESS", 0x00000008))
+            self.assertTrue(flags & getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200))
+            self.assertTrue(flags & getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
             self.assertNotIn("start_new_session", options)
         elif sys.platform == "darwin":
             self.assertEqual(options, {})
@@ -791,8 +794,14 @@ class ManagedConsoleTests(unittest.TestCase):
                 headers=headers,
                 method="POST",
             )
-            with urllib.request.urlopen(request, timeout=10) as response:
-                return json.loads(response.read().decode("utf-8"))
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                self.fail(
+                    f"context compiler returned HTTP {exc.code}: {body}"
+                )
 
         project_ref = {"db_path": str(database), "project": "demo"}
         compiled = post(

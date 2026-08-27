@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.0.2-alpha] - 2026-08-26
+
+- Replaced visible Windows login startup batch files with hidden, direct process creation and safe legacy migration.
+- Unified continuity with the shared terminal-independent worker launcher.
+- Bundled Watchdog by default and added adaptive large-repository polling fallback delays.
+- Made Windows ACL hardening idempotent for already-correct owners without weakening fail-closed foreign-owner checks.
+- Preserved existing retrieval-provider settings during repeated onboarding; provider migrations now require an explicit CLI option.
+- Corrected the active-project secondary text contrast to WCAG AA.
+
+## [1.0.1-alpha] - 2026-08-26
+
+- Closed a dashboard status race so direct operator feedback is not overwritten by delayed background refreshes.
+- Closed temporal-truth database state before sending HTTP responses, preventing follow-up requests from overlapping cleanup on slower runners.
+- Requalified the v1 operator, packaging, privacy, and cross-platform release surfaces from the corrected source.
+
+This patch preserves the v1 data model, Project Reality features, and local-first
+trust boundaries. Existing `v1.0.0-alpha` tags and artifacts remain immutable.
+
+
+## [1.0.0-alpha] - 2026-08-25
+
+- Added a bounded deterministic Project Cognition projection that reconciles indexed sources, bitemporal claims, observations, structured work state, decisions, and local media evidence.
+- Added Project Reality readiness, digital-twin conflicts, knowledge coverage, decision debt, change-impact hints, and explicit truncation/omission accounting.
+- Added a governed local multimodal evidence lifecycle with stable descriptor checks, source/derivation separation, operator verification, redaction, retention, deletion, and metadata-only export.
+- Added a stable local Python SDK and aligned CLI, loopback-console, and read-only MCP cognition interfaces.
+- Added synthetic cognition quality gates and rendered operator coverage while preserving the boundary that Rta-Smriti prepares evidence and continuity but does not execute project work.
+
+The formal prerelease is published from its exact annotated tag after hosted
+CI, tagged native builds, checksum and SBOM verification, privacy checks, and
+anonymous download acceptance.
+
 ## [0.9.1-alpha] - 2026-08-24
 
 - Added progressive authenticated dashboard bootstrap so useful project state renders before deep repository and continuity checks complete.

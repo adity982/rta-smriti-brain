@@ -1,5 +1,37 @@
 # Roadmap
 
+## Published v1.0.2-alpha
+
+- Hidden and injection-safe Windows login startup with legacy `.cmd` migration
+- One shared terminal-independent launcher for console, watcher, capture, and continuity workers
+- Watchdog event sync in standard packages and native binaries
+- Adaptive polling fallback for large repositories when filesystem events are unavailable
+- Idempotent Windows private-directory onboarding for already-correct owners
+- WCAG AA active-project secondary text contrast
+- Full source, package, native artifact, browser, privacy, security, daemon, MCP, and hosted CI qualification
+
+
+## Published v1.0.1-alpha
+
+- Preserves the v1 Project Reality and Project Cognition feature boundary
+- Prevents delayed dashboard background work from overwriting direct operator status
+- Closes temporal-truth database state before HTTP response delivery on slower runners
+- Requalifies source, package, native artifact, browser, privacy, security, daemon, and MCP paths from the corrected source
+
+
+## Published v1.0.0-alpha
+
+- Deterministic Project Cognition projection over repository evidence, bitemporal truth, observations, work state, decisions, and media evidence
+- Project Reality cockpit for readiness, digital-twin conflicts, knowledge coverage, decision debt, change impact, and bounded evidence inspection
+- Fail-closed canonical binding and indexed-freshness semantics with explicit live-verification guidance
+- Governed local multimodal evidence lifecycle with stable-file reads, provenance, redaction, retention, deletion, and metadata-only public export
+- Stable Python SDK plus CLI, loopback console, and read-only MCP interface parity
+- Synthetic cognition quality gates for continuation, contradiction, decision debt, authority abstention, governance, and stale rejection
+- Cross-platform source, package, native artifact, browser, privacy, security, backup/restore, daemon, and MCP qualification before publication
+
+The v1.0.2 prerelease is the current public milestone. Future items below are
+intentions and are not part of its evidence boundary.
+
 ## Published v0.9.1-alpha
 
 - Progressive dashboard bootstrap with useful early project state
@@ -44,7 +76,7 @@
 - Metadata-only large-file isolation plus explicit strict blocking
 - Safe local language-server discovery and loopback-only Ollama continuity compaction
 
-## Next After v0.9.1-alpha
+## Next After v1.0.2-alpha
 
 - Expand the public benchmark with community-reviewed corpora and blinded human relevance judgments
 - Add approximate nearest-neighbor indexes for very large local embedding collections
