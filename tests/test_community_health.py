@@ -47,7 +47,16 @@ class CommunityHealthTests(unittest.TestCase):
         self.assertIn("read-only, project-scoped call", recipe)
         self.assertIn("is not visible or active", recipe)
         self.assertNotIn("Existing tasks cannot acquire", recipe)
+
+        installation = (ROOT / "docs" / "INSTALLATION.md").read_text(encoding="utf-8")
+        self.assertIn("follow that host's documented activation lifecycle", installation)
+        self.assertIn("only when the host requires it", installation)
+        self.assertNotIn("Restart the host completely", installation)
         self.assertIn("Tested scope:", recipe)
+        self.assertIn("Zed 1.16.3 stable", recipe)
+        self.assertIn("completed a fresh Agent Panel `brain_search` call", recipe)
+        self.assertIn("returning `README.md`", recipe)
+        self.assertIn("No private repository or user", recipe)
 
 
 if __name__ == "__main__":

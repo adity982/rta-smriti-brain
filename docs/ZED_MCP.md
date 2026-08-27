@@ -81,9 +81,12 @@ with an explicit `project`, to validate the gateway through Zed. If the server
 is not visible or active, fully quit and restart Zed, then check the indicator
 again before retrying from a fresh thread.
 
-**Tested scope:** The instructions were checked against Zed 1.16.2's official
-MCP documentation on Windows 11, Zed 1.16.2 was installed from the official
-package, and the generated server command was validated with `mcp-doctor`.
-Personal Zed settings and a live Agent Panel connection were not tested. The
-generated command is OS-specific; the same placement steps apply on macOS and
-Linux, but those platforms were not tested for this recipe.
+**Tested scope:** The instructions were checked against Zed's official MCP
+documentation and verified on Windows 11 with the official Zed 1.16.3 stable
+package. The generated single-project command passed `mcp-doctor`. A generated
+read-only brain-directory gateway was then registered in Zed, reported active,
+and completed a fresh Agent Panel `brain_search` call against the synthetic
+`atlas-zed-proof` project, returning `README.md`. No private repository or user
+path was used in that host test. The generated command is OS-specific; the same
+placement steps apply on macOS and Linux, but those platforms were not tested
+for this recipe.
